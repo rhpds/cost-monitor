@@ -3,11 +3,13 @@ set -e
 
 echo "Starting Cost Data Service..."
 echo "Environment: ${ENVIRONMENT:-production}"
-echo "Database URL: ${DATABASE_URL:-not set}"
-echo "Redis URL: ${REDIS_URL:-not set}"
 
-# Activate virtual environment
-source /opt/app-root/venv/bin/activate
+# Construct DATABASE_URL from individual environment variables
+export DATABASE_URL="postgresql://${POSTGRESQL_USER}:${POSTGRESQL_PASSWORD}@postgresql:5432/${POSTGRESQL_DATABASE}"
+export REDIS_URL="redis://:${REDIS_PASSWORD}@redis-service:6379/0"
+
+echo "Database URL: ${DATABASE_URL}"
+echo "Redis URL: ${REDIS_URL}"
 
 # Wait for PostgreSQL to be ready using Python
 echo "Waiting for PostgreSQL..."
