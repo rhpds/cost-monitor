@@ -5,9 +5,16 @@ echo "Starting Cost Dashboard Service..."
 echo "Environment: ${ENVIRONMENT:-production}"
 echo "Data Service URL: ${DATA_SERVICE_URL:-not set}"
 
+# Debug Python environment
+echo "Python version: $(python --version)"
+echo "Python executable: $(which python)"
+echo "PATH: $PATH"
+echo "Checking for requests module..."
+python -c "import sys; print('Python path:', sys.path)"
+
 # Wait for Data Service to be ready using Python
 echo "Waiting for Data Service..."
-python3 -c "
+python -c "
 import requests
 import time
 import os

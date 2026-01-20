@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: dashboard
-        image: default-route-openshift-image-registry.apps.ocpv-infra01.dal12.infra.demo.redhat.com/cost-monitor/dashboard:latest
+        image: cost-monitor-dashboard:latest
         imagePullPolicy: Always
 
         ports:
