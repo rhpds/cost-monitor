@@ -11,6 +11,13 @@ export REDIS_URL="redis://:${REDIS_PASSWORD}@redis-service:6379/0"
 echo "Database URL: ${DATABASE_URL}"
 echo "Redis URL: ${REDIS_URL}"
 
+# Debug Python environment
+echo "Python version: $(python --version)"
+echo "Python executable: $(which python)"
+echo "PATH: $PATH"
+echo "Checking for asyncpg module..."
+python -c "import sys; print('Python path:', sys.path)"
+
 # Wait for PostgreSQL to be ready using Python
 echo "Waiting for PostgreSQL..."
 python -c "
