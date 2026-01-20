@@ -1,0 +1,1 @@
+"""Monitoring and alerting functionality including Icinga integration."""

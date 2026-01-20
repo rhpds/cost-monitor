@@ -1,0 +1,272 @@
+# Multi-Cloud Cost Monitor - Docker Configuration
+# Optimized for containerized deployments
+
+clouds:
+  aws:
+    enabled: true
+    region: "us-east-1"
+
+    # Container deployment: Use environment variables or mounted secrets
+    # AWS_ACCESS_KEY_ID (from environment or secrets)
+    # AWS_SECRET_ACCESS_KEY (from environment or secrets)
+    # AWS_SESSION_TOKEN (optional, from environment)
+
+    cost_explorer:
+      granularity: "DAILY"
+      metrics: ["BlendedCost"]
+      group_by: ["SERVICE"]
+
+    thresholds:
+      warning: 1000.0
+      critical: 2000.0
+
+  azure:
+    enabled: true
+
+    # Container deployment: Use environment variables or mounted secrets
+    # AZURE_SUBSCRIPTION_ID (from environment)
+    # AZURE_TENANT_ID (from environment)
+    # AZURE_CLIENT_ID (from environment)
+    # AZURE_CLIENT_SECRET (from environment or secrets)
+
+    cost_management:
+      granularity: "Daily"
+      scope_type: "Subscription"
+
+    thresholds:
+      warning: 800.0
+      critical: 1600.0
+
+  gcp:
+    enabled: true
+
+    # Container deployment: Mount service account key as secret
+    # GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-service-account.json
+    # GCP_PROJECT_ID (from environment)
+
+    billing:
+      currency: "USD"
+
+    thresholds:
+      warning: 600.0
+      critical: 1200.0
+
+# Container-optimized monitoring
+monitoring:
+  thresholds:
+    warning: 2400.0
+    critical: 4800.0
+
+  icinga:
+    check_interval: 3600
+    notification_enabled: false  # Handled by external system
+    performance_data: true
+    output_format: "json"
+
+  alerts:
+    enabled: true
+    console_output: true  # Logs go to stdout/stderr
+
+    # Email disabled - use external alerting
+    email:
+      enabled: false
+
+# Dashboard configuration for containers
+dashboard:
+  enabled: true
+  host: "0.0.0.0"  # Listen on all interfaces
+  port: 8050
+  debug: false
+  auto_refresh: true
+  refresh_interval: 300
+
+  # Authentication through external proxy
+  authentication:
+    enabled: false  # Handled by ingress/proxy
+
+  ssl:
+    enabled: false  # Terminated at load balancer
+
+# Container-appropriate caching
+cache:
+  enabled: true
+  type: "memory"  # Memory cache for containers
+  ttl: 3600
+  max_entries: 500
+
+  # Provider TTLs
+  aws:
+    ttl: 3600
+  azure:
+    ttl: 3600
+  gcp:
+    ttl: 3600
+
+# Container logging to stdout/stderr
+logging:
+  level: "INFO"
+  format: "structured"  # JSON for log aggregation
+  file: ""  # Empty means stdout/stderr
+  max_size: ""
+  backup_count: 0
+
+  # Structured logging for containers
+  structured:
+    timestamp_format: "iso"
+    include_caller: false
+    include_function: false
+
+# Rate limiting
+rate_limiting:
+  aws:
+    calls_per_minute: 100
+    retry_attempts: 3
+    backoff_factor: 2
+
+  azure:
+    calls_per_minute: 100
+    retry_attempts: 3
+    backoff_factor: 1.5
+
+  gcp:
+    calls_per_minute: 100
+    retry_attempts: 3
+    backoff_factor: 2
+
+# Container security
+security:
+  encryption:
+    enabled: false  # Use external secrets management
+
+  audit:
+    enabled: false  # Use external audit logging
+
+  # Allow all networks - security handled by network policies
+  allowed_networks: []
+
+# Health check endpoint for container orchestration
+health:
+  enabled: true
+  port: 8080
+  path: "/health"
+
+  # Kubernetes-style health checks
+  checks:
+    - name: "liveness"
+      enabled: true
+      endpoint: "/health/live"
+      timeout: 5
+    - name: "readiness"
+      enabled: true
+      endpoint: "/health/ready"
+      timeout: 10
+    - name: "cloud_auth"
+      enabled: true
+      timeout: 30
+
+# Disable backup - handled externally
+backup:
+  enabled: false
+
+# Container metrics
+performance:
+  metrics:
+    enabled: true
+    format: "prometheus"  # For Kubernetes monitoring
+    port: 9090
+    path: "/metrics"
+
+  # Container resource monitoring
+  resources:
+    cpu_limit: "1000m"  # 1 CPU
+    memory_limit: "512Mi"
+    cpu_request: "100m"
+    memory_request: "256Mi"
+
+# Container-specific settings
+container:
+  # Graceful shutdown
+  shutdown:
+    timeout: 30  # seconds
+    signals: ["SIGTERM", "SIGINT"]
+
+  # Startup configuration
+  startup:
+    delay: 10  # seconds before health checks
+    timeout: 60  # seconds for startup
+
+  # Resource limits
+  limits:
+    max_connections: 100
+    max_requests_per_minute: 1000
+
+# Environment variable mapping for containers
+environment_variables:
+  # AWS credentials
+  aws_access_key_id: "AWS_ACCESS_KEY_ID"
+  aws_secret_access_key: "AWS_SECRET_ACCESS_KEY"
+  aws_session_token: "AWS_SESSION_TOKEN"
+  aws_region: "AWS_REGION"
+
+  # Azure credentials
+  azure_subscription_id: "AZURE_SUBSCRIPTION_ID"
+  azure_tenant_id: "AZURE_TENANT_ID"
+  azure_client_id: "AZURE_CLIENT_ID"
+  azure_client_secret: "AZURE_CLIENT_SECRET"
+
+  # GCP credentials
+  google_application_credentials: "GOOGLE_APPLICATION_CREDENTIALS"
+  gcp_project_id: "GCP_PROJECT_ID"
+
+  # Configuration overrides
+  log_level: "LOG_LEVEL"
+  dashboard_enabled: "DASHBOARD_ENABLED"
+  cache_ttl: "CACHE_TTL"
+  warning_threshold: "WARNING_THRESHOLD"
+  critical_threshold: "CRITICAL_THRESHOLD"
+
+# Kubernetes-specific configuration
+kubernetes:
+  # Service configuration
+  service:
+    type: "ClusterIP"
+    ports:
+      - name: "dashboard"
+        port: 8050
+        targetPort: 8050
+      - name: "health"
+        port: 8080
+        targetPort: 8080
+      - name: "metrics"
+        port: 9090
+        targetPort: 9090
+
+  # Deployment configuration
+  deployment:
+    replicas: 1
+    strategy:
+      type: "RollingUpdate"
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 0
+
+  # ConfigMap for configuration
+  configMap:
+    name: "cost-monitor-config"
+
+  # Secret for credentials
+  secret:
+    name: "cost-monitor-secrets"
+
+  # ServiceAccount
+  serviceAccount:
+    name: "cost-monitor"
+    annotations:
+      # For AWS IAM roles for service accounts
+      eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT:role/cost-monitor-role"
+
+# Disable development features
+development:
+  mock_data: false
+  debug_api_calls: false
+  skip_auth_validation: false

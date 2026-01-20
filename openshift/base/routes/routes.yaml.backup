@@ -1,0 +1,72 @@
+---
+# Dashboard Route (Main User Interface)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dashboard-route
+  labels:
+    app: cost-monitor
+    component: dashboard
+    tier: frontend
+  annotations:
+    haproxy.router.openshift.io/timeout: 300s
+    haproxy.router.openshift.io/balance: roundrobin
+spec:
+  host: cost-monitor.apps.cluster.example.com  # Replace with your cluster domain
+  to:
+    kind: Service
+    name: dashboard-service
+    weight: 100
+  port:
+    targetPort: web
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+---
+# Cost Data API Route (for external integrations)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: data-api-route
+  labels:
+    app: cost-monitor
+    component: data-service
+    tier: backend
+  annotations:
+    haproxy.router.openshift.io/timeout: 60s
+    haproxy.router.openshift.io/rate-limit-connections: "20"
+spec:
+  host: cost-api.apps.cluster.example.com  # Replace with your cluster domain
+  to:
+    kind: Service
+    name: cost-data-service
+    weight: 100
+  port:
+    targetPort: api
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  path: /api  # Only expose /api path externally
+
+---
+# Health Check Route (for monitoring)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: health-route
+  labels:
+    app: cost-monitor
+    component: monitoring
+spec:
+  host: cost-health.apps.cluster.example.com  # Replace with your cluster domain
+  to:
+    kind: Service
+    name: cost-data-service
+    weight: 100
+  port:
+    targetPort: health
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  path: /health

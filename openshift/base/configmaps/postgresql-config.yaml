@@ -1,0 +1,158 @@
+---
+# PostgreSQL Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-config
+  labels:
+    app: cost-monitor
+    component: database
+data:
+  postgresql.conf: |
+    # Connection settings
+    listen_addresses = '*'
+    port = 5432
+    max_connections = 200
+    
+    # Memory settings (adjust based on pod resources)
+    shared_buffers = 512MB
+    effective_cache_size = 1536MB
+    work_mem = 16MB
+    maintenance_work_mem = 256MB
+    
+    # WAL settings
+    wal_level = replica
+    max_wal_size = 2GB
+    min_wal_size = 80MB
+    checkpoint_completion_target = 0.7
+    
+    # Query tuning
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+    
+    # Logging
+    log_destination = 'stderr'
+    logging_collector = on
+    log_directory = 'log'
+    log_filename = 'postgresql-%a.log'
+    log_rotation_age = 1d
+    log_rotation_size = 100MB
+    log_min_duration_statement = 1000
+    log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+    
+    # Performance monitoring
+    track_activities = on
+    track_counts = on
+    track_io_timing = on
+    track_functions = pl
+    
+    # Cost monitoring optimizations
+    max_parallel_workers_per_gather = 2
+    max_parallel_workers = 4
+    seq_page_cost = 1.0
+
+---
+# PostgreSQL Initialization Scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-init-scripts
+  labels:
+    app: cost-monitor
+    component: database
+data:
+  01-init-schema.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Creating cost_monitor database schema..."
+    
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRESQL_USER" --dbname "$POSTGRESQL_DATABASE" <<-EOSQL
+    
+    -- Enable required extensions (skip pg_stat_statements if not superuser)
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    
+    -- Create providers table
+    CREATE TABLE IF NOT EXISTS providers (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(50) UNIQUE NOT NULL,
+        display_name VARCHAR(100) NOT NULL,
+        is_enabled BOOLEAN DEFAULT TRUE,
+        last_sync_at TIMESTAMP WITH TIME ZONE,
+        sync_status VARCHAR(20) DEFAULT 'unknown',
+        error_message TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+    
+    -- Insert default providers
+    INSERT INTO providers (name, display_name) VALUES 
+    ('aws', 'Amazon Web Services'),
+    ('azure', 'Microsoft Azure'),
+    ('gcp', 'Google Cloud Platform')
+    ON CONFLICT (name) DO NOTHING;
+    
+    -- Create cost_data_points table with partitioning
+    CREATE TABLE IF NOT EXISTS cost_data_points (
+        id BIGSERIAL,
+        provider_id INTEGER NOT NULL REFERENCES providers(id),
+        date DATE NOT NULL,
+        granularity VARCHAR(10) NOT NULL,
+        cost DECIMAL(15,4) NOT NULL,
+        currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+        service_name VARCHAR(255),
+        account_id VARCHAR(100),
+        account_name VARCHAR(255),
+        region VARCHAR(50),
+        provider_metadata JSONB,
+        collected_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id, date)
+    ) PARTITION BY RANGE (date);
+    
+    -- Create initial partition for current year
+    DO \$\$
+    DECLARE
+        start_date DATE := DATE_TRUNC('year', CURRENT_DATE);
+        end_date DATE := start_date + INTERVAL '1 year';
+        partition_name TEXT;
+    BEGIN
+        partition_name := 'cost_data_points_' || TO_CHAR(start_date, 'YYYY');
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %I PARTITION OF cost_data_points 
+             FOR VALUES FROM (%L) TO (%L)',
+            partition_name, start_date, end_date
+        );
+    END\$\$;
+    
+    EOSQL
+    
+    echo "Database schema initialization completed."
+  
+  02-create-indexes.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Creating database indexes..."
+    
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRESQL_USER" --dbname "$POSTGRESQL_DATABASE" <<-EOSQL
+    
+    -- Create indexes for cost_data_points
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_provider_date 
+    ON cost_data_points(provider_id, date DESC);
+    
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_date_granularity 
+    ON cost_data_points(date DESC, granularity);
+    
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_service 
+    ON cost_data_points(service_name, date DESC);
+    
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_collected_at 
+    ON cost_data_points(collected_at DESC);
+    
+    -- JSON indexes for provider metadata
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_metadata_gin 
+    ON cost_data_points USING GIN(provider_metadata);
+    
+    EOSQL
+    
+    echo "Index creation completed."

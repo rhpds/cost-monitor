@@ -1,0 +1,141 @@
+apiVersion: apps.openshift.io/v1
+kind: DeploymentConfig
+metadata:
+  name: cost-monitor-dashboard
+  labels:
+    app: cost-monitor
+    component: dashboard
+spec:
+  replicas: 1
+  selector:
+    app: cost-monitor
+    component: dashboard
+  strategy:
+    type: Rolling
+    rollingParams:
+      updatePeriodSeconds: 10
+      intervalSeconds: 20
+      timeoutSeconds: 600
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: cost-monitor
+        component: dashboard
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: dashboard
+        image: cost-monitor-dashboard:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8050
+          name: web
+          protocol: TCP
+        env:
+        - name: PYTHONPATH
+          value: "/app"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: DASHBOARD_HOST
+          value: "0.0.0.0"
+        - name: DASHBOARD_PORT
+          value: "8050"
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: "/app/gcp/service-account.json"
+        envFrom:
+        - configMapRef:
+            name: cost-monitor-config
+        - secretRef:
+            name: aws-credentials
+            optional: true
+        - secretRef:
+            name: azure-credentials
+            optional: true
+# GCP credentials mounted as file volume, not environment
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "100m"
+          limits:
+            memory: "4Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8050
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8050
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 15
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /
+            port: 8050
+            scheme: HTTP
+          initialDelaySeconds: 20
+          periodSeconds: 15
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 12
+        volumeMounts:
+        - name: cache-storage
+          mountPath: /app/cache
+        - name: logs-storage
+          mountPath: /app/logs
+        - name: config-volume
+          mountPath: /app/config/mounted
+          readOnly: true
+        - name: gcp-credentials-volume
+          mountPath: /app/gcp
+          readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: cache-storage
+        persistentVolumeClaim:
+          claimName: cost-monitor-cache-pvc
+      - name: logs-storage
+        persistentVolumeClaim:
+          claimName: cost-monitor-logs-pvc
+      - name: config-volume
+        configMap:
+          name: cost-monitor-config
+          defaultMode: 0644
+      - name: gcp-credentials-volume
+        secret:
+          secretName: gcp-credentials
+          defaultMode: 0400
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+  triggers:
+  - type: ConfigChange
+  - type: ImageChange
+    imageChangeParams:
+      automatic: true
+      containerNames:
+      - dashboard
+      from:
+        kind: ImageStreamTag
+        name: cost-monitor-dashboard:latest

@@ -1,0 +1,44 @@
+# SecurityContextConstraints removed - using default OpenShift security policy
+# which automatically assigns appropriate UIDs in the namespace range
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cost-monitor
+  labels:
+    app: cost-monitor
+  annotations:
+    # For AWS IAM roles for service accounts (IRSA)
+    # eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT:role/cost-monitor-role"
+automountServiceAccountToken: false
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cost-monitor-role
+  labels:
+    app: cost-monitor
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cost-monitor-rolebinding
+  labels:
+    app: cost-monitor
+subjects:
+- kind: ServiceAccount
+  name: cost-monitor
+roleRef:
+  kind: Role
+  name: cost-monitor-role
+  apiGroup: rbac.authorization.k8s.io

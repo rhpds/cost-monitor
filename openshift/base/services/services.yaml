@@ -1,0 +1,109 @@
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  labels:
+    app: cost-monitor
+    component: database
+    tier: data
+spec:
+  type: ClusterIP
+  selector:
+    app: postgresql
+    component: database
+  ports:
+  - name: postgresql
+    port: 5432
+    targetPort: 5432
+    protocol: TCP
+
+---
+# PostgreSQL Headless Service (for StatefulSet)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-headless
+  labels:
+    app: cost-monitor
+    component: database
+    tier: data
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: postgresql
+    component: database
+  ports:
+  - name: postgresql
+    port: 5432
+    targetPort: 5432
+    protocol: TCP
+
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  labels:
+    app: cost-monitor
+    component: cache
+    tier: data
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+    component: cache
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+    protocol: TCP
+
+---
+# Cost Data Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: cost-data-service
+  labels:
+    app: cost-monitor
+    component: data-service
+    tier: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: cost-data-service
+    component: data-service
+  ports:
+  - name: api
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: health
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+
+---
+# Dashboard Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-service
+  labels:
+    app: cost-monitor
+    component: dashboard
+    tier: frontend
+spec:
+  type: ClusterIP
+  selector:
+    app: cost-monitor
+    component: dashboard
+  ports:
+  - name: web
+    port: 8050
+    targetPort: 8050
+    protocol: TCP

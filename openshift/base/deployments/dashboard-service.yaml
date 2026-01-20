@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-service
+  labels:
+    app: cost-monitor
+    component: dashboard
+    tier: frontend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: dashboard-service
+      component: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard-service
+        component: dashboard
+        tier: frontend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: dashboard
+        image: default-route-openshift-image-registry.apps.ocpv-infra01.dal12.infra.demo.redhat.com/cost-monitor/dashboard:latest
+        imagePullPolicy: Always
+
+        ports:
+        - name: web
+          containerPort: 8050
+          protocol: TCP
+        - name: health
+          containerPort: 8080
+          protocol: TCP
+
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: DATA_SERVICE_URL
+          value: "http://cost-data-service:8000"
+        - name: REDIS_URL
+          value: "redis://:$(REDIS_PASSWORD)@redis-service:6379/1"  # Different DB than data service
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: password
+        - name: DASH_ENV
+          value: "production"
+        - name: DASH_DEBUG
+          value: "false"
+
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "200m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+
+        livenessProbe:
+          httpGet:
+            path: /_dash-layout
+            port: 8050
+          initialDelaySeconds: 45
+          periodSeconds: 30
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /_dash-layout
+            port: 8050
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+
+        startupProbe:
+          httpGet:
+            path: /_dash-layout
+            port: 8050
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12  # Allow 2 minutes for startup
+
+        volumeMounts:
+        - name: dashboard-cache
+          mountPath: /app/cache
+        - name: dashboard-config
+          mountPath: /app/config/dashboard.yaml
+          subPath: dashboard.yaml
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+
+      volumes:
+      - name: dashboard-cache
+        persistentVolumeClaim:
+          claimName: dashboard-cache-pvc
+      - name: dashboard-config
+        configMap:
+          name: dashboard-config
+
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dashboard-cache-pvc
+  labels:
+    app: dashboard-service
+    component: dashboard
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: ocs-storagecluster-ceph-rbd

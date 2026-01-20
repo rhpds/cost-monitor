@@ -1,0 +1,31 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cost-monitor-dashboard-pdb
+  labels:
+    app: cost-monitor
+    component: dashboard
+    environment: production
+spec:
+  minAvailable: 2  # Always keep at least 2 dashboard instances running
+  selector:
+    matchLabels:
+      app: cost-monitor
+      component: dashboard
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cost-monitor-api-pdb
+  labels:
+    app: cost-monitor
+    component: api
+    environment: production
+spec:
+  minAvailable: 2  # Always keep at least 2 API instances running
+  selector:
+    matchLabels:
+      app: cost-monitor
+      component: api

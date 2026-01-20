@@ -1,0 +1,145 @@
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: cost-monitor-dashboard
+  labels:
+    app: cost-monitor
+    component: dashboard
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: cost-monitor-dashboard:latest
+  source:
+    type: Git
+    git:
+      uri: "REPLACE_WITH_YOUR_REPOSITORY_URL"  # Will be replaced by deployment script
+      ref: "main"
+    contextDir: "."
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: dockerfiles/Dockerfile.dashboard
+      buildArgs:
+        - name: "BUILD_DATE"
+          value: "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        - name: "VCS_REF"
+          value: "$(git rev-parse --short HEAD)"
+  triggers:
+  - type: ConfigChange
+  - type: GitHub
+    github:
+      secret: "github-webhook-secret"
+  - type: Generic
+    generic:
+      secret: "generic-webhook-secret"
+  - type: ImageChange
+    imageChange:
+      from:
+        kind: ImageStreamTag
+        name: "python-311:latest"
+        namespace: "openshift"
+  runPolicy: Serial
+  successfulBuildsHistoryLimit: 5
+  failedBuildsHistoryLimit: 5
+
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: cost-monitor-dashboard
+  labels:
+    app: cost-monitor
+    component: dashboard
+spec:
+  lookupPolicy:
+    local: false
+  tags:
+  - name: latest
+    annotations:
+      description: "Multi-Cloud Cost Monitor Dashboard with Prometheus Export"
+      iconClass: icon-python
+      tags: "python,dashboard,cost-monitoring,prometheus"
+      supports: "python:3.11"
+      version: "latest"
+    from:
+      kind: DockerImage
+      name: cost-monitor-dashboard:latest
+    importPolicy:
+      scheduled: true
+    referencePolicy:
+      type: Source
+
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: cost-data-service
+  labels:
+    app: cost-monitor
+    component: data-service
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: cost-data-service:latest
+  source:
+    type: Git
+    git:
+      uri: "REPLACE_WITH_YOUR_REPOSITORY_URL"  # Will be replaced by deployment script
+      ref: "main"
+    contextDir: "."
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: dockerfiles/Dockerfile.data-service
+      buildArgs:
+        - name: "BUILD_DATE"
+          value: "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        - name: "VCS_REF"
+          value: "$(git rev-parse --short HEAD)"
+  triggers:
+  - type: ConfigChange
+  - type: GitHub
+    github:
+      secret: "github-webhook-secret"
+  - type: Generic
+    generic:
+      secret: "generic-webhook-secret"
+  - type: ImageChange
+    imageChange:
+      from:
+        kind: ImageStreamTag
+        name: "python-311:latest"
+        namespace: "openshift"
+  runPolicy: Serial
+  successfulBuildsHistoryLimit: 5
+  failedBuildsHistoryLimit: 5
+
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: cost-data-service
+  labels:
+    app: cost-monitor
+    component: data-service
+spec:
+  lookupPolicy:
+    local: false
+  tags:
+  - name: latest
+    annotations:
+      description: "Multi-Cloud Cost Monitor Data Service API"
+      iconClass: icon-python
+      tags: "python,api,cost-monitoring,fastapi"
+      supports: "python:3.11"
+      version: "latest"
+    from:
+      kind: DockerImage
+      name: cost-data-service:latest
+    importPolicy:
+      scheduled: true
+    referencePolicy:
+      type: Source

@@ -1,0 +1,13 @@
+# Vulture configuration
+[tool.vulture]
+min_confidence = 90
+ignore_names = [
+    # Dash callback parameters - required by framework but not directly used
+    "*_clicks",
+    "n_intervals",
+]
+ignore_decorators = [
+    "@callback",
+    "@dash.callback"
+]
+paths = ["src"]

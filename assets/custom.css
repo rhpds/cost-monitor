@@ -1,0 +1,67 @@
+/* Hide Dash debug indicators */
+._dash-debug-alert {
+    display: none !important;
+}
+
+._dash-debug-menu {
+    display: none !important;
+}
+
+._dash-loading {
+    display: none !important;
+}
+
+/* Hide all Dash debug UI elements */
+div[data-dash-debug] {
+    display: none !important;
+}
+
+/* Hide callback status indicators */
+div[data-testid*="callback"] {
+    display: none !important;
+}
+
+/* Hide error indicators */
+div[data-testid*="error"] {
+    display: none !important;
+}
+
+/* Hide version info */
+div[data-testid*="version"] {
+    display: none !important;
+}
+
+/* Hide server status */
+div[data-testid*="server"] {
+    display: none !important;
+}
+
+/* Hide any fixed positioned debug elements */
+div[style*="position: fixed"][style*="bottom"] {
+    display: none !important;
+}
+
+/* Hide Plotly/Dash development indicators */
+.dash-debug-alert,
+.dash-debug-menu,
+.dash-callback-indicator,
+.dash-error-indicator,
+.plotly-notifier {
+    display: none !important;
+}
+
+/* Target specific debug overlay classes */
+._dash-error,
+._dash-callback,
+._dash-server-status {
+    display: none !important;
+}
+
+/* Hide any bottom-right positioned elements that might be debug indicators */
+div[style*="position: fixed"][style*="right: 0"][style*="bottom: 0"] {
+    display: none !important;
+}
+
+div[style*="position: fixed"][style*="right: 10px"][style*="bottom: 10px"] {
+    display: none !important;
+}

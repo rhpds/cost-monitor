@@ -1,0 +1,152 @@
+# Multi-Cloud Cost Monitor - Example Configuration
+# Copy this file to config.yaml and customize for your environment
+
+# IMPORTANT: Never commit credentials to version control!
+# Use environment variables or a separate .secrets.yaml file for sensitive data
+
+# Cloud provider configurations
+clouds:
+  aws:
+    enabled: true
+    region: "us-east-1"
+
+    # Authentication options (choose one):
+    # Option 1: Use AWS CLI profile
+    profile: "default"
+
+    # Option 2: Use environment variables
+    # Set these in your environment:
+    # export AWS_ACCESS_KEY_ID="your_access_key"
+    # export AWS_SECRET_ACCESS_KEY="your_secret_key"
+    # export AWS_SESSION_TOKEN="your_session_token"  # if using temporary credentials
+
+    # Option 3: Use IAM roles (for EC2/Lambda)
+    # No additional configuration needed
+
+    cost_explorer:
+      granularity: "DAILY"  # DAILY, MONTHLY
+      metrics: ["BlendedCost", "UnblendedCost"]
+      group_by: ["SERVICE"]
+
+    thresholds:
+      warning: 1000.0   # Daily spend warning threshold in USD
+      critical: 2000.0  # Daily spend critical threshold in USD
+
+  azure:
+    enabled: true
+
+    # Authentication via Service Principal
+    # Set these in your environment or .secrets.yaml:
+    # export AZURE_SUBSCRIPTION_ID="your_subscription_id"
+    # export AZURE_TENANT_ID="your_tenant_id"
+    # export AZURE_CLIENT_ID="your_client_id"
+    # export AZURE_CLIENT_SECRET="your_client_secret"
+
+    cost_management:
+      granularity: "Daily"  # Daily, Monthly
+      scope_type: "Subscription"  # Subscription, ResourceGroup, ManagementGroup
+
+    thresholds:
+      warning: 1000.0
+      critical: 2000.0
+
+  gcp:
+    enabled: true
+
+    # Authentication options:
+    # Option 1: Service account JSON file
+    # Set in environment: export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+
+    # Option 2: Application Default Credentials (for Compute Engine, etc.)
+    # No additional configuration needed
+
+    # Set these in your environment:
+    # export GCP_PROJECT_ID="your_project_id"
+    # export GCP_BILLING_ACCOUNT_ID="your_billing_account_id"
+
+    billing:
+      currency: "USD"
+
+    thresholds:
+      warning: 1000.0
+      critical: 2000.0
+
+# Global monitoring settings
+monitoring:
+  thresholds:
+    warning: 1500.0   # Global default warning threshold
+    critical: 3000.0  # Global default critical threshold
+
+  icinga:
+    check_interval: 3600  # Check every hour
+    notification_enabled: true
+    performance_data: true
+    output_format: "nagios"  # nagios or json
+
+  alerts:
+    enabled: true
+    console_output: true
+
+# Dashboard configuration
+dashboard:
+  enabled: true
+  host: "0.0.0.0"      # Listen on all interfaces
+  port: 8050           # Dashboard port
+  debug: false         # Set to true for development
+  auto_refresh: true
+  refresh_interval: 300  # 5 minutes
+
+# Caching to reduce API calls
+cache:
+  enabled: true
+  type: "disk"
+  ttl: 3600           # 1 hour cache
+  directory: "/tmp/cost-monitor-cache"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "structured"
+
+# Example environment variable setup:
+# Create a .env file in your project root with:
+#
+# # AWS
+# AWS_ACCESS_KEY_ID=your_aws_access_key
+# AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+# AWS_DEFAULT_REGION=us-east-1
+#
+# # Azure
+# AZURE_SUBSCRIPTION_ID=your_azure_subscription_id
+# AZURE_TENANT_ID=your_azure_tenant_id
+# AZURE_CLIENT_ID=your_azure_client_id
+# AZURE_CLIENT_SECRET=your_azure_client_secret
+#
+# # GCP
+# GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+# GCP_PROJECT_ID=your_gcp_project_id
+# GCP_BILLING_ACCOUNT_ID=your_gcp_billing_account_id
+#
+# # Override config values
+# CLOUDCOST__MONITORING__THRESHOLDS__WARNING=2000
+# CLOUDCOST__MONITORING__THRESHOLDS__CRITICAL=5000
+# CLOUDCOST__DASHBOARD__PORT=8080
+
+# Cloud Provider Setup Instructions:
+#
+# AWS:
+# 1. Create IAM user with Cost Explorer permissions
+# 2. Attach policy: arn:aws:iam::aws:policy/AWSBillingConductorFullAccess
+#    or create custom policy with ce:GetCostAndUsage, ce:GetDimensionValues permissions
+# 3. Generate access key and secret
+#
+# Azure:
+# 1. Create Service Principal: az ad sp create-for-rbac --name cost-monitor
+# 2. Assign Cost Management Reader role: az role assignment create --assignee <sp-id> --role "Cost Management Reader"
+# 3. Note down client_id, client_secret, tenant_id, subscription_id
+#
+# GCP:
+# 1. Enable Cloud Billing API in your project
+# 2. Create service account with Billing Viewer role
+# 3. Download service account JSON key file
+# 4. Set GOOGLE_APPLICATION_CREDENTIALS environment variable

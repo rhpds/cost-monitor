@@ -1,0 +1,279 @@
+# Multi-Cloud Cost Monitor - Icinga Monitoring Configuration
+# Optimized for Icinga/Nagios monitoring integration
+
+clouds:
+  aws:
+    enabled: true
+    region: "us-east-1"
+
+    # Use IAM role or environment variables for Icinga server
+    # ICINGA_AWS_ACCESS_KEY_ID
+    # ICINGA_AWS_SECRET_ACCESS_KEY
+
+    cost_explorer:
+      granularity: "DAILY"
+      metrics: ["BlendedCost"]
+      group_by: ["SERVICE"]
+
+    thresholds:
+      warning: 1000.0
+      critical: 2000.0
+
+    icinga:
+      check_interval: 3600  # 1 hour
+      notification_enabled: true
+      service_template: "cloud-cost-service"
+
+  azure:
+    enabled: true
+
+    # Use service principal for Icinga monitoring
+    # ICINGA_AZURE_SUBSCRIPTION_ID
+    # ICINGA_AZURE_TENANT_ID
+    # ICINGA_AZURE_CLIENT_ID
+    # ICINGA_AZURE_CLIENT_SECRET
+
+    cost_management:
+      granularity: "Daily"
+      scope_type: "Subscription"
+
+    thresholds:
+      warning: 800.0
+      critical: 1600.0
+
+    icinga:
+      check_interval: 3600
+      notification_enabled: true
+      service_template: "cloud-cost-service"
+
+  gcp:
+    enabled: true
+
+    # Use service account for Icinga monitoring
+    # ICINGA_GOOGLE_APPLICATION_CREDENTIALS
+    # ICINGA_GCP_PROJECT_ID
+
+    billing:
+      currency: "USD"
+
+    thresholds:
+      warning: 600.0
+      critical: 1200.0
+
+    icinga:
+      check_interval: 3600
+      notification_enabled: true
+      service_template: "cloud-cost-service"
+
+# Monitoring optimized for Icinga
+monitoring:
+  thresholds:
+    warning: 2400.0   # Combined warning threshold
+    critical: 4800.0  # Combined critical threshold
+
+  icinga:
+    check_interval: 3600
+    notification_enabled: true
+    performance_data: true
+    output_format: "nagios"  # Icinga-compatible format
+
+    # Standard Icinga exit codes
+    exit_codes:
+      ok: 0
+      warning: 1
+      critical: 2
+      unknown: 3
+
+    # Icinga-specific settings
+    max_check_attempts: 3
+    check_period: "24x7"
+    notification_period: "24x7"
+    notification_options: "w,u,c,r"
+    contact_groups: ["finops", "devops"]
+
+  alerts:
+    enabled: false  # Icinga handles alerting
+    console_output: false
+
+# Disable dashboard for monitoring-only deployment
+dashboard:
+  enabled: false
+
+# Minimal caching for monitoring accuracy
+cache:
+  enabled: true
+  type: "memory"
+  ttl: 1800  # 30 minutes - balance performance vs accuracy
+  max_entries: 50
+
+  # Provider-specific TTLs optimized for monitoring
+  aws:
+    ttl: 1800
+  azure:
+    ttl: 1800
+  gcp:
+    ttl: 1800
+
+# Minimal logging for monitoring system
+logging:
+  level: "WARNING"  # Only log warnings and errors
+  format: "simple"
+  file: "/var/log/icinga2/cost-monitor.log"
+  max_size: "10MB"
+  backup_count: 5
+
+  # Syslog integration for Icinga
+  syslog:
+    enabled: true
+    facility: "local0"
+    tag: "cost-monitor"
+
+# Conservative rate limiting
+rate_limiting:
+  aws:
+    calls_per_minute: 30
+    retry_attempts: 3
+    backoff_factor: 2
+
+  azure:
+    calls_per_minute: 40
+    retry_attempts: 3
+    backoff_factor: 1.5
+
+  gcp:
+    calls_per_minute: 50
+    retry_attempts: 3
+    backoff_factor: 1.5
+
+# Minimal security for monitoring
+security:
+  encryption:
+    enabled: false
+
+  audit:
+    enabled: false
+
+  # Restrict to monitoring networks
+  allowed_networks:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+
+# Health check for Icinga monitoring
+health:
+  enabled: true
+  port: 8080
+  path: "/health"
+
+  checks:
+    - name: "cloud_auth"
+      enabled: true
+      critical_timeout: 30
+    - name: "cache"
+      enabled: true
+      critical_timeout: 10
+
+# Disable backup for monitoring-only deployment
+backup:
+  enabled: false
+
+# Performance metrics for monitoring
+performance:
+  metrics:
+    enabled: true
+    format: "icinga"
+
+    # Expose metrics for Icinga consumption
+    checks:
+      - name: "cost_check_duration"
+        warning: 30  # seconds
+        critical: 60
+      - name: "api_success_rate"
+        warning: 95  # percent
+        critical: 90
+      - name: "cache_hit_rate"
+        warning: 70  # percent
+        critical: 50
+
+# Icinga check command definitions
+icinga_commands:
+  daily_cost_check:
+    command: "/usr/local/bin/cost-monitor-icinga"
+    arguments:
+      - "daily"
+      - "--provider"
+      - "$ARG1$"
+      - "--warning"
+      - "$ARG2$"
+      - "--critical"
+      - "$ARG3$"
+
+  monthly_cost_check:
+    command: "/usr/local/bin/cost-monitor-icinga"
+    arguments:
+      - "monthly"
+      - "--provider"
+      - "$ARG1$"
+      - "--budget"
+      - "$ARG2$"
+
+  service_cost_check:
+    command: "/usr/local/bin/cost-monitor-icinga"
+    arguments:
+      - "service"
+      - "--provider"
+      - "$ARG1$"
+      - "--service"
+      - "$ARG2$"
+      - "--warning"
+      - "$ARG3$"
+      - "--critical"
+      - "$ARG4$"
+
+# Icinga service templates
+icinga_services:
+  aws_daily_cost:
+    check_command: "daily_cost_check"
+    vars:
+      - provider: "aws"
+      - warning: "1000"
+      - critical: "2000"
+    check_interval: "1h"
+    retry_interval: "10m"
+    max_check_attempts: 3
+
+  azure_daily_cost:
+    check_command: "daily_cost_check"
+    vars:
+      - provider: "azure"
+      - warning: "800"
+      - critical: "1600"
+    check_interval: "1h"
+    retry_interval: "10m"
+    max_check_attempts: 3
+
+  gcp_daily_cost:
+    check_command: "daily_cost_check"
+    vars:
+      - provider: "gcp"
+      - warning: "600"
+      - critical: "1200"
+    check_interval: "1h"
+    retry_interval: "10m"
+    max_check_attempts: 3
+
+  total_daily_cost:
+    check_command: "daily_cost_check"
+    vars:
+      - provider: "all"
+      - warning: "2400"
+      - critical: "4800"
+    check_interval: "1h"
+    retry_interval: "10m"
+    max_check_attempts: 3
+
+# Disable development features
+development:
+  mock_data: false
+  debug_api_calls: false
+  skip_auth_validation: false

@@ -1,0 +1,99 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: cost-monitor-development
+  labels:
+    app: cost-monitor
+    environment: development
+
+# Base configuration
+resources:
+- ../../base
+
+# Development-specific namespace
+namespace: cost-monitor-dev
+
+# Name suffix for development
+nameSuffix: -dev
+
+# Development-specific labels
+labels:
+- includeSelectors: true
+  pairs:
+    app: cost-monitor
+    environment: development
+    version: dev
+
+# Development annotations
+commonAnnotations:
+  environment: development
+  deployment.type: development
+
+# Development images (use dev tags)
+images:
+- name: cost-monitor-dashboard
+  newTag: dev
+
+# Development-specific configuration
+configMapGenerator:
+- name: cost-monitor-dev-config
+  literals:
+  - LOG_LEVEL=DEBUG
+  - DASHBOARD_ENABLED=true
+  - CACHE_TTL=1800  # Shorter cache for development
+  - ENVIRONMENT=development
+
+# Development patches
+patches:
+- target:
+    kind: DeploymentConfig
+    name: cost-monitor-dashboard
+  patch: |
+    - op: replace
+      path: /spec/replicas
+      value: 1
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/memory
+      value: "128Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: "256Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/cpu
+      value: "50m"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/cpu
+      value: "500m"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: LOG_LEVEL
+        value: DEBUG
+
+# Development CronJob with longer interval
+- target:
+    kind: CronJob
+    name: cost-monitor-prometheus-export
+  patch: |
+    - op: replace
+      path: /spec/schedule
+      value: "0 */4 * * *"  # Every 4 hours for development
+    - op: add
+      path: /spec/jobTemplate/spec/template/spec/containers/0/env/-
+      value:
+        name: ENVIRONMENT
+        value: development
+
+# Relaxed network policies for development
+- target:
+    kind: NetworkPolicy
+    name: cost-monitor-network-policy
+  patch: |
+    - op: add
+      path: /spec/ingress/-
+      value:
+        from: []
+        ports:
+        - protocol: TCP
+          port: 8050

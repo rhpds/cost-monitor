@@ -1,0 +1,97 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cost-monitor-prometheus-export
+  labels:
+    app: cost-monitor
+    component: prometheus-export
+spec:
+  schedule: "*/15 * * * *"  # Run every 15 minutes
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    metadata:
+      labels:
+        app: cost-monitor
+        component: prometheus-export
+    spec:
+      template:
+        metadata:
+          labels:
+            app: cost-monitor
+            component: prometheus-export
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            fsGroup: 1001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: prometheus-export
+            image: cost-monitor-dashboard:latest
+            command:
+            - python
+            - -m
+            - src.main
+            - export-prometheus
+            - --pushgateway-url
+            - "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
+            - --days
+            - "7"
+            - --job-name
+            - "cost_monitor_openshift"
+            - --instance
+            - "$(HOSTNAME)"
+            env:
+            - name: PYTHONPATH
+              value: "/app"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            envFrom:
+            - configMapRef:
+                name: cost-monitor-config
+            - secretRef:
+                name: aws-credentials
+                optional: true
+            - secretRef:
+                name: azure-credentials
+                optional: true
+            - secretRef:
+                name: gcp-credentials
+                optional: true
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "50m"
+              limits:
+                memory: "256Mi"
+                cpu: "500m"
+            volumeMounts:
+            - name: cache-storage
+              mountPath: /app/cache
+            - name: config-volume
+              mountPath: /app/config/mounted
+              readOnly: true
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: false
+              runAsNonRoot: true
+              capabilities:
+                drop:
+                - ALL
+          volumes:
+          - name: cache-storage
+            persistentVolumeClaim:
+              claimName: cost-monitor-cache-pvc
+          - name: config-volume
+            configMap:
+              name: cost-monitor-config
+              defaultMode: 0644
+          restartPolicy: OnFailure
+          terminationGracePeriodSeconds: 30

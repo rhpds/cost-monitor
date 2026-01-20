@@ -1,0 +1,4 @@
+dashboard:
+  title: "Cost Monitor Dashboard"
+  refresh_interval: 300
+  debug: false

@@ -1,0 +1,26 @@
+# Template patch to override route hostnames for your local environment
+# Replace YOUR_CLUSTER_DOMAIN with your actual OpenShift cluster domain
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dashboard-route
+spec:
+  host: cost-monitor.YOUR_CLUSTER_DOMAIN
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: data-api-route
+spec:
+  host: cost-api.YOUR_CLUSTER_DOMAIN
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: health-route
+spec:
+  host: cost-health.YOUR_CLUSTER_DOMAIN

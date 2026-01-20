@@ -1,0 +1,198 @@
+# Multi-Cloud Cost Monitor Configuration
+# This is the default configuration file
+
+# Cloud provider configurations
+clouds:
+  aws:
+    enabled: true
+    region: "us-east-1"
+    # profile: "default"  # AWS CLI profile (optional)
+    # access_key_id: "YOUR_ACCESS_KEY"  # Use environment variables instead
+    # secret_access_key: "YOUR_SECRET_KEY"  # Use environment variables instead
+    cost_explorer:
+      granularity: "DAILY"  # DAILY, MONTHLY
+      metrics: ["UNBLENDED_COST"]  # Use only UNBLENDED_COST like AWS Console
+      group_by: ["SERVICE"]
+    thresholds:
+      warning: 1000.0
+      critical: 2000.0
+    icinga:
+      check_interval: 3600  # 1 hour in seconds
+      notification_enabled: true
+
+  azure:
+    enabled: true
+    # subscription_id: "YOUR_SUBSCRIPTION_ID"  # Use environment variables
+    # tenant_id: "YOUR_TENANT_ID"  # Use environment variables
+    # client_id: "YOUR_CLIENT_ID"  # Use environment variables
+    # client_secret: "YOUR_CLIENT_SECRET"  # Use environment variables
+
+    # Service principal configuration for management group permissions
+    service_principal_object_id: "YOUR_SERVICE_PRINCIPAL_OBJECT_ID"
+
+    # Management group configuration
+    management_groups: []  # List of management group IDs to monitor
+    use_management_groups: false  # Enable management group cost aggregation
+    query_all_subscriptions: true  # Also query individual accessible subscriptions
+
+    # Azure Cost Management Export configuration
+    export:
+      enabled: true
+      storage_account: "demobillingexports"
+      export_name: "demo-billing-exports-actual"
+      container: "cost-exports"
+      verify_checksums: true  # Enable MD5/ETag verification for file integrity
+
+    cost_management:
+      granularity: "Daily"  # Daily, Monthly
+      scope_type: "Subscription"  # Subscription, ResourceGroup, ManagementGroup
+    thresholds:
+      warning: 1000.0
+      critical: 2000.0
+    icinga:
+      check_interval: 3600
+      notification_enabled: true
+
+  gcp:
+    enabled: true
+    # project_id: "YOUR_PROJECT_ID"  # Use environment variables
+    # credentials_path: "/path/to/service-account.json"  # Use environment variables
+    billing:
+      # billing_account_id: "YOUR_BILLING_ACCOUNT_ID"  # Use environment variables
+      currency: "USD"
+    thresholds:
+      warning: 1000.0
+      critical: 2000.0
+    icinga:
+      check_interval: 3600
+      notification_enabled: true
+
+# Global monitoring settings
+monitoring:
+  # Global thresholds (used if provider-specific not set)
+  thresholds:
+    warning: 1500.0
+    critical: 3000.0
+
+  # Icinga integration settings
+  icinga:
+    check_interval: 3600  # Default check interval
+    notification_enabled: true
+    performance_data: true
+    output_format: "nagios"  # nagios, json
+    exit_codes:
+      ok: 0
+      warning: 1
+      critical: 2
+      unknown: 3
+
+  # Alert settings
+  alerts:
+    enabled: true
+    console_output: true
+    # email:
+    #   enabled: false
+    #   smtp_host: "localhost"
+    #   smtp_port: 587
+    #   from_address: "alerts@example.com"
+    #   to_addresses: ["admin@example.com"]
+
+# Dashboard configuration
+dashboard:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8050
+  debug: false
+  auto_refresh: true
+  refresh_interval: 300  # 5 minutes in seconds
+  theme: "bootstrap"  # bootstrap, plotly, plotly_dark
+
+# API Authentication configuration
+api_auth:
+  enabled: false  # Set to true to enable authentication
+  jwt_secret_key: ""  # Set a strong secret key (use environment variable API_JWT_SECRET)
+  jwt_expires_delta: 3600  # JWT token expiration in seconds (1 hour)
+
+  # API users (for simple authentication)
+  # In production, use environment variables or external auth systems
+  users:
+    # Example user (disabled by default)
+    # grafana:
+    #   password: "secure_password_here"  # Use environment variable API_GRAFANA_PASSWORD
+    #   roles: ["readonly"]
+
+  # Authentication methods
+  methods:
+    jwt: true  # JWT token authentication
+    api_key: false  # Simple API key authentication (future enhancement)
+
+  # Chart configurations
+  charts:
+    default_timeframe: 30  # days
+    max_timeframe: 365  # days
+    timezone: "UTC"
+    currency_symbol: "$"
+
+    # Cost trend chart
+    cost_trend:
+      enabled: true
+      chart_type: "line"  # line, bar
+      show_forecast: false
+
+    # Provider comparison chart
+    provider_comparison:
+      enabled: true
+      chart_type: "bar"  # bar, pie, treemap
+
+    # Service breakdown chart
+    service_breakdown:
+      enabled: true
+      chart_type: "pie"  # pie, treemap, bar
+      top_services: 10
+
+# Caching configuration
+cache:
+  enabled: true
+  type: "disk"  # memory, disk
+  ttl: 3600  # 1 hour in seconds
+  max_size: "100MB"
+  directory: "~/.cache/cost-monitor"  # Expandable home directory path
+
+  # API-specific cache settings
+  aws:
+    ttl: 3600  # AWS Cost Explorer updates 3-4 times daily
+  azure:
+    ttl: 3600  # Azure Cost Management updates hourly
+  gcp:
+    ttl: 3600  # GCP billing updates hourly
+
+# Logging configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "structured"  # structured, simple
+  file: "/var/log/cost-monitor/cost-monitor.log"
+  max_size: "10MB"
+  backup_count: 5
+
+# Rate limiting configuration
+rate_limiting:
+  aws:
+    calls_per_minute: 100  # Conservative limit for Cost Explorer
+    retry_attempts: 5
+    backoff_factor: 2
+
+  azure:
+    calls_per_minute: 100  # Azure Cost Management limits
+    retry_attempts: 3
+    backoff_factor: 1.5
+
+  gcp:
+    calls_per_minute: 250  # GCP billing API limits
+    retry_attempts: 4
+    backoff_factor: 2
+
+# Development/testing settings
+development:
+  mock_data: false  # Use mock data instead of real API calls
+  debug_api_calls: false  # Log all API requests/responses
+  skip_auth_validation: false  # Skip cloud provider authentication checks

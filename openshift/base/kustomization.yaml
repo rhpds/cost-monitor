@@ -1,0 +1,51 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: cost-monitor-base
+
+namespace: cost-monitor
+
+# Resources to deploy
+resources:
+  # ConfigMaps (deploy first)
+  # Note: Secrets are created dynamically by the deployment script from local config
+  - configmaps/postgresql-config.yaml
+  - configmaps/redis-config.yaml
+  - configmaps/app-config.yaml
+  
+  # Data layer deployments
+  - deployments/postgresql.yaml
+  - deployments/redis.yaml
+  
+  # Application deployments
+  - deployments/cost-data-service.yaml
+  - deployments/dashboard-service.yaml
+  
+  # Services and networking
+  - services/services.yaml
+  - routes/routes.yaml
+  
+  # Background jobs
+  - cronjobs/data-collection.yaml
+
+# Common labels applied to all resources
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/name: cost-monitor
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: kustomize
+
+# Images to use (can be overridden in overlays)
+images:
+  - name: cost-monitor/data-service
+    newTag: latest
+  - name: cost-monitor/dashboard
+    newTag: latest
+
+# Resource name prefix
+namePrefix: ""
+
+# Namespace creation
+namespace: cost-monitor

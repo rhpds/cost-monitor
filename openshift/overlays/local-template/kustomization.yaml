@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Template for local environment overlay
+# Copy this directory to openshift/overlays/local and customize for your environment
+
+# Reference the base configuration
+resources:
+- ../../base
+
+# Override images with your local registry
+# Replace YOUR_REGISTRY_URL with your actual OpenShift image registry
+images:
+- name: cost-monitor-dashboard:latest
+  newName: YOUR_REGISTRY_URL/cost-monitor/cost-monitor-dashboard
+  newTag: latest
+- name: cost-data-service:latest
+  newName: YOUR_REGISTRY_URL/cost-monitor/cost-data-service
+  newTag: latest
+
+# Patches for local environment
+patchesStrategicMerge:
+- routes-patch.yaml
+
+# Name prefix for local deployment (optional)
+# namePrefix: local-
+
+# Namespace for local deployment
+namespace: cost-monitor

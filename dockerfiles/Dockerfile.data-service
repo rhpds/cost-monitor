@@ -1,0 +1,75 @@
+# Cost Data Service Dockerfile
+# Multi-stage build for production optimization
+
+# Build stage
+FROM registry.access.redhat.com/ubi9/python-311:latest AS builder
+
+USER root
+
+# Install system dependencies (including runtime dependencies)
+RUN dnf update -y && \
+    dnf install -y \
+        gcc \
+        gcc-c++ \
+        make \
+        libpq-devel \
+        libpq \
+        openssl-devel \
+        ca-certificates \
+    && dnf clean all
+
+# Create app directory
+WORKDIR /app
+
+# Copy requirements first for better Docker layer caching
+COPY requirements.txt requirements-data-service.txt ./
+
+# Install Python dependencies in virtual environment
+RUN python -m venv /opt/app-root/venv && \
+    source /opt/app-root/venv/bin/activate && \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r requirements-data-service.txt
+
+# Production stage
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+# Create non-root user
+USER 1001
+
+# Set working directory
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/app-root/venv /opt/app-root/venv
+
+# Copy application code
+COPY --chown=1001:0 src/ ./src/
+COPY --chown=1001:0 config/ ./config/
+COPY --chown=1001:0 entrypoints/ ./entrypoints/
+
+# Create cache and log directories
+RUN mkdir -p /app/cache /app/logs && \
+    chmod -R g+w /app/cache /app/logs
+
+# Set environment variables
+ENV PATH="/opt/app-root/venv/bin:$PATH"
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Health check script
+COPY --chown=1001:0 health_check.py ./
+
+# Make entrypoint executable
+RUN chmod +x entrypoints/data-service-entrypoint.sh
+
+# Expose ports
+EXPOSE 8000 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python health_check.py --service=data-service || exit 1
+
+# Default entrypoint
+ENTRYPOINT ["./entrypoints/data-service-entrypoint.sh"]
+CMD ["uvicorn", "src.api.data_service:app", "--host", "0.0.0.0", "--port", "8000"]

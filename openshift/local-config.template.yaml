@@ -1,0 +1,65 @@
+# Local OpenShift Deployment Configuration Template
+# Copy this file to openshift/local/local-config.yaml and fill in your actual values
+# The local file will be ignored by git for security
+
+deployment:
+  namespace: "cost-monitor"
+  cluster_domain: "apps.your-cluster.example.com"  # Replace with your OpenShift cluster domain
+  image_registry: "default-route-openshift-image-registry.apps.your-cluster.example.com"  # Replace with your registry
+
+git:
+  repository: "https://github.com/your-org/cost-monitor.git"  # Replace with your actual repository
+  branch: "main"
+
+secrets:
+  # Database credentials
+  postgresql:
+    username: "cost_monitor_user"
+    password: "REPLACE_WITH_SECURE_PASSWORD"
+    database: "cost_monitor"
+
+  # Redis credentials
+  redis:
+    password: "REPLACE_WITH_SECURE_PASSWORD"
+
+  # AWS credentials
+  aws:
+    access_key_id: "REPLACE_WITH_YOUR_AWS_ACCESS_KEY"
+    secret_access_key: "REPLACE_WITH_YOUR_AWS_SECRET_KEY"
+    region: "us-east-1"
+
+  # Azure credentials
+  azure:
+    client_id: "REPLACE_WITH_YOUR_AZURE_CLIENT_ID"
+    client_secret: "REPLACE_WITH_YOUR_AZURE_CLIENT_SECRET"
+    tenant_id: "REPLACE_WITH_YOUR_AZURE_TENANT_ID"
+    subscription_id: "REPLACE_WITH_YOUR_AZURE_SUBSCRIPTION_ID"
+
+  # GCP credentials (service account JSON file path)
+  gcp:
+    service_account_file: "/path/to/your/gcp-service-account.json"
+
+  # Webhook secrets
+  webhook:
+    github_secret: "generate-secure-webhook-secret"
+    generic_secret: "generate-secure-webhook-secret"
+
+resources:
+  # Resource limits and requests
+  data_service:
+    memory_request: "2Gi"
+    memory_limit: "4Gi"
+    cpu_request: "500m"
+    cpu_limit: "2000m"
+
+  dashboard:
+    memory_request: "1Gi"
+    memory_limit: "4Gi"
+    cpu_request: "100m"
+    cpu_limit: "1000m"
+
+  storage:
+    data_cache_size: "10Gi"
+    logs_size: "5Gi"
+    postgresql_size: "20Gi"
+    storage_class: "ocs-storagecluster-ceph-rbd"  # Adjust for your storage class

@@ -1,0 +1,15 @@
+# Additional requirements for Dashboard Service
+# Web Framework
+dash>=2.16.0
+plotly>=5.17.0
+dash-bootstrap-components>=1.5.0
+
+# HTTP Client for Data Service API
+httpx>=0.25.0
+requests>=2.31.0
+
+# Cache (lighter Redis client for dashboard)
+redis>=5.0.0
+
+# Utilities
+python-dateutil>=2.8.2

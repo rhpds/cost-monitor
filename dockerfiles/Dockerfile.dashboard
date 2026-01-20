@@ -1,0 +1,79 @@
+# Dashboard Service Dockerfile
+# Optimized for Dash web application
+
+# Build stage
+FROM registry.access.redhat.com/ubi9/python-311:latest AS builder
+
+USER root
+
+# Install build dependencies (including runtime dependencies)
+RUN dnf update -y && \
+    dnf install -y \
+        gcc \
+        gcc-c++ \
+        make \
+        ca-certificates \
+        nodejs \
+        npm \
+    && dnf clean all
+
+# Create app directory
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt requirements-dashboard.txt ./
+
+# Install Python dependencies
+RUN python -m venv /opt/app-root/venv && \
+    source /opt/app-root/venv/bin/activate && \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r requirements-dashboard.txt
+
+# Production stage
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+# Create non-root user
+USER 1001
+
+# Set working directory
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/app-root/venv /opt/app-root/venv
+
+# Copy application code
+COPY --chown=1001:0 src/visualization/ ./src/visualization/
+COPY --chown=1001:0 src/api/dashboard_service.py ./src/api/
+COPY --chown=1001:0 src/models/ ./src/models/
+COPY --chown=1001:0 src/utils/http_client.py ./src/utils/
+COPY --chown=1001:0 config/dashboard/ ./config/
+COPY --chown=1001:0 assets/ ./assets/
+COPY --chown=1001:0 entrypoints/ ./entrypoints/
+
+# Create cache directory for dashboard-specific cache
+RUN mkdir -p /app/cache /app/logs && \
+    chmod -R g+w /app/cache /app/logs
+
+# Set environment variables
+ENV PATH="/opt/app-root/venv/bin:$PATH"
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV DASH_ENV=production
+
+# Health check script
+COPY --chown=1001:0 health_check.py ./
+
+# Make entrypoint executable
+RUN chmod +x entrypoints/dashboard-entrypoint.sh
+
+# Expose ports
+EXPOSE 8050 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+    CMD python health_check.py --service=dashboard || exit 1
+
+# Default entrypoint
+ENTRYPOINT ["./entrypoints/dashboard-entrypoint.sh"]
+CMD ["python", "-m", "src.api.dashboard_service"]
