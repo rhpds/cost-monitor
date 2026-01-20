@@ -26,7 +26,7 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: data-collector
-            image: cost-monitor/data-service:latest
+            image: cost-data-service:latest
             command: ["python", "-m", "src.jobs.collect_data"]
             
             env:
@@ -133,7 +133,7 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: historical-collector
-            image: cost-monitor/data-service:latest
+            image: cost-data-service:latest
             command: ["python", "-m", "src.jobs.collect_historical_data"]
             
             env:
