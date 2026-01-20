@@ -133,6 +133,7 @@ create_secrets() {
         --from-literal=username="$pg_user" \
         --from-literal=password="$pg_password" \
         --from-literal=database="$pg_database" \
+        --from-literal=admin-password="$pg_password" \
         --dry-run=client -o yaml | oc apply -f -
 
     # Redis credentials

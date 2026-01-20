@@ -8,7 +8,7 @@ echo "Redis URL: ${REDIS_URL:-not set}"
 
 # Wait for PostgreSQL to be ready using Python
 echo "Waiting for PostgreSQL..."
-python3 -c "
+python -c "
 import time
 import asyncpg
 import asyncio
