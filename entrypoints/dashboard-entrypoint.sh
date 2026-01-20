@@ -5,6 +5,9 @@ echo "Starting Cost Dashboard Service..."
 echo "Environment: ${ENVIRONMENT:-production}"
 echo "Data Service URL: ${DATA_SERVICE_URL:-not set}"
 
+# Ensure virtual environment is first in PATH
+export PATH="/opt/app-root/venv/bin:$PATH"
+
 # Debug Python environment
 echo "Python version: $(python --version)"
 echo "Python executable: $(which python)"

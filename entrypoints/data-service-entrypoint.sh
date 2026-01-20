@@ -4,6 +4,9 @@ set -e
 echo "Starting Cost Data Service..."
 echo "Environment: ${ENVIRONMENT:-production}"
 
+# Ensure virtual environment is first in PATH
+export PATH="/opt/app-root/venv/bin:$PATH"
+
 # Construct DATABASE_URL from individual environment variables
 export DATABASE_URL="postgresql://${POSTGRESQL_USER}:${POSTGRESQL_PASSWORD}@postgresql:5432/${POSTGRESQL_DATABASE}"
 export REDIS_URL="redis://:${REDIS_PASSWORD}@redis-service:6379/0"
