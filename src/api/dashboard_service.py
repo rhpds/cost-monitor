@@ -9,6 +9,7 @@ import logging
 import asyncio
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
+import calendar
 
 import dash
 from dash import html, dcc, callback, Input, Output
@@ -30,6 +31,46 @@ DATA_SERVICE_URL = os.getenv('DATA_SERVICE_URL', 'http://cost-data-service:8000'
 DASH_HOST = os.getenv('DASH_HOST', '0.0.0.0')
 DASH_PORT = int(os.getenv('DASH_PORT', '8050'))
 DASH_DEBUG = os.getenv('DASH_DEBUG', 'false').lower() == 'true'
+
+def get_date_ranges():
+    """Get smart date range presets"""
+    today = date.today()
+
+    # Week-to-date (Monday of current week to today)
+    days_since_monday = today.weekday()  # 0=Monday, 6=Sunday
+    week_start = today - timedelta(days=days_since_monday)
+
+    # Month-to-date (1st of current month to today)
+    month_start = today.replace(day=1)
+
+    # This month (1st to last day of current month)
+    last_day_of_month = calendar.monthrange(today.year, today.month)[1]
+    this_month_end = today.replace(day=last_day_of_month)
+
+    # Last month
+    if today.month == 1:
+        last_month_start = date(today.year - 1, 12, 1)
+        last_month_end = date(today.year - 1, 12, 31)
+    else:
+        last_month_start = date(today.year, today.month - 1, 1)
+        last_month_days = calendar.monthrange(today.year, today.month - 1)[1]
+        last_month_end = date(today.year, today.month - 1, last_month_days)
+
+    # This year (Jan 1 to Dec 31 of current year)
+    year_start = date(today.year, 1, 1)
+    year_end = date(today.year, 12, 31)
+
+    return {
+        'week_to_date': (week_start, today),
+        'month_to_date': (month_start, today),
+        'this_month': (month_start, this_month_end),
+        'last_month': (last_month_start, last_month_end),
+        'this_year': (year_start, year_end)
+    }
+
+# Get default date range (week-to-date for smaller initial dataset)
+date_ranges = get_date_ranges()
+default_start, default_end = date_ranges['week_to_date']
 
 class DataServiceClient:
     """Client for the cost data service API"""
@@ -129,18 +170,31 @@ app.layout = dbc.Container([
         ])
     ]),
     
-    # Date range selector
+    # Date range selector with presets
     dbc.Row([
         dbc.Col([
-            html.Label("Date Range:", className="fw-bold"),
+            html.Label("Quick Date Ranges:", className="fw-bold"),
+            dbc.ButtonGroup([
+                dbc.Button("Week to Date", id="btn-week-to-date", size="sm", outline=True, color="primary"),
+                dbc.Button("Month to Date", id="btn-month-to-date", size="sm", outline=True, color="primary"),
+                dbc.Button("This Month", id="btn-this-month", size="sm", outline=True, color="primary"),
+                dbc.Button("Last Month", id="btn-last-month", size="sm", outline=True, color="primary"),
+                dbc.Button("This Year", id="btn-this-year", size="sm", outline=True, color="primary"),
+            ], className="mb-2 d-flex flex-wrap"),
+        ], width=12),
+    ]),
+
+    dbc.Row([
+        dbc.Col([
+            html.Label("Custom Date Range:", className="fw-bold"),
             dcc.DatePickerRange(
                 id='date-picker-range',
-                start_date=date.today() - timedelta(days=30),
-                end_date=date.today(),
+                start_date=default_start,
+                end_date=default_end,
                 display_format='YYYY-MM-DD',
                 className="mb-3"
             )
-        ], width=6),
+        ], width=8),
         dbc.Col([
             html.Label("Auto Refresh:", className="fw-bold"),
             dbc.Switch(
@@ -149,7 +203,7 @@ app.layout = dbc.Container([
                 value=True,
                 className="mb-3"
             )
-        ], width=6)
+        ], width=4)
     ]),
     
     # Cost summary cards
@@ -333,6 +387,45 @@ def update_dashboard(start_date, end_date, n_intervals, auto_refresh):
         trends_fig,
         table
     )
+
+# Preset button callbacks
+@callback(
+    Output('date-picker-range', 'start_date'),
+    Output('date-picker-range', 'end_date'),
+    [Input('btn-week-to-date', 'n_clicks'),
+     Input('btn-month-to-date', 'n_clicks'),
+     Input('btn-this-month', 'n_clicks'),
+     Input('btn-last-month', 'n_clicks'),
+     Input('btn-this-year', 'n_clicks')],
+    prevent_initial_call=True
+)
+def update_date_range(week_clicks, mtd_clicks, month_clicks, last_month_clicks, year_clicks):
+    """Update date range based on preset button clicks"""
+
+    # Get current date ranges
+    ranges = get_date_ranges()
+
+    # Determine which button was clicked
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update
+
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if button_id == 'btn-week-to-date':
+        start_date, end_date = ranges['week_to_date']
+    elif button_id == 'btn-month-to-date':
+        start_date, end_date = ranges['month_to_date']
+    elif button_id == 'btn-this-month':
+        start_date, end_date = ranges['this_month']
+    elif button_id == 'btn-last-month':
+        start_date, end_date = ranges['last_month']
+    elif button_id == 'btn-this-year':
+        start_date, end_date = ranges['this_year']
+    else:
+        return dash.no_update, dash.no_update
+
+    return start_date, end_date
 
 if __name__ == "__main__":
     logger.info(f"Starting Cost Dashboard on {DASH_HOST}:{DASH_PORT}")
