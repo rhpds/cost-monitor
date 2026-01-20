@@ -6,6 +6,9 @@ echo "Environment: ${ENVIRONMENT:-production}"
 echo "Database URL: ${DATABASE_URL:-not set}"
 echo "Redis URL: ${REDIS_URL:-not set}"
 
+# Activate virtual environment
+source /opt/app-root/venv/bin/activate
+
 # Wait for PostgreSQL to be ready using Python
 echo "Waiting for PostgreSQL..."
 python -c "
