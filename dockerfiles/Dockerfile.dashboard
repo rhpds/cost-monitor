@@ -55,8 +55,8 @@ COPY --chown=1001:0 entrypoints/ ./entrypoints/
 RUN mkdir -p /app/cache /app/logs && \
     chmod -R g+w /app/cache /app/logs
 
-# Set environment variables
-ENV PATH="/opt/app-root/venv/bin:$PATH"
+# Set environment variables - venv must come first in PATH
+ENV PATH="/opt/app-root/venv/bin:/opt/app-root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV DASH_ENV=production
