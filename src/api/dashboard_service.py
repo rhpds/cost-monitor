@@ -338,7 +338,7 @@ if __name__ == "__main__":
     logger.info(f"Starting Cost Dashboard on {DASH_HOST}:{DASH_PORT}")
     logger.info(f"Data Service URL: {DATA_SERVICE_URL}")
     
-    app.run_server(
+    app.run(
         host=DASH_HOST,
         port=DASH_PORT,
         debug=DASH_DEBUG
