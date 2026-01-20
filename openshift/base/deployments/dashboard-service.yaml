@@ -15,12 +15,12 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: dashboard-service
+      app: cost-monitor
       component: dashboard
   template:
     metadata:
       labels:
-        app: dashboard-service
+        app: cost-monitor
         component: dashboard
         tier: frontend
     spec:
