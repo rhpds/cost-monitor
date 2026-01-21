@@ -704,7 +704,7 @@ class CostMonitorDashboard:
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader([
-                            "Cost Trend",
+                            "Daily Costs by Provider",
                             dcc.Dropdown(
                                 id="provider-selector",
                                 options=[
@@ -724,7 +724,7 @@ class CostMonitorDashboard:
                             dcc.Loading([
                                 dcc.Graph(
                                     id="cost-trend-chart",
-                                    figure=self._create_initial_loading_chart("Daily Cost Trend"),
+                                    figure=self._create_initial_loading_chart("Daily Costs by Provider"),
                                     config={
                                         'displayModeBar': False,
                                         'displaylogo': False,
@@ -1409,7 +1409,7 @@ class CostMonitorDashboard:
                     font=dict(size=16, color='gray')
                 )
                 loading_fig.update_layout(
-                    title='Daily Cost Trend',
+                    title='Daily Costs by Provider',
                     xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
                     yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
                     **DashboardTheme.LAYOUT
@@ -1424,72 +1424,21 @@ class CostMonitorDashboard:
                 today_str = date.today().strftime('%Y-%m-%d')
 
                 if selected_provider == 'all':
-                    # Show all providers as grouped bars
+                    # Show daily costs broken down by provider (grouped bars)
                     for provider in ['aws', 'azure', 'gcp']:
                         values = [item.get(provider, 0) for item in daily_costs]
+                        text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
 
-                        # For AWS, handle today's date specially
-                        if provider == 'aws':
-                            display_values = []
-                            hover_values = []
-                            text_labels = []
-
-                            for i, (item, value) in enumerate(zip(daily_costs, values)):
-                                is_today = item['date'] == today_str
-                                if is_today:
-                                    # For today's AWS data, show minimal bar and "N/A" text
-                                    display_values.append(0.01)  # Minimal bar for log scale
-                                    hover_values.append(0)  # Show $0 in hover
-                                    text_labels.append('N/A')
-                                else:
-                                    display_values.append(max(value, 0.01))  # Normal handling
-                                    hover_values.append(value)
-                                    text_labels.append(f'${value:.2f}' if value > 0 else '$0.00')
-                        else:
-                            # Other providers show normally
-                            display_values = [max(v, 0.01) for v in values]
-                            hover_values = values
-                            text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
-
-                        # Create dynamic hover template that respects date logic
-                        if provider == 'aws':
-                            # For AWS, create custom hover data with conditional values
-                            aws_hover_data = []
-                            aws_hover_text = []
-                            for i, item in enumerate(daily_costs):
-                                is_today = item['date'] == today_str
-                                if is_today:
-                                    aws_hover_data.append('N/A (Data lag)')
-                                    aws_hover_text.append('N/A (Data lag)')
-                                else:
-                                    aws_hover_data.append(f'${hover_values[i]:.2f}')
-                                    aws_hover_text.append(f'${hover_values[i]:.2f}')
-
-                            fig.add_trace(go.Bar(
-                                x=dates,
-                                y=display_values,
-                                name=provider.upper(),
-                                marker_color=DashboardTheme.COLORS.get(provider, '#000000'),
-                                marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
-                                width=0.6,  # Explicit bar width for visibility
-                                text=text_labels,
-                                textposition='outside',
-                                hovertemplate='<b>AWS</b><br>Date: %{x}<br>Cost: %{customdata}<extra></extra>',
-                                customdata=aws_hover_data
-                            ))
-                        else:
-                            fig.add_trace(go.Bar(
-                                x=dates,
-                                y=display_values,
-                                name=provider.upper(),
-                                marker_color=DashboardTheme.COLORS.get(provider, '#000000'),
-                                marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
-                                width=0.6,  # Explicit bar width for visibility
-                                text=text_labels,
-                                textposition='outside',
-                                hovertemplate=f'<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{customdata:.2f}}<extra></extra>',
-                                customdata=hover_values
-                            ))
+                        fig.add_trace(go.Bar(
+                            x=dates,
+                            y=values,
+                            name=provider.upper(),
+                            marker_color=DashboardTheme.COLORS.get(provider, '#000000'),
+                            marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
+                            text=text_labels,
+                            textposition='outside',
+                            hovertemplate=f'<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{y:.2f}}<extra></extra>'
+                        ))
                 else:
                     # Show selected provider only
                     values = [item.get(selected_provider, 0) for item in daily_costs]
@@ -1558,15 +1507,15 @@ class CostMonitorDashboard:
             layout_config['margin'] = {'l': 20, 'r': 20, 't': 40, 'b': 80}  # Increase bottom margin
 
             fig.update_layout(
-                title="Daily Cost Trend",
+                title="Daily Costs by Provider",
                 xaxis_title="Date",
                 yaxis_title="Cost (USD)",
                 yaxis_type="linear",  # Use linear scale for clear bar visualization
-                barmode='group',  # Group bars side by side for each date
+                barmode='group',  # Group bars by provider for each date
                 hovermode='x unified',
-                showlegend=True,
-                bargap=0.2,  # Add gap between bar groups for better visibility
-                bargroupgap=0.1,  # Gap between bars in same group
+                showlegend=True,  # Show legend to identify providers
+                bargap=0.2,  # Gap between date groups
+                bargroupgap=0.1,  # Gap between provider bars within each date
                 **layout_config
             )
 
