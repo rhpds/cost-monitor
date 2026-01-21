@@ -15,6 +15,13 @@ from typing import Dict, Any, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 logger.info("🚀 Dashboard module starting to load...")
 
+
+class DataWrapper:
+    """Simple wrapper to provide attribute access to dictionary data for compatibility."""
+    def __init__(self, data_dict):
+        for key, value in data_dict.items():
+            setattr(self, key, value)
+
 try:
     import dash
     from dash import dcc, html, Input, Output, State, callback, dash_table, ALL
@@ -219,7 +226,7 @@ class CostDataManager:
                 return cached_data
 
         try:
-            # Call data service API
+            # Call data service API - now returns data in dashboard format
             url = f"{self.data_service_url}/api/v1/costs/summary"
             params = {
                 'start_date': start_date.isoformat(),
@@ -230,79 +237,20 @@ class CostDataManager:
             response = requests.get(url, params=params, timeout=30)
             response.raise_for_status()
 
-            summary_data = response.json()
-
-            # Also get detailed daily costs
-            detailed_url = f"{self.data_service_url}/api/v1/costs"
-            detailed_response = requests.get(detailed_url, params=params, timeout=30)
-            detailed_response.raise_for_status()
-            detailed_data = detailed_response.json()
-
-            # Convert to dashboard format
-            dashboard_data = {
-                'total_cost': summary_data.get('total_cost', 0),
-                'currency': summary_data.get('currency', 'USD'),
-                'provider_breakdown': summary_data.get('provider_breakdown', {}),
-                'daily_costs': self._process_daily_costs(detailed_data),
-                'service_breakdown': self._process_service_breakdown(detailed_data),
-                'account_breakdown': self._process_account_breakdown(detailed_data)
-            }
+            # API now returns data in the exact format dashboard expects
+            api_data = response.json()
 
             # Cache the result
             import time
-            self._cache[cache_key] = (dashboard_data, time.time())
+            self._cache[cache_key] = (api_data, time.time())
 
-            logger.info(f"Retrieved cost data from API, total: ${dashboard_data['total_cost']:.2f}")
-            return dashboard_data
+            logger.info(f"Retrieved cost data from API, total: ${api_data['total_cost']:.2f}")
+            return DataWrapper(api_data)
 
         except Exception as e:
             logger.error(f"Failed to get cost data from API: {e}")
             return None
 
-    def _process_daily_costs(self, detailed_data):
-        """Process detailed cost data into daily format for charts."""
-        daily_costs = {}
-        for item in detailed_data:
-            date_str = item.get('date')
-            provider = item.get('provider')
-            cost = item.get('cost', 0)
-
-            if date_str not in daily_costs:
-                daily_costs[date_str] = {'date': date_str, 'aws': 0, 'azure': 0, 'gcp': 0}
-
-            daily_costs[date_str][provider] = daily_costs[date_str].get(provider, 0) + cost
-
-        return list(daily_costs.values())
-
-    def _process_service_breakdown(self, detailed_data):
-        """Process detailed cost data into service breakdown."""
-        service_breakdown = {}
-        for item in detailed_data:
-            provider = item.get('provider')
-            service = item.get('service_name', 'Unknown')
-            cost = item.get('cost', 0)
-
-            if provider not in service_breakdown:
-                service_breakdown[provider] = {}
-
-            service_breakdown[provider][service] = service_breakdown[provider].get(service, 0) + cost
-
-        return service_breakdown
-
-    def _process_account_breakdown(self, detailed_data):
-        """Process detailed cost data into account breakdown."""
-        account_breakdown = {}
-        for item in detailed_data:
-            provider = item.get('provider')
-            account = item.get('account_id', 'Unknown')
-            cost = item.get('cost', 0)
-
-            if provider not in account_breakdown:
-                account_breakdown[provider] = {}
-
-            account_breakdown[provider][account] = account_breakdown[provider].get(account, 0) + cost
-
-        return account_breakdown
 
     async def initialize(self):
         """Initialize the data manager."""

@@ -109,16 +109,44 @@ data:
         PRIMARY KEY (id, date)
     ) PARTITION BY RANGE (date);
     
-    -- Create initial partition for current year
+    -- Create partitions for current year and previous year (for historical data)
     DO \$\$
     DECLARE
-        start_date DATE := DATE_TRUNC('year', CURRENT_DATE);
-        end_date DATE := start_date + INTERVAL '1 year';
+        current_year INTEGER := EXTRACT('year' FROM CURRENT_DATE);
+        partition_year INTEGER;
+        start_date DATE;
+        end_date DATE;
         partition_name TEXT;
     BEGIN
-        partition_name := 'cost_data_points_' || TO_CHAR(start_date, 'YYYY');
+        -- Create partition for previous year (2025)
+        partition_year := current_year - 1;
+        start_date := DATE_TRUNC('year', MAKE_DATE(partition_year, 1, 1));
+        end_date := start_date + INTERVAL '1 year';
+        partition_name := 'cost_data_points_' || partition_year::TEXT;
         EXECUTE format(
-            'CREATE TABLE IF NOT EXISTS %I PARTITION OF cost_data_points 
+            'CREATE TABLE IF NOT EXISTS %I PARTITION OF cost_data_points
+             FOR VALUES FROM (%L) TO (%L)',
+            partition_name, start_date, end_date
+        );
+
+        -- Create partition for current year (2026)
+        partition_year := current_year;
+        start_date := DATE_TRUNC('year', MAKE_DATE(partition_year, 1, 1));
+        end_date := start_date + INTERVAL '1 year';
+        partition_name := 'cost_data_points_' || partition_year::TEXT;
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %I PARTITION OF cost_data_points
+             FOR VALUES FROM (%L) TO (%L)',
+            partition_name, start_date, end_date
+        );
+
+        -- Create partition for next year (2027) to handle early data
+        partition_year := current_year + 1;
+        start_date := DATE_TRUNC('year', MAKE_DATE(partition_year, 1, 1));
+        end_date := start_date + INTERVAL '1 year';
+        partition_name := 'cost_data_points_' || partition_year::TEXT;
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %I PARTITION OF cost_data_points
              FOR VALUES FROM (%L) TO (%L)',
             partition_name, start_date, end_date
         );

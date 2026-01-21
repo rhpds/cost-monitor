@@ -93,12 +93,19 @@ class HealthCheck(BaseModel):
     timestamp: datetime
     version: str
 
+class DailyCostSummary(BaseModel):
+    date: date
+    total_cost: float
+    currency: str
+    provider_breakdown: Dict[str, float]
+
 class CostSummary(BaseModel):
     total_cost: float
     currency: str
     period_start: date
     period_end: date
     provider_breakdown: Dict[str, float]
+    combined_daily_costs: List[DailyCostSummary]
 
 class CostDataPoint(BaseModel):
     provider: str
@@ -382,35 +389,80 @@ async def get_cost_summary(
 
         # Query database for complete data
         async with db_pool.acquire() as conn:
-            # Get total cost
-            query = """
+            # Get total cost summary
+            total_query = """
                 SELECT p.name as provider, SUM(cdp.cost) as total_cost, cdp.currency
                 FROM cost_data_points cdp
                 JOIN providers p ON cdp.provider_id = p.id
                 WHERE cdp.date BETWEEN $1 AND $2
             """
-            
+
             params = [start_date, end_date]
-            
+
             if providers:
-                query += " AND p.name = ANY($3)"
+                total_query += " AND p.name = ANY($3)"
                 params.append(providers)
-                
-            query += " GROUP BY p.name, cdp.currency ORDER BY total_cost DESC"
-            
-            rows = await conn.fetch(query, *params)
-            
+
+            total_query += " GROUP BY p.name, cdp.currency ORDER BY total_cost DESC"
+
+            total_rows = await conn.fetch(total_query, *params)
+
+            # Get daily cost breakdown
+            daily_query = """
+                SELECT cdp.date, p.name as provider, SUM(cdp.cost) as cost, cdp.currency
+                FROM cost_data_points cdp
+                JOIN providers p ON cdp.provider_id = p.id
+                WHERE cdp.date BETWEEN $1 AND $2
+            """
+
+            daily_params = [start_date, end_date]
+
+            if providers:
+                daily_query += " AND p.name = ANY($3)"
+                daily_params.append(providers)
+
+            daily_query += " GROUP BY cdp.date, p.name, cdp.currency ORDER BY cdp.date DESC, p.name"
+
+            daily_rows = await conn.fetch(daily_query, *daily_params)
+
             # Build response
-            total_cost = sum(row['total_cost'] for row in rows)
-            provider_breakdown = {row['provider']: float(row['total_cost']) for row in rows}
-            currency = rows[0]['currency'] if rows else 'USD'
-            
+            total_cost = sum(row['total_cost'] for row in total_rows)
+            provider_breakdown = {row['provider']: float(row['total_cost']) for row in total_rows}
+            currency = total_rows[0]['currency'] if total_rows else 'USD'
+
+            # Build combined_daily_costs
+            daily_costs_dict = {}
+            for row in daily_rows:
+                date_str = row['date']
+                if date_str not in daily_costs_dict:
+                    daily_costs_dict[date_str] = {
+                        'date': date_str,
+                        'total_cost': 0.0,
+                        'currency': row['currency'],
+                        'provider_breakdown': {}
+                    }
+
+                daily_costs_dict[date_str]['provider_breakdown'][row['provider']] = float(row['cost'])
+                daily_costs_dict[date_str]['total_cost'] += float(row['cost'])
+
+            # Convert to list and create DailyCostSummary objects
+            combined_daily_costs = [
+                DailyCostSummary(
+                    date=daily_data['date'],
+                    total_cost=daily_data['total_cost'],
+                    currency=daily_data['currency'],
+                    provider_breakdown=daily_data['provider_breakdown']
+                )
+                for daily_data in sorted(daily_costs_dict.values(), key=lambda x: x['date'], reverse=True)
+            ]
+
             result = CostSummary(
                 total_cost=total_cost,
                 currency=currency,
                 period_start=start_date,
                 period_end=end_date,
-                provider_breakdown=provider_breakdown
+                provider_breakdown=provider_breakdown,
+                combined_daily_costs=combined_daily_costs
             )
             
             # Cache for 30 minutes
