@@ -650,10 +650,7 @@ class CostMonitorDashboard:
                             ], type="dot", color="#0d6efd")
                         ])
                     ])
-                ], width=6),
-                dbc.Col([
-                    # Placeholder for future chart or keep empty for now
-                ], width=6)
+                ], width=12)
             ], className="mb-4"),
 
             # Charts Row 2 - Service Breakdown
