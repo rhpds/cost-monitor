@@ -246,7 +246,7 @@ app.layout = dbc.Container([
         ], width=6),
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Cost Trends"),
+                dbc.CardHeader("Daily Costs by Provider"),
                 dbc.CardBody([
                     dcc.Graph(id="cost-trends-chart")
                 ])
@@ -337,13 +337,14 @@ def update_dashboard(start_date, end_date, n_intervals, auto_refresh):
             # Group by date and provider
             daily_costs = df.groupby(['date', 'provider'])['cost'].sum().reset_index()
             
-            trends_fig = px.line(
+            trends_fig = px.bar(
                 daily_costs,
                 x='date',
                 y='cost',
                 color='provider',
-                title="Daily Cost Trends",
-                labels={'cost': 'Cost (USD)', 'date': 'Date'}
+                title="Daily Costs by Provider",
+                labels={'cost': 'Cost (USD)', 'date': 'Date'},
+                barmode='group'
             )
         else:
             trends_fig = go.Figure()
