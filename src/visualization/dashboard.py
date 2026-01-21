@@ -863,7 +863,7 @@ class CostMonitorDashboard:
                         'total_cost': real_cost_data.total_cost,
                         'provider_breakdown': real_cost_data.provider_breakdown,
                         'daily_costs': transformed_daily_costs,
-                        'service_breakdown': {provider_name: provider_data.service_breakdown
+                        'service_breakdown': {provider_name: (provider_data.get('service_breakdown', {}) if isinstance(provider_data, dict) else getattr(provider_data, 'service_breakdown', {}))
                                              for provider_name, provider_data in real_cost_data.provider_data.items()},
                         'account_breakdown': {}
                     }
@@ -1020,7 +1020,12 @@ class CostMonitorDashboard:
 
                     # Build service breakdown from provider_data
                     for provider_name, provider_data in real_cost_data.provider_data.items():
-                        service_breakdown[provider_name.lower()] = provider_data.service_breakdown
+                        # provider_data is a dict from API, use dict access instead of attribute access
+                        if isinstance(provider_data, dict):
+                            service_breakdown[provider_name.lower()] = provider_data.get('service_breakdown', {})
+                        else:
+                            # Fallback for object attribute access
+                            service_breakdown[provider_name.lower()] = getattr(provider_data, 'service_breakdown', {})
 
                     # Transform daily costs to match frontend chart expectations
                     for daily_entry in daily_costs:
