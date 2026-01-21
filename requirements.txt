@@ -27,6 +27,7 @@ tenacity>=8.2.3
 # Azure SDK
 azure-identity>=1.15.0
 azure-mgmt-subscription>=3.1.0
+azure-storage-blob>=12.19.0
 
 # Caching
 diskcache>=5.6.3
