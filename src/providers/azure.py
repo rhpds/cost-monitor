@@ -724,7 +724,7 @@ class AzureCostProvider(CloudCostProvider):
                         service_name=service_name,
                         account_id=subscription_id,
                         region=None,
-                        metadata={'source': 'cost_management_api'}
+                        tags={'source': 'cost_management_api'}
                     ))
                     total_cost += cost_amount
 
