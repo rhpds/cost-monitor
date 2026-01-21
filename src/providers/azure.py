@@ -690,9 +690,27 @@ class AzureCostProvider(CloudCostProvider):
                     })
 
         try:
+            # Determine scope - use management group if available for broader cost coverage
+            use_management_groups = self.config.get('use_management_groups', True)  # Default to True for broader coverage
+            management_groups = self.config.get('management_groups', [])
+            query_all_subscriptions = self.config.get('query_all_subscriptions', True)  # Default to True for broader coverage
+
             # Execute query in a thread since the Azure SDK is synchronous
             def _execute_query():
-                scope = f"/subscriptions/{subscription_id}"
+                if use_management_groups and management_groups:
+                    # Use first available management group for organization-wide costs
+                    management_group_id = management_groups[0] if isinstance(management_groups, list) else management_groups
+                    scope = f"/providers/Microsoft.Management/managementGroups/{management_group_id}"
+                    logger.info(f"🟡 Azure: Querying management group scope: {scope} (from available: {management_groups})")
+                elif query_all_subscriptions:
+                    # Fallback to tenant scope - try billing account scope
+                    scope = f"/providers/Microsoft.CostManagement"
+                    logger.info(f"🟡 Azure: Querying tenant-wide scope for all subscriptions")
+                else:
+                    # Fallback to single subscription (original behavior)
+                    scope = f"/subscriptions/{subscription_id}"
+                    logger.info(f"🟡 Azure: Querying single subscription scope: {scope}")
+
                 return cost_mgmt_client.query.usage(scope, query_definition)
 
             query_result = await asyncio.get_event_loop().run_in_executor(None, _execute_query)
