@@ -1388,10 +1388,36 @@ class CostMonitorDashboard:
 
                 if selected_provider == 'all':
                     logger.info(f"📊 CHART DEBUG: Creating grouped bars for all providers")
+
+                    # Pre-calculate if we'll need log scale
+                    aws_max = max([entry.get('aws', 0) for entry in daily_costs], default=0)
+                    gcp_max = max([entry.get('gcp', 0) for entry in daily_costs], default=0)
+                    azure_max = max([entry.get('azure', 0) for entry in daily_costs], default=0)
+                    all_maxes = [val for val in [aws_max, gcp_max, azure_max] if val > 0]
+
+                    if len(all_maxes) > 1:
+                        ratio = max(all_maxes) / min(all_maxes)
+                        will_use_log_scale = ratio > 50
+                    else:
+                        will_use_log_scale = False
+
+                    logger.info(f"📊 CHART DEBUG: Scale analysis - AWS max: ${aws_max:.2f}, GCP max: ${gcp_max:.2f}, Will use log: {will_use_log_scale}")
+
                     # Show daily costs broken down by provider (grouped bars)
                     for provider in ['aws', 'azure', 'gcp']:
                         values = [item.get(provider, 0) for item in daily_costs]
-                        text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
+
+                        # For log scale, replace zero values with a small positive number
+                        if will_use_log_scale:
+                            # Use 0.01 as minimum value for log scale visibility
+                            display_values = [max(v, 0.01) for v in values]
+                            # Keep original values for hover and display
+                            hover_values = values
+                            text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
+                        else:
+                            display_values = values
+                            hover_values = values
+                            text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
 
                         # Debug each provider's values
                         total_value = sum(values)
@@ -1401,13 +1427,14 @@ class CostMonitorDashboard:
 
                         fig.add_trace(go.Bar(
                             x=dates,
-                            y=values,
+                            y=display_values,
                             name=provider.upper(),
                             marker_color=DashboardTheme.COLORS.get(provider, '#000000'),
                             marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
                             text=text_labels,
                             textposition='outside',
-                            hovertemplate=f'<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{y:.2f}}<extra></extra>'
+                            hovertemplate=f'<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{customdata:.2f}}<extra></extra>',
+                            customdata=hover_values  # Show actual values in hover, not log-scale adjusted ones
                         ))
                         logger.info(f"📊 CHART DEBUG: Added trace for {provider.upper()}")
                 else:
@@ -1477,11 +1504,31 @@ class CostMonitorDashboard:
             layout_config = DashboardTheme.LAYOUT.copy()
             layout_config['margin'] = {'l': 20, 'r': 20, 't': 40, 'b': 80}  # Increase bottom margin
 
+            # Determine if we should use log scale for better visibility
+            # Use log scale if there's a large difference between provider totals
+            if cost_data and 'daily_costs' in cost_data:
+                daily_costs = cost_data['daily_costs']
+                aws_max = max([entry.get('aws', 0) for entry in daily_costs], default=0)
+                gcp_max = max([entry.get('gcp', 0) for entry in daily_costs], default=0)
+                azure_max = max([entry.get('azure', 0) for entry in daily_costs], default=0)
+
+                # If the largest value is more than 50x the smallest non-zero value, use log scale
+                all_maxes = [val for val in [aws_max, gcp_max, azure_max] if val > 0]
+                if len(all_maxes) > 1:
+                    ratio = max(all_maxes) / min(all_maxes)
+                    use_log_scale = ratio > 50
+                    logger.info(f"📊 CHART SCALE: Max ratio {ratio:.1f}x, using {'LOG' if use_log_scale else 'LINEAR'} scale")
+                else:
+                    use_log_scale = False
+                    logger.info(f"📊 CHART SCALE: Single provider, using LINEAR scale")
+            else:
+                use_log_scale = False
+
             fig.update_layout(
-                title="Daily Costs by Provider",
+                title="Daily Costs by Provider" + (" (Log Scale)" if use_log_scale else ""),
                 xaxis_title="Date",
-                yaxis_title="Cost (USD)",
-                yaxis_type="linear",  # Use linear scale for clear bar visualization
+                yaxis_title="Cost (USD)" + (" - Log Scale" if use_log_scale else ""),
+                yaxis_type="log" if use_log_scale else "linear",
                 barmode='group',  # Group bars by provider for each date
                 hovermode='x unified',
                 showlegend=True,  # Show legend to identify providers
