@@ -26,7 +26,7 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: data-collector
-            image: cost-data-service:latest
+            image: image-registry.openshift-image-registry.svc:5000/cost-monitor/cost-data-service:latest
             command: ["python", "-m", "src.jobs.collect_data"]
             
             env:
@@ -133,14 +133,14 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: historical-collector
-            image: cost-data-service:latest
+            image: image-registry.openshift-image-registry.svc:5000/cost-monitor/cost-data-service:latest
             command: ["python", "-m", "src.jobs.collect_historical_data"]
             
             env:
             - name: JOB_TYPE
               value: "historical"
             - name: HISTORICAL_DAYS
-              value: "90"  # Collect last 90 days
+              value: "7"  # Collect last 7 days
             - name: DATABASE_URL
               value: "postgresql://$(POSTGRESQL_USER):$(POSTGRESQL_PASSWORD)@postgresql:5432/$(POSTGRESQL_DATABASE)"
             - name: POSTGRESQL_USER
