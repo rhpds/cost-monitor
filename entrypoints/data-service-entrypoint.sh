@@ -7,9 +7,13 @@ echo "Environment: ${ENVIRONMENT:-production}"
 # Ensure virtual environment is first in PATH
 export PATH="/opt/app-root/venv/bin:$PATH"
 
-# Construct DATABASE_URL from individual environment variables
-export DATABASE_URL="postgresql://${POSTGRESQL_USER}:${POSTGRESQL_PASSWORD}@postgresql:5432/${POSTGRESQL_DATABASE}"
-export REDIS_URL="redis://:${REDIS_PASSWORD}@redis-service:6379/0"
+# Construct DATABASE_URL from individual environment variables with URL encoding
+# URL encode the password to handle special characters
+ENCODED_PG_PASSWORD=$(python -c "import urllib.parse; print(urllib.parse.quote('${POSTGRESQL_PASSWORD}', safe=''))")
+ENCODED_REDIS_PASSWORD=$(python -c "import urllib.parse; print(urllib.parse.quote('${REDIS_PASSWORD}', safe=''))")
+
+export DATABASE_URL="postgresql://${POSTGRESQL_USER}:${ENCODED_PG_PASSWORD}@postgresql:5432/${POSTGRESQL_DATABASE}"
+export REDIS_URL="redis://:${ENCODED_REDIS_PASSWORD}@redis-service:6379/0"
 
 echo "Database URL: ${DATABASE_URL}"
 echo "Redis URL: ${REDIS_URL}"

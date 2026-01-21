@@ -44,8 +44,6 @@ spec:
         env:
         - name: ENVIRONMENT
           value: "production"
-        - name: DATABASE_URL
-          value: "postgresql://$(POSTGRESQL_USER):$(POSTGRESQL_PASSWORD)@postgresql:5432/$(POSTGRESQL_DATABASE)"
         - name: POSTGRESQL_USER
           valueFrom:
             secretKeyRef:
@@ -58,8 +56,6 @@ spec:
               key: password
         - name: POSTGRESQL_DATABASE
           value: "cost_monitor"
-        - name: REDIS_URL
-          value: "redis://:$(REDIS_PASSWORD)@redis-service:6379/0"
         - name: REDIS_PASSWORD
           valueFrom:
             secretKeyRef:
