@@ -194,8 +194,6 @@ class CostDataManager:
 
     def __init__(self, config=None):
         self.data_service_url = os.getenv('DATA_SERVICE_URL', 'http://cost-data-service:8000')
-        self._cache = {}
-        self._cache_ttl = 1800  # 30 minute TTL
         logger.info(f"CostDataManager initialized for API mode, using data service at: {self.data_service_url}")
 
 
@@ -214,24 +212,14 @@ class CostDataManager:
         """Get cost data from data service API."""
         logger.info(f"Fetching cost data from API for {start_date} to {end_date} (force_refresh={force_refresh})")
 
-        # Generate cache key
-        cache_key = f"{start_date.isoformat()}:{end_date.isoformat()}"
-
-        # Check cache first (unless force refresh)
-        if not force_refresh and cache_key in self._cache:
-            cached_data, timestamp = self._cache[cache_key]
-            import time
-            if time.time() - timestamp < self._cache_ttl:
-                logger.info(f"🚀 Returning cached data - INSTANT response!")
-                return cached_data
-
         try:
             # Call data service API - now returns data in dashboard format
             url = f"{self.data_service_url}/api/v1/costs/summary"
             params = {
                 'start_date': start_date.isoformat(),
                 'end_date': end_date.isoformat(),
-                'providers': ['aws', 'azure', 'gcp']
+                'providers': ['aws', 'azure', 'gcp'],
+                'force_refresh': force_refresh  # Pass force_refresh to API
             }
 
             response = requests.get(url, params=params, timeout=30)
@@ -239,10 +227,6 @@ class CostDataManager:
 
             # API now returns data in the exact format dashboard expects
             api_data = response.json()
-
-            # Cache the result
-            import time
-            self._cache[cache_key] = (api_data, time.time())
 
             logger.info(f"Retrieved cost data from API, total: ${api_data['total_cost']:.2f}")
             return DataWrapper(api_data)
@@ -267,10 +251,6 @@ class CostDataManager:
         logger.info("Data manager initialized for API mode")
         return True
 
-    def clear_cache(self):
-        """Clear all cached data."""
-        self._cache.clear()
-        logger.info("Cleared API data cache")
 
     async def get_service_breakdown(
         self,
@@ -935,8 +915,7 @@ class CostMonitorDashboard:
 
             # Determine if this is a forced refresh (only for specific triggers)
             ctx = dash.callback_context
-            force_refresh = False  # Default to False - use cache when possible
-            clear_cache = False
+            force_refresh = False  # Default to False - use API cache when possible
 
             # Debug logging
             logger.info(f"Callback triggered: interval={n_intervals}")
@@ -989,12 +968,8 @@ class CostMonitorDashboard:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
 
-                # Clear cache if requested
+                # Get data manager
                 data_manager = self.data_manager
-
-                if clear_cache:
-                    print("🧹 Clearing cache")
-                    data_manager.clear_cache()
 
                 print("🚀 About to call async data fetch")
                 # Create a new task for data fetching with cancellation support
