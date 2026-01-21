@@ -706,7 +706,15 @@ class AzureCostProvider(CloudCostProvider):
                 for row in query_result.rows:
                     # Row format: [cost, date, service_name, ...]
                     cost_amount = float(row[0]) if row[0] is not None else 0.0
-                    row_date = datetime.strptime(row[1], '%Y%m%d').date()
+
+                    # Handle date field - can be string or integer from Azure API
+                    date_value = row[1]
+                    if isinstance(date_value, int):
+                        date_str = str(date_value)
+                    else:
+                        date_str = str(date_value)
+                    row_date = datetime.strptime(date_str, '%Y%m%d').date()
+
                     service_name = row[2] if len(row) > 2 else "Unknown"
 
                     data_points.append(CostDataPoint(
