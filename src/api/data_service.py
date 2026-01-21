@@ -99,6 +99,11 @@ class DailyCostSummary(BaseModel):
     currency: str
     provider_breakdown: Dict[str, float]
 
+class ProviderData(BaseModel):
+    total_cost: float
+    currency: str
+    service_breakdown: Dict[str, float]
+
 class CostSummary(BaseModel):
     total_cost: float
     currency: str
@@ -106,6 +111,7 @@ class CostSummary(BaseModel):
     period_end: date
     provider_breakdown: Dict[str, float]
     combined_daily_costs: List[DailyCostSummary]
+    provider_data: Dict[str, ProviderData]
 
 class CostDataPoint(BaseModel):
     provider: str
@@ -425,6 +431,24 @@ async def get_cost_summary(
 
             daily_rows = await conn.fetch(daily_query, *daily_params)
 
+            # Get service breakdown data for provider_data
+            service_query = """
+                SELECT p.name as provider, cdp.service_name, SUM(cdp.cost) as cost, cdp.currency
+                FROM cost_data_points cdp
+                JOIN providers p ON cdp.provider_id = p.id
+                WHERE cdp.date BETWEEN $1 AND $2
+            """
+
+            service_params = [start_date, end_date]
+
+            if providers:
+                service_query += " AND p.name = ANY($3)"
+                service_params.append(providers)
+
+            service_query += " GROUP BY p.name, cdp.service_name, cdp.currency ORDER BY p.name, cost DESC"
+
+            service_rows = await conn.fetch(service_query, *service_params)
+
             # Build response
             total_cost = sum(row['total_cost'] for row in total_rows)
             provider_breakdown = {row['provider']: float(row['total_cost']) for row in total_rows}
@@ -459,13 +483,39 @@ async def get_cost_summary(
             else:
                 combined_daily_costs = []
 
+            # Build provider_data with service breakdown
+            provider_data = {}
+            for row in service_rows:
+                provider = row['provider']
+                if provider not in provider_data:
+                    provider_data[provider] = {
+                        'total_cost': 0.0,
+                        'currency': row['currency'],
+                        'service_breakdown': {}
+                    }
+
+                service_name = row['service_name'] or 'Unknown'
+                provider_data[provider]['service_breakdown'][service_name] = float(row['cost'])
+                provider_data[provider]['total_cost'] += float(row['cost'])
+
+            # Convert provider_data to ProviderData objects
+            provider_data_objects = {
+                provider: ProviderData(
+                    total_cost=data['total_cost'],
+                    currency=data['currency'],
+                    service_breakdown=data['service_breakdown']
+                )
+                for provider, data in provider_data.items()
+            }
+
             result = CostSummary(
                 total_cost=total_cost,
                 currency=currency,
                 period_start=start_date,
                 period_end=end_date,
                 provider_breakdown=provider_breakdown,
-                combined_daily_costs=combined_daily_costs
+                combined_daily_costs=combined_daily_costs,
+                provider_data=provider_data_objects
             )
             
             # Cache for 30 minutes
