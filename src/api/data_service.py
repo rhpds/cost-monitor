@@ -446,15 +446,18 @@ async def get_cost_summary(
                 daily_costs_dict[date_str]['total_cost'] += float(row['cost'])
 
             # Convert to list and create DailyCostSummary objects
-            combined_daily_costs = [
-                DailyCostSummary(
-                    date=daily_data['date'],
-                    total_cost=daily_data['total_cost'],
-                    currency=daily_data['currency'],
-                    provider_breakdown=daily_data['provider_breakdown']
-                )
-                for daily_data in sorted(daily_costs_dict.values(), key=lambda x: x['date'], reverse=True)
-            ]
+            if daily_costs_dict:
+                combined_daily_costs = [
+                    DailyCostSummary(
+                        date=daily_data['date'],
+                        total_cost=daily_data['total_cost'],
+                        currency=daily_data['currency'],
+                        provider_breakdown=daily_data['provider_breakdown']
+                    )
+                    for daily_data in sorted(daily_costs_dict.values(), key=lambda x: x['date'], reverse=True)
+                ]
+            else:
+                combined_daily_costs = []
 
             result = CostSummary(
                 total_cost=total_cost,
