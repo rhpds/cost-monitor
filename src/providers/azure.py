@@ -70,10 +70,45 @@ class AzureCostProvider(CloudCostProvider):
     def _init_cache(self):
         """Initialize persistent cache for cost data."""
         self.cache_dir = os.path.expanduser("~/.cache/cost-monitor/azure")
+        self.csv_cache_dir = os.path.join(self.cache_dir, "csv_files")
         os.makedirs(self.cache_dir, exist_ok=True)
+        os.makedirs(self.csv_cache_dir, exist_ok=True)
         # Cache files for 30 days, older files will be cleaned up
         self.cache_max_age_days = 30
         logger.debug(f"Azure cache initialized at: {self.cache_dir}")
+
+    def _get_csv_cache_path(self, blob_name: str) -> str:
+        """Get cache file path for a CSV blob."""
+        # Create a safe filename from the blob path
+        safe_filename = blob_name.replace("/", "_").replace("\\", "_")
+        return os.path.join(self.csv_cache_dir, f"{safe_filename}.csv")
+
+    def _is_csv_cached(self, blob_name: str) -> bool:
+        """Check if CSV file is already cached."""
+        cache_path = self._get_csv_cache_path(blob_name)
+        return os.path.exists(cache_path)
+
+    def _load_cached_csv(self, blob_name: str) -> Optional[str]:
+        """Load CSV content from cache."""
+        try:
+            cache_path = self._get_csv_cache_path(blob_name)
+            if os.path.exists(cache_path):
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to load cached CSV: {e}")
+            return None
+
+    def _save_csv_to_cache(self, blob_name: str, csv_content: str) -> None:
+        """Save CSV content to cache."""
+        try:
+            cache_path = self._get_csv_cache_path(blob_name)
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                f.write(csv_content)
+            logger.debug(f"Cached CSV file: {cache_path}")
+        except Exception as e:
+            logger.warning(f"Failed to cache CSV: {e}")
 
     async def ensure_authenticated(self):
         """Ensure we have valid authentication to Azure."""
@@ -159,17 +194,27 @@ class AzureCostProvider(CloudCostProvider):
             return None
 
     def _download_and_parse_csv(self, blob_name: str, target_date: Optional[date] = None) -> List[CostDataPoint]:
-        """Download and parse CSV data from blob storage."""
+        """Download and parse CSV data from blob storage with caching."""
         try:
-            # Download blob content
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_name
-            )
+            # Check if CSV is already cached
+            csv_content = self._load_cached_csv(blob_name)
 
-            logger.info(f"Downloading export data: {blob_name}")
-            blob_data = blob_client.download_blob()
-            csv_content = blob_data.readall().decode('utf-8')
+            if csv_content:
+                logger.info(f"Using cached CSV data: {blob_name}")
+            else:
+                # Download blob content
+                blob_client = self.blob_service_client.get_blob_client(
+                    container=self.container_name,
+                    blob=blob_name
+                )
+
+                logger.info(f"Downloading export data: {blob_name}")
+                blob_data = blob_client.download_blob()
+                csv_content = blob_data.readall().decode('utf-8')
+
+                # Cache the downloaded content
+                self._save_csv_to_cache(blob_name, csv_content)
+                logger.info(f"Cached CSV data for future use: {len(csv_content):,} characters")
 
             # Parse CSV data
             csv_reader = csv.DictReader(io.StringIO(csv_content))
