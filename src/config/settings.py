@@ -47,7 +47,34 @@ class CloudConfig:
 
     def __init__(self):
         self.settings = settings
+        self._load_environment_variables()
         self._validate_config()
+
+    def _load_environment_variables(self):
+        """Manually load environment variables with CLOUDCOST prefix."""
+        import os
+
+        # Map environment variables to configuration paths
+        env_mappings = {
+            'CLOUDCOST__CLOUDS__AWS__ACCESS_KEY_ID': 'clouds.aws.access_key_id',
+            'CLOUDCOST__CLOUDS__AWS__SECRET_ACCESS_KEY': 'clouds.aws.secret_access_key',
+            'CLOUDCOST__CLOUDS__AWS__REGION': 'clouds.aws.region',
+            'CLOUDCOST__CLOUDS__AZURE__CLIENT_ID': 'clouds.azure.client_id',
+            'CLOUDCOST__CLOUDS__AZURE__CLIENT_SECRET': 'clouds.azure.client_secret',
+            'CLOUDCOST__CLOUDS__AZURE__TENANT_ID': 'clouds.azure.tenant_id',
+            'CLOUDCOST__CLOUDS__AZURE__SUBSCRIPTION_ID': 'clouds.azure.subscription_id',
+            'CLOUDCOST__CLOUDS__AZURE__EXPORT__STORAGE_ACCOUNT': 'clouds.azure.export.storage_account',
+            'CLOUDCOST__CLOUDS__AZURE__EXPORT__EXPORT_NAME': 'clouds.azure.export.export_name',
+            'CLOUDCOST__CLOUDS__AZURE__EXPORT__CONTAINER': 'clouds.azure.export.container',
+            'CLOUDCOST__CLOUDS__GCP__CREDENTIALS_PATH': 'clouds.gcp.credentials_path',
+            'CLOUDCOST__CLOUDS__GCP__PROJECT_ID': 'clouds.gcp.project_id',
+        }
+
+        # Set environment variables into dynaconf
+        for env_var, config_path in env_mappings.items():
+            value = os.environ.get(env_var)
+            if value:
+                self.settings.set(config_path, value)
 
     def _validate_config(self):
         """Validate the configuration on initialization."""
