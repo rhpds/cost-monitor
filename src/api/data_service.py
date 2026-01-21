@@ -176,15 +176,14 @@ async def get_missing_date_ranges(start_date: date, end_date: date, existing_dat
 async def collect_provider_data(provider_name: str, start_date: date, end_date: date) -> List[ProviderCostDataPoint]:
     """Collect cost data from a specific provider for the given date range"""
     try:
-        # Get provider configuration
-        provider_config = {
-            'aws_access_key_id': os.getenv('AWS_ACCESS_KEY_ID'),
-            'aws_secret_access_key': os.getenv('AWS_SECRET_ACCESS_KEY'),
-            'azure_client_id': os.getenv('AZURE_CLIENT_ID'),
-            'azure_client_secret': os.getenv('AZURE_CLIENT_SECRET'),
-            'azure_tenant_id': os.getenv('AZURE_TENANT_ID'),
-            'region': os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
-        }
+        # Get provider configuration from dynaconf config system
+        provider_config = config.get_provider_config(provider_name)
+
+        # Ensure we have valid configuration
+        if not provider_config:
+            raise ValueError(f"No configuration found for provider '{provider_name}'")
+
+        logger.info(f"Using configuration for provider {provider_name}: {list(provider_config.keys())}")
 
         # Create provider instance
         provider_instance = ProviderFactory.create_provider(provider_name, provider_config)

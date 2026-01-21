@@ -14,7 +14,7 @@ spec:
   source:
     type: Git
     git:
-      uri: "REPLACE_WITH_YOUR_REPOSITORY_URL"  # Will be replaced by deployment script
+      uri: "https://github.com/rhpds/cost-monitor.git"  # Will be replaced by deployment script
       ref: "main"
     contextDir: "."
   strategy:
@@ -87,7 +87,7 @@ spec:
   source:
     type: Git
     git:
-      uri: "REPLACE_WITH_YOUR_REPOSITORY_URL"  # Will be replaced by deployment script
+      uri: "https://github.com/rhpds/cost-monitor.git"  # Will be replaced by deployment script
       ref: "main"
     contextDir: "."
   strategy:

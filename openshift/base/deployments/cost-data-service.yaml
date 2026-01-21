@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: cost-data-service
-        image: cost-data-service:latest
+        image: image-registry.openshift-image-registry.svc:5000/cost-monitor/cost-data-service:latest
         imagePullPolicy: Always
 
         ports:
@@ -70,37 +70,64 @@ spec:
         - name: REDIS_HOST
           value: "redis-service"
 
-        # Cloud Provider Credentials
-        - name: AWS_ACCESS_KEY_ID
+        # Cloud Provider Credentials (dynaconf configuration format only)
+
+        # AWS Configuration
+        - name: CLOUDCOST__CLOUDS__AWS__ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
               name: aws-credentials
               key: access-key-id
-        - name: AWS_SECRET_ACCESS_KEY
+        - name: CLOUDCOST__CLOUDS__AWS__SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
               name: aws-credentials
               key: secret-access-key
-        - name: AZURE_CLIENT_ID
+        - name: CLOUDCOST__CLOUDS__AWS__REGION
+          value: "us-east-1"
+
+        # Azure Configuration
+        - name: CLOUDCOST__CLOUDS__AZURE__CLIENT_ID
           valueFrom:
             secretKeyRef:
               name: azure-credentials
               key: client-id
-        - name: AZURE_CLIENT_SECRET
+        - name: CLOUDCOST__CLOUDS__AZURE__CLIENT_SECRET
           valueFrom:
             secretKeyRef:
               name: azure-credentials
               key: client-secret
-        - name: AZURE_TENANT_ID
+        - name: CLOUDCOST__CLOUDS__AZURE__TENANT_ID
           valueFrom:
             secretKeyRef:
               name: azure-credentials
               key: tenant-id
-        - name: AZURE_SUBSCRIPTION_ID
+        - name: CLOUDCOST__CLOUDS__AZURE__SUBSCRIPTION_ID
           valueFrom:
             secretKeyRef:
               name: azure-credentials
               key: subscription-id
+        - name: CLOUDCOST__CLOUDS__AZURE__EXPORT__STORAGE_ACCOUNT
+          valueFrom:
+            secretKeyRef:
+              name: azure-credentials
+              key: storage-account
+        - name: CLOUDCOST__CLOUDS__AZURE__EXPORT__EXPORT_NAME
+          valueFrom:
+            secretKeyRef:
+              name: azure-credentials
+              key: export-name
+        - name: CLOUDCOST__CLOUDS__AZURE__EXPORT__CONTAINER
+          valueFrom:
+            secretKeyRef:
+              name: azure-credentials
+              key: container
+
+        # GCP Configuration
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: "/etc/credentials/gcp/service-account.json"
+        - name: CLOUDCOST__CLOUDS__GCP__CREDENTIALS_PATH
+          value: "/etc/credentials/gcp/service-account.json"
 
         resources:
           requests:

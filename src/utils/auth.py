@@ -112,119 +112,15 @@ class AWSAuthenticator(CloudAuthenticator):
                 # If secrets file credentials fail, this is an error - don't fallback
                 return result
 
-        # Fallback to other authentication methods only if no access keys in config
-        logger.info(f"🔵 AWS: No access keys in config, trying fallback methods")
-        auth_methods = [
-            self._authenticate_with_environment,   # Environment variables
-            self._authenticate_with_profile,       # AWS CLI profile
-            self._authenticate_with_instance_profile, # EC2 instance profile (lowest priority)
-        ]
-
-        for method in auth_methods:
-            try:
-                logger.debug(f"🔵 AWS: Trying authentication method: {method.__name__}")
-                result = await method()
-                if result.success:
-                    logger.info(f"🔵 AWS: Authentication successful using {result.method}")
-                    return result
-                else:
-                    logger.debug(f"🔵 AWS: Method {method.__name__} failed: {result.error_message}")
-            except Exception as e:
-                logger.debug(f"🔵 AWS: Authentication method {method.__name__} failed: {e}")
-                continue
-
+        # No access keys in config - this is now an error since we're using only dynaconf
+        logger.error(f"🔵 AWS: No access keys found in dynaconf configuration")
         return AuthenticationResult(
             success=False,
             provider=self.provider_name,
             method="none",
-            error_message="All AWS authentication methods failed"
+            error_message="No AWS credentials found in dynaconf configuration - environment variables and other fallbacks have been disabled"
         )
 
-    async def _authenticate_with_profile(self) -> AuthenticationResult:
-        """Authenticate using AWS CLI profile."""
-        profile_name = self.config.get("profile", os.environ.get("AWS_PROFILE", "default"))
-
-        try:
-            session = boto3.Session(profile_name=profile_name)
-            credentials = session.get_credentials()
-
-            if credentials and self.test_credentials(session):
-                return AuthenticationResult(
-                    success=True,
-                    provider=self.provider_name,
-                    method=f"profile:{profile_name}",
-                    credentials=session
-                )
-        except (ProfileNotFound, NoCredentialsError) as e:
-            logger.debug(f"AWS profile authentication failed: {e}")
-
-        return AuthenticationResult(
-            success=False,
-            provider=self.provider_name,
-            method="profile",
-            error_message=f"Profile '{profile_name}' not found or invalid"
-        )
-
-    async def _authenticate_with_environment(self) -> AuthenticationResult:
-        """Authenticate using environment variables."""
-        required_vars = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
-        missing_vars = [var for var in required_vars if not os.environ.get(var)]
-
-        if missing_vars:
-            return AuthenticationResult(
-                success=False,
-                provider=self.provider_name,
-                method="environment",
-                error_message=f"Missing environment variables: {missing_vars}"
-            )
-
-        try:
-            session = boto3.Session(
-                aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-                aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-                aws_session_token=os.environ.get("AWS_SESSION_TOKEN"),
-                region_name=self.config.get("region", os.environ.get("AWS_DEFAULT_REGION"))
-            )
-
-            if self.test_credentials(session):
-                return AuthenticationResult(
-                    success=True,
-                    provider=self.provider_name,
-                    method="environment",
-                    credentials=session
-                )
-        except (ClientError, NoCredentialsError) as e:
-            logger.debug(f"AWS environment authentication failed: {e}")
-
-        return AuthenticationResult(
-            success=False,
-            provider=self.provider_name,
-            method="environment",
-            error_message="Invalid environment credentials"
-        )
-
-    async def _authenticate_with_instance_profile(self) -> AuthenticationResult:
-        """Authenticate using EC2 instance profile or IAM role."""
-        try:
-            session = boto3.Session(region_name=self.config.get("region"))
-            credentials = session.get_credentials()
-
-            if credentials and self.test_credentials(session):
-                return AuthenticationResult(
-                    success=True,
-                    provider=self.provider_name,
-                    method="instance_profile",
-                    credentials=session
-                )
-        except Exception as e:
-            logger.debug(f"AWS instance profile authentication failed: {e}")
-
-        return AuthenticationResult(
-            success=False,
-            provider=self.provider_name,
-            method="instance_profile",
-            error_message="Instance profile not available"
-        )
 
     async def _authenticate_with_access_keys(self) -> AuthenticationResult:
         """Authenticate using access keys from config."""
