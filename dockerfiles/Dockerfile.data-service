@@ -46,8 +46,8 @@ COPY config/ ./config/
 COPY entrypoints/ ./entrypoints/
 COPY health_check.py ./
 
-# Create directories and make entrypoint executable
-RUN mkdir -p /app/cache /app/logs && chmod +x entrypoints/data-service-entrypoint.sh
+# Create directories (no permission changes needed)
+RUN mkdir -p /app/cache /app/logs
 
 # Set environment variables - venv must come first in PATH
 ENV PATH="/opt/app-root/venv/bin:/opt/app-root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -61,6 +61,6 @@ EXPOSE 8000 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python health_check.py --service=data-service || exit 1
 
-# Default entrypoint
-ENTRYPOINT ["./entrypoints/data-service-entrypoint.sh"]
+# Default entrypoint (use sh to avoid needing execute permissions)
+ENTRYPOINT ["sh", "./entrypoints/data-service-entrypoint.sh"]
 CMD ["uvicorn", "src.api.data_service:app", "--host", "0.0.0.0", "--port", "8000"]
