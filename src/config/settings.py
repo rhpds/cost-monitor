@@ -54,6 +54,9 @@ class CloudConfig:
     def _load_environment_variables(self):
         """Manually load environment variables with CLOUDCOST prefix."""
         import os
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Loading environment variables...")
 
         # Map environment variables to configuration paths
         env_mappings = {
@@ -78,6 +81,7 @@ class CloudConfig:
         for env_var, config_path in env_mappings.items():
             value = os.environ.get(env_var)
             if value:
+                logger.debug(f"Found environment variable {env_var} = {value}")
                 # Convert string boolean values to actual booleans
                 if config_path == 'clouds.azure.use_management_groups' and value.lower() in ('true', 'false'):
                     old_value = self.settings.get(config_path)
