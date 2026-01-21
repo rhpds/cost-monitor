@@ -835,6 +835,10 @@ class CostMonitorDashboard:
                 data_fetch_time = time.time() - data_fetch_start
 
                 if real_cost_data:
+                    # Ensure real_cost_data is a DataWrapper, not a dict
+                    if isinstance(real_cost_data, dict):
+                        real_cost_data = DataWrapper(real_cost_data)
+
                     # Transform real data to dashboard format
                     # Transform daily costs to match chart expectations (flatten provider breakdown)
                     transformed_daily_costs = []
@@ -1004,6 +1008,10 @@ class CostMonitorDashboard:
                 print(f"✅ loop.run_until_complete completed in {data_fetch_time:.3f}s")
 
                 if real_cost_data:
+                    # Ensure real_cost_data is a DataWrapper, not a dict
+                    if isinstance(real_cost_data, dict):
+                        real_cost_data = DataWrapper(real_cost_data)
+
                     # Convert real data to dashboard format using correct MultiCloudCostSummary structure
                     provider_breakdown = real_cost_data.provider_breakdown
                     daily_costs = real_cost_data.combined_daily_costs
