@@ -136,21 +136,40 @@ data:
     
     psql -v ON_ERROR_STOP=1 --username "$POSTGRESQL_USER" --dbname "$POSTGRESQL_DATABASE" <<-EOSQL
     
+    -- Create unique constraint for preventing duplicate cost data
+    DO \$\$
+    BEGIN
+        -- Add unique constraint if it doesn't exist
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'unique_cost_data_point'
+            AND conrelid = 'cost_data_points'::regclass
+        ) THEN
+            ALTER TABLE cost_data_points
+            ADD CONSTRAINT unique_cost_data_point
+            UNIQUE (provider_id, date, service_name, account_id, region);
+        END IF;
+    EXCEPTION
+        WHEN others THEN
+            -- Constraint might already exist, ignore error
+            NULL;
+    END\$\$;
+
     -- Create indexes for cost_data_points
-    CREATE INDEX IF NOT EXISTS idx_cost_data_points_provider_date 
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_provider_date
     ON cost_data_points(provider_id, date DESC);
-    
-    CREATE INDEX IF NOT EXISTS idx_cost_data_points_date_granularity 
+
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_date_granularity
     ON cost_data_points(date DESC, granularity);
-    
-    CREATE INDEX IF NOT EXISTS idx_cost_data_points_service 
+
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_service
     ON cost_data_points(service_name, date DESC);
-    
-    CREATE INDEX IF NOT EXISTS idx_cost_data_points_collected_at 
+
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_collected_at
     ON cost_data_points(collected_at DESC);
-    
+
     -- JSON indexes for provider metadata
-    CREATE INDEX IF NOT EXISTS idx_cost_data_points_metadata_gin 
+    CREATE INDEX IF NOT EXISTS idx_cost_data_points_metadata_gin
     ON cost_data_points USING GIN(provider_metadata);
     
     EOSQL
