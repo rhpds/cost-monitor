@@ -89,6 +89,22 @@ class CloudConfig:
             logging.warning("Some providers may not be properly configured yet")
             # Don't raise error during initial setup
 
+    def _load_gcp_environment_variables(self):
+        """Load GCP-specific environment variables."""
+        import os
+
+        # GCP-specific environment variable mappings
+        gcp_env_mappings = {
+            'CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET': 'clouds.gcp.bigquery_billing_dataset',
+            'CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID': 'clouds.gcp.billing_account_id',
+        }
+
+        # Set GCP environment variables into dynaconf
+        for env_var, config_path in gcp_env_mappings.items():
+            value = os.environ.get(env_var)
+            if value:
+                self.settings.set(config_path, value)
+
     @property
     def aws(self) -> Dict[str, Any]:
         """AWS configuration settings."""
@@ -102,6 +118,8 @@ class CloudConfig:
     @property
     def gcp(self) -> Dict[str, Any]:
         """GCP configuration settings."""
+        # Ensure environment variables are loaded for GCP
+        self._load_gcp_environment_variables()
         return self.settings.get("clouds.gcp", {})
 
     @property
