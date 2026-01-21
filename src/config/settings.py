@@ -47,8 +47,9 @@ class CloudConfig:
 
     def __init__(self):
         self.settings = settings
-        self._load_environment_variables()
         self._validate_config()
+        # Load environment variables AFTER settings are initialized to ensure they override config files
+        self._load_environment_variables()
 
     def _load_environment_variables(self):
         """Manually load environment variables with CLOUDCOST prefix."""
@@ -79,8 +80,15 @@ class CloudConfig:
             if value:
                 # Convert string boolean values to actual booleans
                 if config_path == 'clouds.azure.use_management_groups' and value.lower() in ('true', 'false'):
+                    old_value = self.settings.get(config_path)
                     value = value.lower() == 'true'
-                self.settings.set(config_path, value)
+                    self.settings.set(config_path, value)
+                    # Debug logging for Azure use_management_groups override
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Environment override: {config_path} changed from {old_value} to {value}")
+                else:
+                    self.settings.set(config_path, value)
 
     def _validate_config(self):
         """Validate the configuration on initialization."""
