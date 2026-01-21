@@ -28,19 +28,16 @@ settings = Dynaconf(
     merge_enabled=True,
     envvar_separator="__",  # Support nested config via CLOUDCOST__AWS__REGION=us-east-1
     validators=[
-        # Cloud provider validation - only validate when providers are actually enabled
-        Validator("clouds.aws.region", must_exist=True, when=Validator("clouds.aws.enabled", eq=True)),
-        Validator("clouds.azure.subscription_id", must_exist=True, when=Validator("clouds.azure.enabled", eq=True)),
-        Validator("clouds.gcp.project_id", must_exist=True, when=Validator("clouds.gcp.enabled", eq=True)),
-
-        # Threshold validation
-        Validator("monitoring.thresholds.warning", gte=0),
-        Validator("monitoring.thresholds.critical", gte=0),
-        # Validator("monitoring.thresholds.critical", gt=Validator("monitoring.thresholds.warning")),  # Disabled due to validator comparison issue
-
-        # Dashboard validation
+        # Dashboard validation (only validate core required settings)
         Validator("dashboard.port", gte=1024, lte=65535),
         Validator("dashboard.host", must_exist=True),
+
+        # Threshold validation (only for monitoring)
+        Validator("monitoring.thresholds.warning", gte=0),
+        Validator("monitoring.thresholds.critical", gte=0),
+
+        # Note: Cloud provider validation is handled at runtime during authentication
+        # to avoid environment variable merging issues during dynaconf initialization
     ]
 )
 
