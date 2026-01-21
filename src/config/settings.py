@@ -49,22 +49,13 @@ class CloudConfig:
         self.settings = settings
         self._validate_config()
         # Load environment variables AFTER settings are initialized to ensure they override config files
-        try:
-            print("DEBUG: About to call _load_environment_variables()")
-            self._load_environment_variables()
-            print("DEBUG: _load_environment_variables() completed successfully")
-        except Exception as e:
-            print(f"DEBUG: Exception in _load_environment_variables(): {e}")
-            import traceback
-            traceback.print_exc()
+        self._load_environment_variables()
 
     def _load_environment_variables(self):
         """Manually load environment variables with CLOUDCOST prefix."""
         import os
         import logging
         logger = logging.getLogger(__name__)
-        print("DEBUG: _load_environment_variables() called")  # Force print for debugging
-
         # Map environment variables to configuration paths
         env_mappings = {
             'CLOUDCOST__CLOUDS__AWS__ACCESS_KEY_ID': 'clouds.aws.access_key_id',
@@ -89,21 +80,14 @@ class CloudConfig:
         for env_var, config_path in env_mappings.items():
             value = os.environ.get(env_var)
             if value:
-                print(f"DEBUG: Found env var {env_var} = {value}")  # Force print for debugging
                 # Convert string values to appropriate types
                 if config_path == 'clouds.azure.use_management_groups' and value.lower() in ('true', 'false'):
-                    old_value = self.settings.get(config_path)
                     value = value.lower() == 'true'
-                    print(f"DEBUG: Setting {config_path} from {old_value} to {value}")
                     self.settings.set(config_path, value)
-                    print(f"DEBUG: After setting, value is now: {self.settings.get(config_path)}")
                 elif config_path == 'clouds.azure.management_groups' and value:
                     # Convert comma-separated string to list
-                    old_value = self.settings.get(config_path)
                     value = [mg.strip() for mg in value.split(',') if mg.strip()]
-                    print(f"DEBUG: Setting {config_path} from {old_value} to {value}")
                     self.settings.set(config_path, value)
-                    print(f"DEBUG: After setting, value is now: {self.settings.get(config_path)}")
                 else:
                     self.settings.set(config_path, value)
 
