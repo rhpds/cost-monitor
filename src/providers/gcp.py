@@ -54,15 +54,23 @@ class GCPCostProvider(CloudCostProvider):
         self.authenticator = GCPAuthenticator(config)
 
         # GCP-specific configuration
+        import os
         self.project_id = config.get("project_id") or config.get("GCP_PROJECT_ID")
-        self.billing_account_id = config.get("billing_account_id") or config.get("GCP_BILLING_ACCOUNT_ID")
+        self.billing_account_id = (
+            config.get("billing_account_id") or
+            config.get("GCP_BILLING_ACCOUNT_ID") or
+            os.environ.get("CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID")
+        )
 
         # Billing configuration
         self.billing_config = config.get("billing", {})
         self.currency = self.billing_config.get("currency", "USD")
 
         # BigQuery dataset for billing export (if available)
-        self.bq_dataset = config.get("bigquery_billing_dataset")
+        self.bq_dataset = (
+            config.get("bigquery_billing_dataset") or
+            os.environ.get("CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET")
+        )
         self.bq_table = config.get("bigquery_billing_table", "gcp_billing_export_v1_")
 
         # Initialize persistent cache
