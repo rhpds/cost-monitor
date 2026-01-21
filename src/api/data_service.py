@@ -198,6 +198,18 @@ async def collect_provider_data(provider_name: str, start_date: date, end_date: 
 
         logger.info(f"Using configuration for provider {provider_name}: {list(provider_config.keys())}")
 
+        # Inject BigQuery billing configuration for GCP from environment variables
+        if provider_name == 'gcp':
+            import os
+            bigquery_dataset = os.environ.get('CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET')
+            billing_account = os.environ.get('CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID')
+            if bigquery_dataset:
+                provider_config['bigquery_billing_dataset'] = bigquery_dataset
+                logger.info(f"🟢 GCP: Injected BigQuery dataset: {bigquery_dataset}")
+            if billing_account:
+                provider_config['billing_account_id'] = billing_account
+                logger.info(f"🟢 GCP: Injected billing account: {billing_account}")
+
         # Create provider instance
         provider_instance = ProviderFactory.create_provider(provider_name, provider_config)
 
