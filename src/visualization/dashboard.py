@@ -490,7 +490,7 @@ class CostMonitorDashboard:
         self.threshold_monitor = ThresholdMonitor(self.config)
         self.date_debouncer = DateRangeDebouncer(delay=0.5)  # 500ms debounce
         self.current_data_task = None  # Track current data fetching task for cancellation
-        self.chart_memoizer = ChartMemoizer(max_cache_size=100)  # Chart memoization (increased from 20)
+        self.chart_memoizer = ChartMemoizer(max_cache_size=5)  # Reduced cache for debugging
         self.performance_monitor = PerformanceMonitor()  # Performance monitoring
 
         # Dashboard configuration
@@ -1388,14 +1388,14 @@ class CostMonitorDashboard:
             logger.debug(f"📊 DEBUG: Cost trend chart callback triggered - provider: {selected_provider}")
             chart_start_time = time.time()
 
-            # Check cache first for performance optimization
-            cache_key = self.chart_memoizer.get_cache_key(cost_data, {'chart_type': 'cost_trend', 'provider': selected_provider})
-            cached_figure = self.chart_memoizer.get(cache_key)
-            if cached_figure:
-                cache_time = time.time() - chart_start_time
-                logger.debug(f"💨 DEBUG: Cost trend chart from cache in {cache_time:.3f}s")
-                logger.debug("Returning cached cost trend chart")
-                return cached_figure
+            # Disable cache temporarily for debugging bar chart issues
+            # cache_key = self.chart_memoizer.get_cache_key(cost_data, {'chart_type': 'cost_trend', 'provider': selected_provider})
+            # cached_figure = self.chart_memoizer.get(cache_key)
+            # if cached_figure:
+            #     cache_time = time.time() - chart_start_time
+            #     logger.debug(f"💨 DEBUG: Cost trend chart from cache in {cache_time:.3f}s")
+            #     logger.debug("Returning cached cost trend chart")
+            #     return cached_figure
 
             # Return loading chart if no data
             if not cost_data or 'daily_costs' not in cost_data:
@@ -1519,10 +1519,11 @@ class CostMonitorDashboard:
                 **layout_config
             )
 
-            # Cache the generated figure for future use
-            self.chart_memoizer.set(cache_key, fig)
+            # Cache disabled for debugging
+            # self.chart_memoizer.set(cache_key, fig)
 
             chart_total_time = time.time() - chart_start_time
+            logger.info(f"📈 CHART DEBUG: Generated chart with {len(fig.data)} traces, barmode={fig.layout.barmode}, title={fig.layout.title.text}")
             logger.debug(f"📈 DEBUG: Cost trend chart generated in {chart_total_time:.3f}s")
             return fig
 

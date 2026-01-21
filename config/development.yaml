@@ -28,18 +28,10 @@ clouds:
     # Service principal configuration for management group permissions
     service_principal_object_id: "5f235f9f-960b-44b8-8d96-75953cc48183"
 
-    # Azure Cost Management Export configuration - use pre-exported data for efficiency
-    export:
-      enabled: true
-      storage_account: "demobillingexports"
-      export_name: "demo-billing-exports-actual"
-      container: "cost-exports"  # Default container name (will be auto-detected)
-
-    # Management group configuration - disabled in favor of exports
+    # Azure Cost Management configuration - using REST API directly
     management_groups: ["rhpds-pool-00", "rhpds-pool-01"]
-    use_management_groups: false  # Disabled - using exports instead
-    query_all_subscriptions: false  # Disabled - using exports instead
-    use_exports: true  # Enable export-based cost data retrieval
+    use_management_groups: false
+    query_all_subscriptions: false
 
     thresholds:
       warning: 5000.0   # Higher thresholds for actual enterprise costs

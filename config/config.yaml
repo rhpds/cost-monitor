@@ -35,14 +35,7 @@ clouds:
     use_management_groups: false  # Enable management group cost aggregation
     query_all_subscriptions: true  # Also query individual accessible subscriptions
 
-    # Azure Cost Management Export configuration
-    export:
-      enabled: true
-      storage_account: "demobillingexports"
-      export_name: "demo-billing-exports-actual"
-      container: "cost-exports"
-      verify_checksums: true  # Enable MD5/ETag verification for file integrity
-
+    # Azure Cost Management configuration - using REST API directly
     cost_management:
       granularity: "Daily"  # Daily, Monthly
       scope_type: "Subscription"  # Subscription, ResourceGroup, ManagementGroup

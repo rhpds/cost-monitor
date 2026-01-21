@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional, Union
 try:
     from azure.storage.blob import BlobServiceClient
     from azure.identity import DefaultAzureCredential
+    from azure.mgmt.costmanagement import CostManagementClient
     AZURE_AVAILABLE = True
 except ImportError:
     AZURE_AVAILABLE = False
@@ -362,8 +363,8 @@ class AzureCostProvider(CloudCostProvider):
         # If we're missing some dates, we need to fetch fresh data
         logger.info(f"🟡 Azure: Cache PARTIAL - missing {len(missing_dates)} dates, fetching fresh data")
 
-        # Only export-based cost data retrieval is supported
-        cost_summary = await self._get_export_cost_data(start_date, end_date, granularity, group_by=group_dimensions, filter_by=filter_by)
+        # Use Azure Cost Management REST API for direct cost data retrieval
+        cost_summary = await self._get_cost_management_data(start_date, end_date, granularity, group_by=group_dimensions, filter_by=filter_by)
 
         logger.info(f"🟡 Azure: Parsed {len(cost_summary.data_points)} data points, total cost: ${cost_summary.total_cost}")
 
@@ -634,6 +635,108 @@ class AzureCostProvider(CloudCostProvider):
         # Sort by date
         monthly_points.sort(key=lambda x: x.date)
         return monthly_points
+
+    async def _get_cost_management_data(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        granularity: TimeGranularity,
+        group_by: Optional[List[str]] = None,
+        filter_by: Optional[Dict[str, Any]] = None
+    ) -> CostSummary:
+        """Get cost data using Azure Cost Management REST API directly."""
+        import asyncio
+
+        # Get subscription ID from config
+        subscription_id = self.config.get('subscription_id')
+        if not subscription_id:
+            raise ConfigurationError("Azure subscription_id is required for Cost Management API")
+
+        # Create Cost Management client
+        cost_mgmt_client = CostManagementClient(self.credentials)
+
+        # Build query parameters
+        query_definition = {
+            "type": "ActualCost",
+            "timeframe": "Custom",
+            "timePeriod": {
+                "from": start_date.strftime('%Y-%m-%dT00:00:00+00:00'),
+                "to": end_date.strftime('%Y-%m-%dT23:59:59+00:00')
+            },
+            "dataSet": {
+                "granularity": "Daily" if granularity == TimeGranularity.DAILY else "Monthly",
+                "aggregation": {
+                    "totalCost": {
+                        "name": "Cost",
+                        "function": "Sum"
+                    }
+                },
+                "grouping": []
+            }
+        }
+
+        # Add grouping dimensions
+        if group_by:
+            for dimension in group_by:
+                if dimension.lower() == 'service':
+                    query_definition["dataSet"]["grouping"].append({
+                        "type": "Dimension",
+                        "name": "ServiceName"
+                    })
+                elif dimension.lower() == 'resource':
+                    query_definition["dataSet"]["grouping"].append({
+                        "type": "Dimension",
+                        "name": "ResourceGroup"
+                    })
+
+        try:
+            # Execute query in a thread since the Azure SDK is synchronous
+            def _execute_query():
+                scope = f"/subscriptions/{subscription_id}"
+                return cost_mgmt_client.query.usage(scope, query_definition)
+
+            query_result = await asyncio.get_event_loop().run_in_executor(None, _execute_query)
+
+            # Parse the result
+            data_points = []
+            total_cost = 0.0
+            currency = "USD"
+
+            if hasattr(query_result, 'rows') and query_result.rows:
+                for row in query_result.rows:
+                    # Row format: [cost, date, service_name, ...]
+                    cost_amount = float(row[0]) if row[0] is not None else 0.0
+                    row_date = datetime.strptime(row[1], '%Y%m%d').date()
+                    service_name = row[2] if len(row) > 2 else "Unknown"
+
+                    data_points.append(CostDataPoint(
+                        date=row_date,
+                        amount=cost_amount,
+                        currency=currency,
+                        service_name=service_name,
+                        account_id=subscription_id,
+                        region=None,
+                        metadata={'source': 'cost_management_api'}
+                    ))
+                    total_cost += cost_amount
+
+            logger.info(f"🟡 Azure: Retrieved {len(data_points)} data points via Cost Management API, total: ${total_cost}")
+
+            return CostSummary(
+                total_cost=total_cost,
+                currency=currency,
+                data_points=data_points,
+                period_start=start_date.date(),
+                period_end=end_date.date(),
+                granularity=granularity,
+                last_updated=datetime.now()
+            )
+
+        except Exception as e:
+            logger.error(f"🟡 Azure: Cost Management API error: {e}")
+            # Fallback to export data if REST API fails
+            logger.warning("🟡 Azure: Falling back to export data retrieval")
+            return await self._get_export_cost_data(start_date, end_date, granularity, group_by, filter_by)
 
     async def _get_export_cost_data(
         self,
