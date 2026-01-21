@@ -98,13 +98,7 @@ spec:
             secretKeyRef:
               name: azure-credentials
               key: tenant-id
-        - name: CLOUDCOST__CLOUDS__AZURE__SUBSCRIPTION_ID
-          valueFrom:
-            secretKeyRef:
-              name: azure-credentials
-              key: subscription-id
-
-        # Azure auto-discovers all available subscriptions
+        # Azure auto-discovers all available subscriptions (no specific subscription_id)
 
         # GCP Configuration
         - name: GOOGLE_APPLICATION_CREDENTIALS
