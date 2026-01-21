@@ -96,6 +96,11 @@ spec:
             secretKeyRef:
               name: azure-credentials
               key: tenant-id
+        - name: AZURE_SUBSCRIPTION_ID
+          valueFrom:
+            secretKeyRef:
+              name: azure-credentials
+              key: subscription-id
 
         resources:
           requests:
