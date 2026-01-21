@@ -56,7 +56,7 @@ class CloudConfig:
         import os
         import logging
         logger = logging.getLogger(__name__)
-        logger.info("Loading environment variables...")
+        print("DEBUG: _load_environment_variables() called")  # Force print for debugging
 
         # Map environment variables to configuration paths
         env_mappings = {
@@ -81,16 +81,14 @@ class CloudConfig:
         for env_var, config_path in env_mappings.items():
             value = os.environ.get(env_var)
             if value:
-                logger.debug(f"Found environment variable {env_var} = {value}")
+                print(f"DEBUG: Found env var {env_var} = {value}")  # Force print for debugging
                 # Convert string boolean values to actual booleans
                 if config_path == 'clouds.azure.use_management_groups' and value.lower() in ('true', 'false'):
                     old_value = self.settings.get(config_path)
                     value = value.lower() == 'true'
+                    print(f"DEBUG: Setting {config_path} from {old_value} to {value}")  # Force print for debugging
                     self.settings.set(config_path, value)
-                    # Debug logging for Azure use_management_groups override
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.info(f"Environment override: {config_path} changed from {old_value} to {value}")
+                    print(f"DEBUG: After setting, value is now: {self.settings.get(config_path)}")  # Force print for debugging
                 else:
                     self.settings.set(config_path, value)
 
