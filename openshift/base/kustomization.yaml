@@ -25,9 +25,6 @@ resources:
   # Services and networking
   - services/services.yaml
   - routes/routes.yaml
-  
-  # Background jobs
-  - cronjobs/data-collection.yaml
 
 # Common labels applied to all resources
 labels:
