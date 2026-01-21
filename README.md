@@ -73,20 +73,56 @@ export AWS_DEFAULT_REGION="us-east-1"
 > **💡 Tip**: Option 2 requires you to manually set up IAM permissions. Use Option 1 for automatic IAM user creation with proper permissions.
 
 #### Azure Setup
+
+**Step 1: Create Service Principal**
 ```bash
-# Create service principal (without default roles)
+# Create service principal and save the output
 az ad sp create-for-rbac --name "cost-monitor" --skip-assignment
 
-# Grant Storage Blob Data Reader permissions for export data access
-# Replace with your actual service principal object ID, storage account, and resource group
-./scripts/setup-azure-export-permissions.sh
+# Note the output: you'll need appId, password, and tenant
+```
 
-# Set environment variables
+**Step 2: Grant Cost Management Permissions (CRITICAL for comprehensive cost data)**
+```bash
+# Get the service principal Object ID
+OBJECT_ID=$(az ad sp show --id "YOUR_APP_ID" --query "id" --output tsv)
+
+# For comprehensive cost monitoring, grant access to ALL management groups
+# Replace with your actual management group IDs
+az role assignment create \
+  --assignee "$OBJECT_ID" \
+  --role "Cost Management Reader" \
+  --scope "/providers/Microsoft.Management/managementGroups/your-mg-1"
+
+az role assignment create \
+  --assignee "$OBJECT_ID" \
+  --role "Cost Management Reader" \
+  --scope "/providers/Microsoft.Management/managementGroups/your-mg-2"
+
+# Also grant subscription-level access for individual subscriptions
+az role assignment create \
+  --assignee "$OBJECT_ID" \
+  --role "Cost Management Reader" \
+  --scope "/subscriptions/your-subscription-id"
+```
+
+**Step 3: Grant Storage Permissions (for export data)**
+```bash
+# Grant Storage Blob Data Reader permissions for export data access
+./scripts/setup-azure-export-permissions.sh
+```
+
+**Step 4: Configure Environment Variables**
+```bash
 export AZURE_SUBSCRIPTION_ID="your_subscription_id"
 export AZURE_TENANT_ID="your_tenant_id"
 export AZURE_CLIENT_ID="your_client_id"
 export AZURE_CLIENT_SECRET="your_client_secret"
 ```
+
+> **⚠️ IMPORTANT**: Without management group permissions, you'll only see costs from individual subscriptions (typically <$100/day instead of realistic $1000s/day). Management group access is **required** for comprehensive enterprise cost monitoring.
+
+> **💡 TIP**: RBAC permissions can take 5-30 minutes to propagate for management groups. If you get "Unauthorized" errors initially, wait and retry.
 
 #### GCP Setup
 ```bash
