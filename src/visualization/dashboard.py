@@ -1470,6 +1470,8 @@ class CostMonitorDashboard:
                                 y=display_values,
                                 name=provider.upper(),
                                 marker_color=DashboardTheme.COLORS.get(provider, '#000000'),
+                                marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
+                                width=0.6,  # Explicit bar width for visibility
                                 text=text_labels,
                                 textposition='outside',
                                 hovertemplate='<b>AWS</b><br>Date: %{x}<br>Cost: %{customdata}<extra></extra>',
@@ -1481,6 +1483,8 @@ class CostMonitorDashboard:
                                 y=display_values,
                                 name=provider.upper(),
                                 marker_color=DashboardTheme.COLORS.get(provider, '#000000'),
+                                marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
+                                width=0.6,  # Explicit bar width for visibility
                                 text=text_labels,
                                 textposition='outside',
                                 hovertemplate=f'<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{customdata:.2f}}<extra></extra>',
@@ -1522,6 +1526,8 @@ class CostMonitorDashboard:
                             y=display_values,
                             name=selected_provider.upper(),
                             marker_color=DashboardTheme.COLORS.get(selected_provider, '#000000'),
+                            marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
+                            width=0.8,  # Single provider gets wider bars
                             text=text_labels,
                             textposition='outside',
                             hovertemplate='<b>AWS</b><br>Date: %{x}<br>Cost: %{customdata}<extra></extra>',
@@ -1539,6 +1545,8 @@ class CostMonitorDashboard:
                             y=display_values,
                             name=selected_provider.upper(),
                             marker_color=DashboardTheme.COLORS.get(selected_provider, '#000000'),
+                            marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
+                            width=0.8,  # Single provider gets wider bars
                             text=text_labels,
                             textposition='outside',
                             hovertemplate=hover_template,
@@ -1550,21 +1558,15 @@ class CostMonitorDashboard:
             layout_config['margin'] = {'l': 20, 'r': 20, 't': 40, 'b': 80}  # Increase bottom margin
 
             fig.update_layout(
-                title="Daily Cost Trend (Log Scale for Better Multi-Cloud Comparison)",
+                title="Daily Cost Trend",
                 xaxis_title="Date",
-                yaxis_title="Cost (USD) - Logarithmic Scale",
-                yaxis_type="log",  # Use logarithmic scale to handle large differences
+                yaxis_title="Cost (USD)",
+                yaxis_type="linear",  # Use linear scale for clear bar visualization
                 barmode='group',  # Group bars side by side for each date
                 hovermode='x unified',
                 showlegend=True,
-                annotations=[
-                    dict(
-                        text="Note: Using log scale to compare costs across different magnitudes",
-                        x=0.5, y=-0.25, xref="paper", yref="paper",  # Moved further down
-                        showarrow=False, font=dict(size=10, color="gray"),
-                        xanchor="center"
-                    )
-                ],
+                bargap=0.2,  # Add gap between bar groups for better visibility
+                bargroupgap=0.1,  # Gap between bars in same group
                 **layout_config
             )
 
