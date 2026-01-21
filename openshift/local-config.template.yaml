@@ -12,15 +12,15 @@ git:
   branch: "main"
 
 secrets:
-  # Database credentials
+  # Database credentials (passwords will be auto-generated)
   postgresql:
     username: "cost_monitor_user"
-    password: "REPLACE_WITH_SECURE_PASSWORD"
+    password: "$(openssl rand -base64 32)"
     database: "cost_monitor"
 
-  # Redis credentials
+  # Redis credentials (password will be auto-generated)
   redis:
-    password: "REPLACE_WITH_SECURE_PASSWORD"
+    password: "$(openssl rand -base64 32)"
 
   # AWS credentials
   aws:
@@ -34,6 +34,9 @@ secrets:
     client_secret: "REPLACE_WITH_YOUR_AZURE_CLIENT_SECRET"
     tenant_id: "REPLACE_WITH_YOUR_AZURE_TENANT_ID"
     subscription_id: "REPLACE_WITH_YOUR_AZURE_SUBSCRIPTION_ID"
+    storage_account: "REPLACE_WITH_STORAGE_ACCOUNT_NAME"
+    export_name: "REPLACE_WITH_EXPORT_NAME"
+    container: "REPLACE_WITH_CONTAINER_NAME"
 
   # GCP credentials (service account JSON file path)
   gcp:

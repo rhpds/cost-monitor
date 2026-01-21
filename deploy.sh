@@ -126,7 +126,8 @@ create_secrets() {
 
     # PostgreSQL credentials
     local pg_user=$(yq eval '.secrets.postgresql.username' "$CONFIG_FILE")
-    local pg_password=$(yq eval '.secrets.postgresql.password' "$CONFIG_FILE")
+    local pg_password_raw=$(yq eval '.secrets.postgresql.password' "$CONFIG_FILE")
+    local pg_password=$(eval echo "$pg_password_raw")  # Evaluate shell commands like $(openssl rand -base64 32)
     local pg_database=$(yq eval '.secrets.postgresql.database' "$CONFIG_FILE")
 
     oc create secret generic postgresql-credentials -n ${NAMESPACE} \
@@ -137,7 +138,8 @@ create_secrets() {
         --dry-run=client -o yaml | oc apply -f -
 
     # Redis credentials
-    local redis_password=$(yq eval '.secrets.redis.password' "$CONFIG_FILE")
+    local redis_password_raw=$(yq eval '.secrets.redis.password' "$CONFIG_FILE")
+    local redis_password=$(eval echo "$redis_password_raw")  # Evaluate shell commands like $(openssl rand -base64 32)
 
     oc create secret generic redis-credentials -n ${NAMESPACE} \
         --from-literal=password="$redis_password" \
@@ -156,11 +158,19 @@ create_secrets() {
     local azure_client_id=$(yq eval '.secrets.azure.client_id' "$CONFIG_FILE")
     local azure_client_secret=$(yq eval '.secrets.azure.client_secret' "$CONFIG_FILE")
     local azure_tenant_id=$(yq eval '.secrets.azure.tenant_id' "$CONFIG_FILE")
+    local azure_subscription_id=$(yq eval '.secrets.azure.subscription_id' "$CONFIG_FILE")
+    local azure_storage_account=$(yq eval '.secrets.azure.storage_account' "$CONFIG_FILE")
+    local azure_export_name=$(yq eval '.secrets.azure.export_name' "$CONFIG_FILE")
+    local azure_container=$(yq eval '.secrets.azure.container' "$CONFIG_FILE")
 
     oc create secret generic azure-credentials -n ${NAMESPACE} \
         --from-literal=client-id="$azure_client_id" \
         --from-literal=client-secret="$azure_client_secret" \
         --from-literal=tenant-id="$azure_tenant_id" \
+        --from-literal=subscription-id="$azure_subscription_id" \
+        --from-literal=storage-account="$azure_storage_account" \
+        --from-literal=export-name="$azure_export_name" \
+        --from-literal=container="$azure_container" \
         --dry-run=client -o yaml | oc apply -f -
 
     # GCP credentials (if service account file exists)
