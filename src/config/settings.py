@@ -78,6 +78,7 @@ class CloudConfig:
             'CLOUDCOST__CLOUDS__AZURE__EXPORT__EXPORT_NAME': 'clouds.azure.export.export_name',
             'CLOUDCOST__CLOUDS__AZURE__EXPORT__CONTAINER': 'clouds.azure.export.container',
             'CLOUDCOST__CLOUDS__AZURE__USE_MANAGEMENT_GROUPS': 'clouds.azure.use_management_groups',
+            'CLOUDCOST__CLOUDS__AZURE__MANAGEMENT_GROUPS': 'clouds.azure.management_groups',
             'CLOUDCOST__CLOUDS__GCP__CREDENTIALS_PATH': 'clouds.gcp.credentials_path',
             'CLOUDCOST__CLOUDS__GCP__PROJECT_ID': 'clouds.gcp.project_id',
             'CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET': 'clouds.gcp.bigquery_billing_dataset',
@@ -89,13 +90,20 @@ class CloudConfig:
             value = os.environ.get(env_var)
             if value:
                 print(f"DEBUG: Found env var {env_var} = {value}")  # Force print for debugging
-                # Convert string boolean values to actual booleans
+                # Convert string values to appropriate types
                 if config_path == 'clouds.azure.use_management_groups' and value.lower() in ('true', 'false'):
                     old_value = self.settings.get(config_path)
                     value = value.lower() == 'true'
-                    print(f"DEBUG: Setting {config_path} from {old_value} to {value}")  # Force print for debugging
+                    print(f"DEBUG: Setting {config_path} from {old_value} to {value}")
                     self.settings.set(config_path, value)
-                    print(f"DEBUG: After setting, value is now: {self.settings.get(config_path)}")  # Force print for debugging
+                    print(f"DEBUG: After setting, value is now: {self.settings.get(config_path)}")
+                elif config_path == 'clouds.azure.management_groups' and value:
+                    # Convert comma-separated string to list
+                    old_value = self.settings.get(config_path)
+                    value = [mg.strip() for mg in value.split(',') if mg.strip()]
+                    print(f"DEBUG: Setting {config_path} from {old_value} to {value}")
+                    self.settings.set(config_path, value)
+                    print(f"DEBUG: After setting, value is now: {self.settings.get(config_path)}")
                 else:
                     self.settings.set(config_path, value)
 

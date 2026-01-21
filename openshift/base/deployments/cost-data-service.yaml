@@ -119,6 +119,12 @@ spec:
               name: azure-credentials
               key: container
 
+        # Azure Management Groups Configuration
+        - name: CLOUDCOST__CLOUDS__AZURE__USE_MANAGEMENT_GROUPS
+          value: "true"
+        - name: CLOUDCOST__CLOUDS__AZURE__MANAGEMENT_GROUPS
+          value: "rhpds-pool-00,rhpds-pool-01"
+
         # GCP Configuration
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: "/etc/credentials/gcp/service-account.json"
