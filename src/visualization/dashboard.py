@@ -1045,9 +1045,18 @@ class CostMonitorDashboard:
                             # Flatten provider breakdown to top level for chart compatibility
                             if 'provider_breakdown' in daily_entry:
                                 provider_breakdown_data = daily_entry['provider_breakdown']
-                                daily_entry['aws'] = provider_breakdown_data.get('aws', 0)
-                                daily_entry['azure'] = provider_breakdown_data.get('azure', 0)
-                                daily_entry['gcp'] = provider_breakdown_data.get('gcp', 0)
+                                aws_val = provider_breakdown_data.get('aws', 0)
+                                azure_val = provider_breakdown_data.get('azure', 0)
+                                gcp_val = provider_breakdown_data.get('gcp', 0)
+
+                                daily_entry['aws'] = aws_val
+                                daily_entry['azure'] = azure_val
+                                daily_entry['gcp'] = gcp_val
+
+                                # Debug the transformation
+                                logger.info(f"🔄 TRANSFORM DEBUG: {daily_entry['date']} - AWS: {aws_val}, GCP: {gcp_val}, Azure: {azure_val}")
+                            else:
+                                logger.warning(f"🔄 TRANSFORM DEBUG: No provider_breakdown for {daily_entry['date']}")
 
                     # Get account breakdown from separate account-specific data fetch
                     try:
@@ -1070,11 +1079,23 @@ class CostMonitorDashboard:
                     }
 
                     # Debug the transformed daily costs structure
-                    logger.info(f"Final cost_data structure: total={cost_data['total_cost']}, daily_count={len(cost_data['daily_costs'])}")
+                    logger.info(f"🏪 DATA STORE: Final cost_data structure: total={cost_data['total_cost']}, daily_count={len(cost_data['daily_costs'])}")
+                    logger.info(f"🏪 DATA STORE: Provider breakdown: {cost_data['provider_breakdown']}")
+
                     if cost_data['daily_costs']:
                         sample_entry = cost_data['daily_costs'][0]
-                        logger.info(f"Sample transformed daily entry: {sample_entry}")
-                        logger.info(f"Sample entry keys: {list(sample_entry.keys())}")
+                        logger.info(f"🏪 DATA STORE: Sample transformed daily entry: {sample_entry}")
+                        logger.info(f"🏪 DATA STORE: Sample entry keys: {list(sample_entry.keys())}")
+
+                        # Calculate provider totals from transformed daily data
+                        aws_total = sum(entry.get('aws', 0) for entry in cost_data['daily_costs'])
+                        gcp_total = sum(entry.get('gcp', 0) for entry in cost_data['daily_costs'])
+                        azure_total = sum(entry.get('azure', 0) for entry in cost_data['daily_costs'])
+                        logger.info(f"🏪 DATA STORE: Transformed daily totals - AWS: ${aws_total:.2f}, GCP: ${gcp_total:.2f}, Azure: ${azure_total:.2f}")
+
+                        # Show last few entries with provider breakdown
+                        for i, entry in enumerate(cost_data['daily_costs'][-3:]):
+                            logger.info(f"🏪 DATA STORE: Daily entry {len(cost_data['daily_costs'])-2+i}: {entry['date']} - AWS: ${entry.get('aws', 0):.2f}, GCP: ${entry.get('gcp', 0):.2f}")
                 else:
                     # No data available - return empty structure
                     logger.warning("No cost data available from providers")
@@ -1299,8 +1320,32 @@ class CostMonitorDashboard:
         )
         def update_cost_trend_chart(cost_data, selected_provider):
             """Update the cost trend chart."""
-            logger.debug(f"📊 DEBUG: Cost trend chart callback triggered - provider: {selected_provider}")
+            logger.info(f"📊 CHART CALLBACK: Cost trend chart triggered - provider: {selected_provider}")
             chart_start_time = time.time()
+
+            # Enhanced debugging for chart data
+            logger.info(f"📊 CHART DEBUG: cost_data type: {type(cost_data)}")
+            logger.info(f"📊 CHART DEBUG: cost_data keys: {list(cost_data.keys()) if isinstance(cost_data, dict) else 'not dict'}")
+
+            if cost_data:
+                if 'daily_costs' in cost_data:
+                    daily_costs = cost_data['daily_costs']
+                    logger.info(f"📊 CHART DEBUG: daily_costs length: {len(daily_costs)}")
+                    if daily_costs:
+                        sample_entry = daily_costs[0]
+                        logger.info(f"📊 CHART DEBUG: Sample daily cost entry: {sample_entry}")
+                        logger.info(f"📊 CHART DEBUG: Sample entry keys: {list(sample_entry.keys())}")
+
+                        # Check provider totals in the data
+                        aws_total = sum(entry.get('aws', 0) for entry in daily_costs)
+                        gcp_total = sum(entry.get('gcp', 0) for entry in daily_costs)
+                        azure_total = sum(entry.get('azure', 0) for entry in daily_costs)
+                        logger.info(f"📊 CHART DEBUG: Provider totals - AWS: ${aws_total:.2f}, GCP: ${gcp_total:.2f}, Azure: ${azure_total:.2f}")
+                else:
+                    logger.warning(f"📊 CHART DEBUG: No 'daily_costs' in cost_data")
+
+                if 'provider_breakdown' in cost_data:
+                    logger.info(f"📊 CHART DEBUG: Provider breakdown: {cost_data['provider_breakdown']}")
 
             # Disable cache temporarily for debugging bar chart issues
             # cache_key = self.chart_memoizer.get_cache_key(cost_data, {'chart_type': 'cost_trend', 'provider': selected_provider})
@@ -1313,6 +1358,7 @@ class CostMonitorDashboard:
 
             # Return loading chart if no data
             if not cost_data or 'daily_costs' not in cost_data:
+                logger.warning(f"📊 CHART DEBUG: Returning loading chart - no data or no daily_costs")
                 loading_fig = go.Figure()
                 loading_fig.add_annotation(
                     text='Loading data...',
@@ -1337,11 +1383,21 @@ class CostMonitorDashboard:
                 dates = [item['date'] for item in daily_costs]
                 today_str = date.today().strftime('%Y-%m-%d')
 
+                logger.info(f"📊 CHART DEBUG: Processing chart data with {len(daily_costs)} daily entries")
+                logger.info(f"📊 CHART DEBUG: Date range: {dates[0] if dates else 'none'} to {dates[-1] if dates else 'none'}")
+
                 if selected_provider == 'all':
+                    logger.info(f"📊 CHART DEBUG: Creating grouped bars for all providers")
                     # Show daily costs broken down by provider (grouped bars)
                     for provider in ['aws', 'azure', 'gcp']:
                         values = [item.get(provider, 0) for item in daily_costs]
                         text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
+
+                        # Debug each provider's values
+                        total_value = sum(values)
+                        non_zero_count = sum(1 for v in values if v > 0)
+                        logger.info(f"📊 CHART DEBUG: {provider.upper()} - Total: ${total_value:.2f}, Non-zero entries: {non_zero_count}/{len(values)}")
+                        logger.info(f"📊 CHART DEBUG: {provider.upper()} values sample: {values[:3]}...")
 
                         fig.add_trace(go.Bar(
                             x=dates,
@@ -1353,6 +1409,7 @@ class CostMonitorDashboard:
                             textposition='outside',
                             hovertemplate=f'<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{y:.2f}}<extra></extra>'
                         ))
+                        logger.info(f"📊 CHART DEBUG: Added trace for {provider.upper()}")
                 else:
                     # Show selected provider only
                     values = [item.get(selected_provider, 0) for item in daily_costs]
@@ -1437,8 +1494,14 @@ class CostMonitorDashboard:
             # self.chart_memoizer.set(cache_key, fig)
 
             chart_total_time = time.time() - chart_start_time
-            logger.info(f"📈 CHART DEBUG: Generated chart with {len(fig.data)} traces, barmode={fig.layout.barmode}, title={fig.layout.title.text}")
-            logger.debug(f"📈 DEBUG: Cost trend chart generated in {chart_total_time:.3f}s")
+            logger.info(f"📈 CHART FINAL: Generated chart with {len(fig.data)} traces, barmode={fig.layout.barmode}, title={fig.layout.title.text}")
+
+            # Log detailed trace information
+            for i, trace in enumerate(fig.data):
+                trace_sum = sum(trace.y) if hasattr(trace, 'y') and trace.y else 0
+                logger.info(f"📈 CHART TRACE {i}: {trace.name} - Total: ${trace_sum:.2f}, Data points: {len(trace.y) if hasattr(trace, 'y') else 0}")
+
+            logger.info(f"📈 CHART DEBUG: Chart generation completed in {chart_total_time:.3f}s")
             return fig
 
         @callback(
@@ -2173,6 +2236,18 @@ class CostMonitorDashboard:
 
 async def main():
     """Main entry point for the dashboard."""
+    # Configure logging to see all the debug output
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+    # Set specific loggers to INFO level for debugging
+    logging.getLogger('dashboard').setLevel(logging.INFO)
+    logging.getLogger(__name__).setLevel(logging.INFO)
+
+    logger.info("🚀 Starting dashboard with enhanced debug logging")
+
     if not DASH_AVAILABLE:
         logger.error("Error: Dashboard requires Dash and Plotly. Install with:")
         logger.error("pip install dash plotly dash-bootstrap-components")
