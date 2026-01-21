@@ -690,48 +690,49 @@ class AzureCostProvider(CloudCostProvider):
                     })
 
         try:
-            # Determine scope - use management group if available for broader cost coverage
-            use_management_groups = self.config.get('use_management_groups', True)  # Default to True for broader coverage
+            # Query comprehensive Azure scope - all management groups + individual subscriptions
+            use_management_groups = self.config.get('use_management_groups', True)
             management_groups = self.config.get('management_groups', [])
-            query_all_subscriptions = self.config.get('query_all_subscriptions', True)  # Default to True for broader coverage
+            query_all_subscriptions = self.config.get('query_all_subscriptions', True)
 
-            # Execute query in a thread since the Azure SDK is synchronous
-            def _execute_query():
-                if use_management_groups and management_groups:
-                    # Use first available management group for organization-wide costs
-                    management_group_id = management_groups[0] if isinstance(management_groups, list) else management_groups
-                    scope = f"/providers/Microsoft.Management/managementGroups/{management_group_id}"
-                    logger.info(f"🟡 Azure: Querying management group scope: {scope} (from available: {management_groups})")
-                elif query_all_subscriptions:
-                    # Fallback to tenant scope - try billing account scope
-                    scope = f"/providers/Microsoft.CostManagement"
-                    logger.info(f"🟡 Azure: Querying tenant-wide scope for all subscriptions")
-                else:
-                    # Fallback to single subscription (original behavior)
-                    scope = f"/subscriptions/{subscription_id}"
-                    logger.info(f"🟡 Azure: Querying single subscription scope: {scope}")
-
-                return cost_mgmt_client.query.usage(scope, query_definition)
-
-            query_result = await asyncio.get_event_loop().run_in_executor(None, _execute_query)
-
-            # Parse the result
+            # Execute multiple real queries and process results directly
             data_points = []
             total_cost = 0.0
             currency = "USD"
 
-            if hasattr(query_result, 'rows') and query_result.rows:
-                for row in query_result.rows:
-                    # Row format: [cost, date, service_name, ...]
-                    cost_amount = float(row[0]) if row[0] is not None else 0.0
+            def _execute_single_query(scope_name, scope):
+                logger.info(f"🟡 Azure: Querying scope: {scope_name} -> {scope}")
+                try:
+                    return cost_mgmt_client.query.usage(scope, query_definition)
+                except Exception as e:
+                    logger.warning(f"🟡 Azure: Failed to query {scope_name}: {e}")
+                    return None
 
-                    # Handle date field - can be string or integer from Azure API
+            def _process_query_result(result, scope_name):
+                """Process a single Azure query result and add to data_points"""
+                nonlocal total_cost
+                if not (result and hasattr(result, 'rows') and result.rows):
+                    logger.info(f"🟡 Azure: No data from {scope_name}")
+                    return 0
+
+                scope_cost = 0.0
+                scope_points = 0
+                for row in result.rows:
+                    cost_amount = float(row[0]) if row[0] is not None else 0.0
+                    if cost_amount <= 0:
+                        continue
+
+                    # Handle date field
                     date_value = row[1]
                     if isinstance(date_value, int):
                         date_str = str(date_value)
                     else:
                         date_str = str(date_value)
-                    row_date = datetime.strptime(date_str, '%Y%m%d').date()
+                    try:
+                        row_date = datetime.strptime(date_str, '%Y%m%d').date()
+                    except ValueError:
+                        logger.warning(f"🟡 Azure: Could not parse date: {date_str}")
+                        continue
 
                     service_name = row[2] if len(row) > 2 else "Unknown"
 
@@ -742,11 +743,34 @@ class AzureCostProvider(CloudCostProvider):
                         service_name=service_name,
                         account_id=subscription_id,
                         region=None,
-                        tags={'source': 'cost_management_api'}
+                        tags={'source': 'cost_management_api', 'scope': scope_name}
                     ))
-                    total_cost += cost_amount
 
-            logger.info(f"🟡 Azure: Retrieved {len(data_points)} data points via Cost Management API, total: ${total_cost}")
+                    scope_cost += cost_amount
+                    scope_points += 1
+
+                total_cost += scope_cost
+                logger.info(f"🟡 Azure: {scope_name} returned {scope_points} data points, ${scope_cost:.2f}")
+                return scope_cost
+
+            # Query 1: All management groups
+            if use_management_groups and management_groups:
+                for mg_id in management_groups:
+                    scope = f"/providers/Microsoft.Management/managementGroups/{mg_id}"
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None, _execute_single_query, f"Management Group {mg_id}", scope)
+                    _process_query_result(result, f"MG-{mg_id}")
+
+            # Query 2: Individual subscription (for dev/test/prod not in management groups)
+            if subscription_id:
+                scope = f"/subscriptions/{subscription_id}"
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None, _execute_single_query, f"Individual Subscription {subscription_id}", scope)
+                _process_query_result(result, f"Sub-{subscription_id}")
+
+            logger.info(f"🟡 Azure: Comprehensive query completed - {len(data_points)} total data points, ${total_cost:.2f} total cost")
+
+            logger.info(f"🟡 Azure: Retrieved {len(data_points)} data points via comprehensive Cost Management API queries, total: ${total_cost:.2f}")
 
             # Debug: Show some sample data points
             if data_points:
