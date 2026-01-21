@@ -111,7 +111,7 @@ class CostSummary(BaseModel):
     period_end: date
     provider_breakdown: Dict[str, float]
     combined_daily_costs: List[DailyCostSummary]
-    provider_data: Dict[str, ProviderData]
+    provider_data: Optional[Dict[str, ProviderData]] = {}
 
 class CostDataPoint(BaseModel):
     provider: str
