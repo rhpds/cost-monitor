@@ -730,6 +730,12 @@ class AzureCostProvider(CloudCostProvider):
 
             logger.info(f"🟡 Azure: Retrieved {len(data_points)} data points via Cost Management API, total: ${total_cost}")
 
+            # Debug: Show some sample data points
+            if data_points:
+                logger.info(f"🟡 Azure: Sample data points:")
+                for i, point in enumerate(data_points[:3]):
+                    logger.info(f"🟡 Azure:   {i+1}. {point.date}: ${point.amount:.2f} - {point.service_name}")
+
             return CostSummary(
                 total_cost=total_cost,
                 currency=currency,
