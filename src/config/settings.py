@@ -66,6 +66,7 @@ class CloudConfig:
             'CLOUDCOST__CLOUDS__AZURE__EXPORT__STORAGE_ACCOUNT': 'clouds.azure.export.storage_account',
             'CLOUDCOST__CLOUDS__AZURE__EXPORT__EXPORT_NAME': 'clouds.azure.export.export_name',
             'CLOUDCOST__CLOUDS__AZURE__EXPORT__CONTAINER': 'clouds.azure.export.container',
+            'CLOUDCOST__CLOUDS__AZURE__USE_MANAGEMENT_GROUPS': 'clouds.azure.use_management_groups',
             'CLOUDCOST__CLOUDS__GCP__CREDENTIALS_PATH': 'clouds.gcp.credentials_path',
             'CLOUDCOST__CLOUDS__GCP__PROJECT_ID': 'clouds.gcp.project_id',
             'CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET': 'clouds.gcp.bigquery_billing_dataset',
@@ -76,6 +77,9 @@ class CloudConfig:
         for env_var, config_path in env_mappings.items():
             value = os.environ.get(env_var)
             if value:
+                # Convert string boolean values to actual booleans
+                if config_path == 'clouds.azure.use_management_groups' and value.lower() in ('true', 'false'):
+                    value = value.lower() == 'true'
                 self.settings.set(config_path, value)
 
     def _validate_config(self):
