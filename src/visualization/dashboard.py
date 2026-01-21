@@ -587,7 +587,7 @@ class CostMonitorDashboard:
                 ], width=3)
             ], className="mb-4"),
 
-            # Charts Row 1 - Cost Trend and Provider Comparison
+            # Charts Row 1 - Daily Costs by Provider (Full Width)
             dbc.Row([
                 dbc.Col([
                     dbc.Card([
@@ -625,7 +625,11 @@ class CostMonitorDashboard:
                             ], type="dot", color="#0d6efd", style={"height": "400px"})
                         ])
                     ])
-                ], width=8),
+                ], width=12)
+            ], className="mb-4"),
+
+            # Charts Row 1.5 - Provider Breakdown
+            dbc.Row([
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("Provider Breakdown"),
@@ -646,7 +650,10 @@ class CostMonitorDashboard:
                             ], type="dot", color="#0d6efd")
                         ])
                     ])
-                ], width=4)
+                ], width=6),
+                dbc.Col([
+                    # Placeholder for future chart or keep empty for now
+                ], width=6)
             ], className="mb-4"),
 
             # Charts Row 2 - Service Breakdown
@@ -1413,11 +1420,11 @@ class CostMonitorDashboard:
                             display_values = [max(v, 0.01) for v in values]
                             # Keep original values for hover and display
                             hover_values = values
-                            text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
+                            text_labels = [self._format_currency_compact(v) if v > 0 else '$0.00' for v in values]
                         else:
                             display_values = values
                             hover_values = values
-                            text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
+                            text_labels = [self._format_currency_compact(v) if v > 0 else '$0.00' for v in values]
 
                         # Debug each provider's values
                         total_value = sum(values)
@@ -1433,6 +1440,7 @@ class CostMonitorDashboard:
                             marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
                             text=text_labels,
                             textposition='outside',
+                            textfont=dict(size=14, color='black'),
                             hovertemplate=f'<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{customdata:.2f}}<extra></extra>',
                             customdata=hover_values  # Show actual values in hover, not log-scale adjusted ones
                         ))
@@ -1457,7 +1465,7 @@ class CostMonitorDashboard:
                             else:
                                 display_values.append(max(value, 0.01))  # Normal handling
                                 hover_values.append(value)
-                                text_labels.append(f'${value:.2f}' if value > 0 else '$0.00')
+                                text_labels.append(self._format_currency_compact(value) if value > 0 else '$0.00')
 
                         # For AWS single provider view, create dynamic hover data
                         aws_hover_data = []
@@ -1474,9 +1482,10 @@ class CostMonitorDashboard:
                             name=selected_provider.upper(),
                             marker_color=DashboardTheme.COLORS.get(selected_provider, '#000000'),
                             marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
-                            width=0.8,  # Single provider gets wider bars
+                            width=0.6,  # Single provider gets wider bars
                             text=text_labels,
                             textposition='outside',
+                            textfont=dict(size=14, color='black'),
                             hovertemplate='<b>AWS</b><br>Date: %{x}<br>Cost: %{customdata}<extra></extra>',
                             customdata=aws_hover_data
                         ))
@@ -1484,7 +1493,7 @@ class CostMonitorDashboard:
                         # Other providers show normally
                         display_values = [max(v, 0.01) for v in values]
                         hover_values = values
-                        text_labels = [f'${v:.2f}' if v > 0 else '$0.00' for v in values]
+                        text_labels = [self._format_currency_compact(v) if v > 0 else '$0.00' for v in values]
                         hover_template = f'<b>{selected_provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{customdata:.2f}}<extra></extra>'
 
                         fig.add_trace(go.Bar(
@@ -1493,9 +1502,10 @@ class CostMonitorDashboard:
                             name=selected_provider.upper(),
                             marker_color=DashboardTheme.COLORS.get(selected_provider, '#000000'),
                             marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
-                            width=0.8,  # Single provider gets wider bars
+                            width=0.6,  # Single provider gets wider bars
                             text=text_labels,
                             textposition='outside',
+                            textfont=dict(size=14, color='black'),
                             hovertemplate=hover_template,
                             customdata=hover_values
                         ))
