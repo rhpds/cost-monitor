@@ -17,6 +17,13 @@ import asyncpg
 import redis.asyncio as redis
 from pydantic import BaseModel
 
+# Import provider system for on-demand data collection
+from ..providers.base import ProviderFactory, TimeGranularity, CostDataPoint as ProviderCostDataPoint
+from ..utils.auth import MultiCloudAuthManager
+from ..config.settings import get_config
+# Import provider implementations to register them
+from .. import providers
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -27,25 +34,32 @@ logger = logging.getLogger(__name__)
 # Global connections
 db_pool = None
 redis_client = None
+auth_manager = None
+config = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan management"""
-    global db_pool, redis_client
-    
+    global db_pool, redis_client, auth_manager, config
+
     # Startup
     logger.info("Starting Cost Data Service...")
-    
+
     # Database connection
     database_url = os.getenv('DATABASE_URL', 'postgresql://cost_monitor:password@postgresql:5432/cost_monitor')
     logger.info("Connecting to database...")
     db_pool = await asyncpg.create_pool(database_url, min_size=5, max_size=20)
-    
+
     # Redis connection
     redis_url = os.getenv('REDIS_URL', 'redis://redis-service:6379/0')
     logger.info("Connecting to Redis...")
     redis_client = redis.from_url(redis_url, decode_responses=True)
-    
+
+    # Initialize provider system for data collection
+    logger.info("Initializing provider system...")
+    auth_manager = MultiCloudAuthManager()
+    config = get_config()  # Load provider configurations
+
     logger.info("✅ Cost Data Service started successfully")
     yield
     
@@ -94,6 +108,179 @@ class CostDataPoint(BaseModel):
     service_name: Optional[str] = None
     account_id: Optional[str] = None
     region: Optional[str] = None
+
+# Data collection functions
+async def check_existing_data(start_date: date, end_date: date, provider_name: str = None) -> Dict[str, List[date]]:
+    """Check what data already exists in database for the given date range"""
+    async with db_pool.acquire() as conn:
+        query = """
+            SELECT p.name as provider, cdp.date
+            FROM cost_data_points cdp
+            JOIN providers p ON cdp.provider_id = p.id
+            WHERE cdp.date BETWEEN $1 AND $2
+        """
+        params = [start_date, end_date]
+
+        if provider_name:
+            query += " AND p.name = $3"
+            params.append(provider_name)
+
+        query += " ORDER BY p.name, cdp.date"
+
+        rows = await conn.fetch(query, *params)
+
+        # Group existing dates by provider
+        existing_data = {}
+        for row in rows:
+            provider = row['provider']
+            if provider not in existing_data:
+                existing_data[provider] = []
+            existing_data[provider].append(row['date'])
+
+        return existing_data
+
+async def get_missing_date_ranges(start_date: date, end_date: date, existing_data: Dict[str, List[date]], providers: List[str]) -> Dict[str, List[tuple]]:
+    """Identify missing date ranges that need to be collected"""
+    missing_ranges = {}
+
+    # Generate all dates in the requested range
+    current_date = start_date
+    all_dates = []
+    while current_date <= end_date:
+        all_dates.append(current_date)
+        current_date += timedelta(days=1)
+
+    for provider in providers:
+        existing_dates = set(existing_data.get(provider, []))
+        missing_dates = [d for d in all_dates if d not in existing_dates]
+
+        if missing_dates:
+            # Group consecutive missing dates into ranges
+            ranges = []
+            range_start = missing_dates[0]
+            range_end = missing_dates[0]
+
+            for i in range(1, len(missing_dates)):
+                if missing_dates[i] == range_end + timedelta(days=1):
+                    range_end = missing_dates[i]
+                else:
+                    ranges.append((range_start, range_end))
+                    range_start = missing_dates[i]
+                    range_end = missing_dates[i]
+
+            ranges.append((range_start, range_end))
+            missing_ranges[provider] = ranges
+
+    return missing_ranges
+
+async def collect_provider_data(provider_name: str, start_date: date, end_date: date) -> List[ProviderCostDataPoint]:
+    """Collect cost data from a specific provider for the given date range"""
+    try:
+        # Get provider configuration
+        provider_config = {
+            'aws_access_key_id': os.getenv('AWS_ACCESS_KEY_ID'),
+            'aws_secret_access_key': os.getenv('AWS_SECRET_ACCESS_KEY'),
+            'azure_client_id': os.getenv('AZURE_CLIENT_ID'),
+            'azure_client_secret': os.getenv('AZURE_CLIENT_SECRET'),
+            'azure_tenant_id': os.getenv('AZURE_TENANT_ID'),
+            'region': os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+        }
+
+        # Create provider instance
+        provider_instance = ProviderFactory.create_provider(provider_name, provider_config)
+
+        # Authenticate
+        auth_result = await auth_manager.authenticate_provider(provider_name, provider_config)
+        if not auth_result.success:
+            logger.error(f"Failed to authenticate with {provider_name}: {auth_result.error}")
+            return []
+
+        # Get cost data
+        logger.info(f"Collecting {provider_name} data for {start_date} to {end_date}")
+        cost_summary = await provider_instance.get_cost_data(
+            start_date, end_date, TimeGranularity.DAILY
+        )
+
+        return cost_summary.data_points
+
+    except Exception as e:
+        logger.error(f"Error collecting data from {provider_name}: {e}")
+        return []
+
+async def store_cost_data(provider_name: str, cost_points: List[ProviderCostDataPoint]):
+    """Store collected cost data in the database"""
+    if not cost_points:
+        return
+
+    async with db_pool.acquire() as conn:
+        # Get provider ID
+        provider_row = await conn.fetchrow("SELECT id FROM providers WHERE name = $1", provider_name)
+        if not provider_row:
+            logger.error(f"Provider {provider_name} not found in database")
+            return
+
+        provider_id = provider_row['id']
+
+        # Insert cost data points
+        insert_query = """
+            INSERT INTO cost_data_points
+            (provider_id, date, cost, currency, service_name, account_id, region)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (provider_id, date, service_name, account_id, region)
+            DO UPDATE SET cost = EXCLUDED.cost, currency = EXCLUDED.currency
+        """
+
+        for point in cost_points:
+            point_date = point.date if isinstance(point.date, date) else point.date.date()
+            await conn.execute(
+                insert_query,
+                provider_id,
+                point_date,
+                point.amount,
+                point.currency,
+                point.service_name,
+                point.account_id,
+                point.region
+            )
+
+        logger.info(f"Stored {len(cost_points)} data points for {provider_name}")
+
+async def update_provider_sync_status(provider_name: str, status: str, last_sync: datetime):
+    """Update provider sync status in database"""
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE providers SET sync_status = $1, last_sync_at = $2 WHERE name = $3",
+            status, last_sync, provider_name
+        )
+
+async def collect_missing_data(start_date: date, end_date: date, providers: List[str] = None):
+    """Main function to collect missing data for the requested date range"""
+    if not providers:
+        providers = ['aws', 'azure', 'gcp']  # Default to all providers
+
+    # Check what data already exists
+    existing_data = await check_existing_data(start_date, end_date)
+
+    # Find missing date ranges
+    missing_ranges = await get_missing_date_ranges(start_date, end_date, existing_data, providers)
+
+    if not missing_ranges:
+        logger.info(f"No missing data for {start_date} to {end_date}")
+        return
+
+    # Collect missing data for each provider
+    for provider_name, ranges in missing_ranges.items():
+        for range_start, range_end in ranges:
+            logger.info(f"Collecting missing {provider_name} data for {range_start} to {range_end}")
+
+            # Collect data from provider
+            cost_points = await collect_provider_data(provider_name, range_start, range_end)
+
+            # Store in database
+            await store_cost_data(provider_name, cost_points)
+
+            # Update sync status
+            await update_provider_sync_status(provider_name, "success", datetime.now())
 
 # Health endpoints
 @app.get("/api/health/ready", response_model=HealthCheck)
@@ -173,8 +360,27 @@ async def get_cost_summary(
         if cached:
             import json
             return json.loads(cached)
-        
-        # Query database
+
+        # Check for missing data and collect if needed
+        logger.info(f"Checking for missing data: {start_date} to {end_date}")
+
+        # Get list of enabled providers to check
+        providers_to_check = providers if providers else ['aws', 'azure', 'gcp']
+
+        # Check existing data
+        existing_data = await check_existing_data(start_date, end_date)
+
+        # Find missing date ranges
+        missing_ranges = await get_missing_date_ranges(start_date, end_date, existing_data, providers_to_check)
+
+        # Collect missing data if needed
+        if missing_ranges:
+            logger.info(f"Found missing data ranges: {missing_ranges}")
+            await collect_missing_data(start_date, end_date, providers_to_check)
+        else:
+            logger.info("No missing data found")
+
+        # Query database for complete data
         async with db_pool.acquire() as conn:
             # Get total cost
             query = """

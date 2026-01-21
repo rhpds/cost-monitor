@@ -166,6 +166,7 @@ cython_debug/
 config/.secrets.yaml
 config/config.local.yaml
 config/local.yaml
+configs/.secrets/
 openshift/local/
 openshift/overlays/local/
 openshift/base/secrets/credentials.yaml
