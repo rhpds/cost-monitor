@@ -22,18 +22,18 @@ clouds:
 
   azure:
     enabled: true
-    # subscription_id: "YOUR_SUBSCRIPTION_ID"  # Use environment variables
     # tenant_id: "YOUR_TENANT_ID"  # Use environment variables
     # client_id: "YOUR_CLIENT_ID"  # Use environment variables
     # client_secret: "YOUR_CLIENT_SECRET"  # Use environment variables
 
-    # Azure Cost Management configuration - using individual subscription discovery
-    cost_management:
-      granularity: "Daily"  # Daily, Monthly
-      scope_type: "Subscription"  # Individual subscriptions are auto-discovered
+    # Azure Cost Management Export configuration
+    export:
+      storage_account: "demobillingexports"
+      container: "demo-billing-exports-actual"
+      export_name: "demo-billing-exports-actual"
     thresholds:
-      warning: 1000.0
-      critical: 2000.0
+      warning: 5000.0
+      critical: 10000.0
     icinga:
       check_interval: 3600
       notification_enabled: true
