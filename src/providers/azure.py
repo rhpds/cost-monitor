@@ -737,11 +737,12 @@ class AzureCostProvider(CloudCostProvider):
                     logger.info(f"🟡 Azure:   {i+1}. {point.date}: ${point.amount:.2f} - {point.service_name}")
 
             return CostSummary(
+                provider=self.provider_name,
+                start_date=start_date.date(),
+                end_date=end_date.date(),
                 total_cost=total_cost,
                 currency=currency,
                 data_points=data_points,
-                period_start=start_date.date(),
-                period_end=end_date.date(),
                 granularity=granularity,
                 last_updated=datetime.now()
             )
