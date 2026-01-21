@@ -68,6 +68,8 @@ class CloudConfig:
             'CLOUDCOST__CLOUDS__AZURE__EXPORT__CONTAINER': 'clouds.azure.export.container',
             'CLOUDCOST__CLOUDS__GCP__CREDENTIALS_PATH': 'clouds.gcp.credentials_path',
             'CLOUDCOST__CLOUDS__GCP__PROJECT_ID': 'clouds.gcp.project_id',
+            'CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET': 'clouds.gcp.bigquery_billing_dataset',
+            'CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID': 'clouds.gcp.billing_account_id',
         }
 
         # Set environment variables into dynaconf
