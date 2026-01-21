@@ -46,12 +46,8 @@ COPY config/ ./config/
 COPY entrypoints/ ./entrypoints/
 COPY health_check.py ./
 
-# Create directories with correct permissions for OpenShift
-RUN mkdir -p /app/cache /app/logs && \
-    chmod -R g+w /app && \
-    chmod +x entrypoints/data-service-entrypoint.sh
-
-# Let OpenShift assign the UID (no explicit USER directive needed)
+# Create directories and make entrypoint executable
+RUN mkdir -p /app/cache /app/logs && chmod +x entrypoints/data-service-entrypoint.sh
 
 # Set environment variables - venv must come first in PATH
 ENV PATH="/opt/app-root/venv/bin:/opt/app-root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
