@@ -103,27 +103,8 @@ spec:
             secretKeyRef:
               name: azure-credentials
               key: subscription-id
-        - name: CLOUDCOST__CLOUDS__AZURE__EXPORT__STORAGE_ACCOUNT
-          valueFrom:
-            secretKeyRef:
-              name: azure-credentials
-              key: storage-account
-        - name: CLOUDCOST__CLOUDS__AZURE__EXPORT__EXPORT_NAME
-          valueFrom:
-            secretKeyRef:
-              name: azure-credentials
-              key: export-name
-        - name: CLOUDCOST__CLOUDS__AZURE__EXPORT__CONTAINER
-          valueFrom:
-            secretKeyRef:
-              name: azure-credentials
-              key: container
 
-        # Azure Management Groups Configuration
-        - name: CLOUDCOST__CLOUDS__AZURE__USE_MANAGEMENT_GROUPS
-          value: "true"
-        - name: CLOUDCOST__CLOUDS__AZURE__MANAGEMENT_GROUPS
-          value: "rhpds-pool-00,rhpds-pool-01"
+        # Azure auto-discovers all available subscriptions
 
         # GCP Configuration
         - name: GOOGLE_APPLICATION_CREDENTIALS

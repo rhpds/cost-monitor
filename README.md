@@ -87,32 +87,22 @@ az ad sp create-for-rbac --name "cost-monitor" --skip-assignment
 # Get the service principal Object ID
 OBJECT_ID=$(az ad sp show --id "YOUR_APP_ID" --query "id" --output tsv)
 
-# For comprehensive cost monitoring, grant access to ALL management groups
-# Replace with your actual management group IDs
+# Grant Cost Management Reader role for subscription access
+# The tool will auto-discover all accessible subscriptions
 az role assignment create \
   --assignee "$OBJECT_ID" \
   --role "Cost Management Reader" \
-  --scope "/providers/Microsoft.Management/managementGroups/your-mg-1"
+  --scope "/subscriptions/YOUR_SUBSCRIPTION_ID"
 
-az role assignment create \
-  --assignee "$OBJECT_ID" \
-  --role "Cost Management Reader" \
-  --scope "/providers/Microsoft.Management/managementGroups/your-mg-2"
-
-# Also grant subscription-level access for individual subscriptions
-az role assignment create \
-  --assignee "$OBJECT_ID" \
-  --role "Cost Management Reader" \
-  --scope "/subscriptions/your-subscription-id"
+# For multiple subscriptions, the tool will auto-discover all accessible ones
+# You can also grant broader access at management group level:
+# az role assignment create \
+#   --assignee "$OBJECT_ID" \
+#   --role "Cost Management Reader" \
+#   --scope "/providers/Microsoft.Management/managementGroups/YOUR_MG_ID"
 ```
 
-**Step 3: Grant Storage Permissions (for export data)**
-```bash
-# Grant Storage Blob Data Reader permissions for export data access
-./scripts/setup-azure-export-permissions.sh
-```
-
-**Step 4: Configure Environment Variables**
+**Step 3: Configure Environment Variables**
 ```bash
 export AZURE_SUBSCRIPTION_ID="your_subscription_id"
 export AZURE_TENANT_ID="your_tenant_id"
@@ -120,9 +110,9 @@ export AZURE_CLIENT_ID="your_client_id"
 export AZURE_CLIENT_SECRET="your_client_secret"
 ```
 
-> **⚠️ IMPORTANT**: Without management group permissions, you'll only see costs from individual subscriptions (typically <$100/day instead of realistic $1000s/day). Management group access is **required** for comprehensive enterprise cost monitoring.
+> **✅ AUTO-DISCOVERY**: The tool automatically discovers and queries all Azure subscriptions you have Cost Management Reader access to. Grant permissions at the appropriate scope (subscription, resource group, or management group) based on your monitoring needs.
 
-> **💡 TIP**: RBAC permissions can take 5-30 minutes to propagate for management groups. If you get "Unauthorized" errors initially, wait and retry.
+> **💡 TIP**: RBAC permissions can take 5-30 minutes to propagate. If you get "Unauthorized" errors initially, wait and retry.
 
 #### GCP Setup
 ```bash

@@ -23,15 +23,7 @@ clouds:
       notification_enabled: false  # Disable notifications in dev
 
   azure:
-    enabled: true  # Enable Azure for testing
-
-    # Service principal configuration for management group permissions
-    service_principal_object_id: "5f235f9f-960b-44b8-8d96-75953cc48183"
-
-    # Azure Cost Management configuration - using REST API directly
-    management_groups: ["rhpds-pool-00", "rhpds-pool-01"]
-    use_management_groups: false
-    query_all_subscriptions: false
+    enabled: true  # Enable Azure with individual subscription discovery
 
     thresholds:
       warning: 5000.0   # Higher thresholds for actual enterprise costs

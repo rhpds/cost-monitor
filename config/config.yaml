@@ -27,18 +27,10 @@ clouds:
     # client_id: "YOUR_CLIENT_ID"  # Use environment variables
     # client_secret: "YOUR_CLIENT_SECRET"  # Use environment variables
 
-    # Service principal configuration for management group permissions
-    service_principal_object_id: "YOUR_SERVICE_PRINCIPAL_OBJECT_ID"
-
-    # Management group configuration
-    management_groups: []  # List of management group IDs to monitor
-    use_management_groups: false  # Enable management group cost aggregation
-    query_all_subscriptions: true  # Also query individual accessible subscriptions
-
-    # Azure Cost Management configuration - using REST API directly
+    # Azure Cost Management configuration - using individual subscription discovery
     cost_management:
       granularity: "Daily"  # Daily, Monthly
-      scope_type: "Subscription"  # Subscription, ResourceGroup, ManagementGroup
+      scope_type: "Subscription"  # Individual subscriptions are auto-discovered
     thresholds:
       warning: 1000.0
       critical: 2000.0
