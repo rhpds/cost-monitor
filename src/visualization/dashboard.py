@@ -249,7 +249,17 @@ class CostDataManager:
 
         except Exception as e:
             logger.error(f"Failed to get cost data from API: {e}")
-            return None
+            # Return a proper empty DataWrapper instead of None to prevent attribute errors
+            empty_data = {
+                'total_cost': 0.0,
+                'currency': 'USD',
+                'period_start': start_date.isoformat(),
+                'period_end': end_date.isoformat(),
+                'provider_breakdown': {},
+                'combined_daily_costs': [],
+                'provider_data': {}
+            }
+            return DataWrapper(empty_data)
 
 
     async def initialize(self):
@@ -895,7 +905,20 @@ class CostMonitorDashboard:
 
             except Exception as e:
                 logger.error(f"Error in main callback: {e}")
-                return {}, {}, f"Error: {str(e)}", {'loading': False}
+                # Return proper empty data structure instead of empty dict to prevent attribute errors
+                empty_cost_data = {
+                    'total_cost': 0.0,
+                    'provider_breakdown': {},
+                    'daily_costs': [],
+                    'service_breakdown': {},
+                    'account_breakdown': {}
+                }
+                empty_alert_data = {
+                    'active_alerts': 0,
+                    'critical_alerts': 0,
+                    'alerts': []
+                }
+                return empty_cost_data, empty_alert_data, f"Error: {str(e)}", {'loading': False}
 
             import dash
 
