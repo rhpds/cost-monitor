@@ -261,7 +261,8 @@ class AzureCostProvider(CloudCostProvider):
                     service_name=service_name,
                     account_id=subscription_id,
                     region=row.get('location', ''),
-                    additional_properties={
+                    resource_id=row.get('resourceGroupName', ''),
+                    tags={
                         'subscription_name': subscription_name,
                         'resource_group': resource_group,
                         'product_name': row.get('ProductName', ''),
