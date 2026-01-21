@@ -42,12 +42,15 @@ WORKDIR /app
 # Copy virtual environment from builder
 COPY --from=builder /opt/app-root/venv /opt/app-root/venv
 
-# Copy application code
+# Copy application code for sophisticated dashboard
 COPY --chown=1001:0 src/visualization/ ./src/visualization/
-COPY --chown=1001:0 src/api/dashboard_service.py ./src/api/
+COPY --chown=1001:0 src/api/ ./src/api/
 COPY --chown=1001:0 src/models/ ./src/models/
-COPY --chown=1001:0 src/utils/http_client.py ./src/utils/
-COPY --chown=1001:0 config/dashboard/ ./config/
+COPY --chown=1001:0 src/utils/ ./src/utils/
+COPY --chown=1001:0 src/config/ ./src/config/
+COPY --chown=1001:0 src/providers/ ./src/providers/
+COPY --chown=1001:0 src/monitoring/ ./src/monitoring/
+COPY --chown=1001:0 config/ ./config/
 COPY --chown=1001:0 assets/ ./assets/
 COPY --chown=1001:0 entrypoints/ ./entrypoints/
 
@@ -76,4 +79,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
 
 # Default entrypoint
 ENTRYPOINT ["./entrypoints/dashboard-entrypoint.sh"]
-CMD ["python", "-m", "src.api.dashboard_service"]
+CMD ["python", "-m", "src.visualization.dashboard"]
