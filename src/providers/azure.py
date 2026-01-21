@@ -337,7 +337,8 @@ class AzureCostProvider(CloudCostProvider):
             total_cost=total_cost,
             currency="USD",
             data_points=all_cost_points,
-            daily_summary=daily_summary
+            granularity=granularity,
+            last_updated=datetime.now()
         )
 
     async def test_connection(self) -> bool:
@@ -353,6 +354,64 @@ class AzureCostProvider(CloudCostProvider):
         except Exception as e:
             logger.error(f"Azure blob storage connection test failed: {e}")
             return False
+
+    async def authenticate(self) -> bool:
+        """Authenticate with Azure."""
+        try:
+            await self.ensure_authenticated()
+            return True
+        except Exception:
+            return False
+
+    async def get_current_month_cost(self) -> float:
+        """Get the current month's total cost."""
+        now = datetime.now()
+        start_of_month = now.replace(day=1)
+        cost_summary = await self.get_cost_data(start_of_month, now)
+        return cost_summary.total_cost
+
+    async def get_daily_costs(self, start_date: Union[datetime, date], end_date: Union[datetime, date]) -> List[CostDataPoint]:
+        """Get daily cost breakdown for the specified period."""
+        cost_summary = await self.get_cost_data(start_date, end_date)
+        return cost_summary.data_points
+
+    async def get_service_costs(self, start_date: Union[datetime, date], end_date: Union[datetime, date], top_n: int = 10) -> Dict[str, float]:
+        """Get cost breakdown by service for the specified period."""
+        cost_summary = await self.get_cost_data(start_date, end_date)
+        service_costs = {}
+        for point in cost_summary.data_points:
+            service = point.service_name or "Unknown"
+            service_costs[service] = service_costs.get(service, 0.0) + point.amount
+
+        # Return top N services by cost
+        sorted_services = sorted(service_costs.items(), key=lambda x: x[1], reverse=True)
+        return dict(sorted_services[:top_n])
+
+    def get_supported_regions(self) -> List[str]:
+        """Get list of supported regions for this provider."""
+        return [
+            "eastus", "eastus2", "southcentralus", "westus2", "westus3",
+            "australiaeast", "southeastasia", "northeurope", "swedencentral",
+            "uksouth", "westeurope", "centralus", "southafricanorth",
+            "centralindia", "eastasia", "japaneast", "koreacentral",
+            "canadacentral", "francecentral", "germanywestcentral",
+            "norwayeast", "polandcentral", "switzerlandnorth", "uaenorth",
+            "brazilsouth", "eastus2euap", "qatarcentral", "centralusstage",
+            "eastusstage", "eastus2stage", "northcentralusstage",
+            "southcentralusstage", "westusstage", "westus2stage"
+        ]
+
+    def get_supported_services(self) -> List[str]:
+        """Get list of supported services for cost monitoring."""
+        return [
+            "Virtual Machines", "Storage", "Networking", "Databases",
+            "App Service", "Azure Functions", "Container Instances",
+            "Kubernetes Service", "Cognitive Services", "Machine Learning",
+            "Data Factory", "Synapse Analytics", "Event Hubs", "Service Bus",
+            "API Management", "Application Gateway", "Load Balancer",
+            "VPN Gateway", "ExpressRoute", "CDN", "Traffic Manager",
+            "DNS", "Monitor", "Security Center", "Key Vault"
+        ]
 
 
 # Register the Azure provider with the factory
