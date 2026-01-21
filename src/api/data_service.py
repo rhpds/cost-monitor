@@ -447,7 +447,10 @@ async def get_cost_summary(
 
             service_query += " GROUP BY p.name, cdp.service_name, cdp.currency ORDER BY p.name, cost DESC"
 
+            logger.info(f"Service query: {service_query}")
+            logger.info(f"Service params: {service_params}")
             service_rows = await conn.fetch(service_query, *service_params)
+            logger.info(f"Service query returned {len(service_rows)} rows")
 
             # Build response
             total_cost = sum(row['total_cost'] for row in total_rows)
