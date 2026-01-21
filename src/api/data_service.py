@@ -367,7 +367,8 @@ async def health_redis():
 async def get_cost_summary(
     start_date: Optional[date] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="End date (YYYY-MM-DD)"),
-    providers: Optional[List[str]] = Query(None, description="Filter by providers")
+    providers: Optional[List[str]] = Query(None, description="Filter by providers"),
+    force_refresh: bool = Query(False, description="Force refresh data from providers even if data exists")
 ):
     """Get cost summary for specified period"""
     try:
@@ -379,31 +380,52 @@ async def get_cost_summary(
         
         # Cache key
         cache_key = f"cost_summary:{start_date}:{end_date}:{','.join(providers or [])}"
-        
-        # Try cache first
-        cached = await redis_client.get(cache_key)
-        if cached:
-            import json
-            return json.loads(cached)
+
+        # Try cache first (skip if force_refresh is enabled)
+        if not force_refresh:
+            cached = await redis_client.get(cache_key)
+            if cached:
+                import json
+                return json.loads(cached)
 
         # Check for missing data and collect if needed
-        logger.info(f"Checking for missing data: {start_date} to {end_date}")
+        logger.info(f"Checking for missing data: {start_date} to {end_date}, force_refresh={force_refresh}")
 
         # Get list of enabled providers to check
         providers_to_check = providers if providers else ['aws', 'azure', 'gcp']
 
-        # Check existing data
-        existing_data = await check_existing_data(start_date, end_date)
+        if force_refresh:
+            # Force refresh: delete existing data and collect fresh data
+            logger.info("Force refresh requested - clearing existing data and collecting fresh data")
 
-        # Find missing date ranges
-        missing_ranges = await get_missing_date_ranges(start_date, end_date, existing_data, providers_to_check)
+            # Delete existing data for the date range and providers
+            async with db_pool.acquire() as conn:
+                delete_query = """
+                    DELETE FROM cost_data_points
+                    WHERE date BETWEEN $1 AND $2
+                    AND provider_id IN (
+                        SELECT id FROM providers WHERE name = ANY($3)
+                    )
+                """
+                result = await conn.execute(delete_query, start_date, end_date, providers_to_check)
+                logger.info(f"Deleted existing data: {result}")
 
-        # Collect missing data if needed
-        if missing_ranges:
-            logger.info(f"Found missing data ranges: {missing_ranges}")
+            # Collect fresh data for all requested providers and dates
             await collect_missing_data(start_date, end_date, providers_to_check)
         else:
-            logger.info("No missing data found")
+            # Normal mode: only collect missing data
+            # Check existing data
+            existing_data = await check_existing_data(start_date, end_date)
+
+            # Find missing date ranges
+            missing_ranges = await get_missing_date_ranges(start_date, end_date, existing_data, providers_to_check)
+
+            # Collect missing data if needed
+            if missing_ranges:
+                logger.info(f"Found missing data ranges: {missing_ranges}")
+                await collect_missing_data(start_date, end_date, providers_to_check)
+            else:
+                logger.info("No missing data found")
 
         # Query database for complete data
         async with db_pool.acquire() as conn:
