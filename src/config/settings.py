@@ -49,7 +49,14 @@ class CloudConfig:
         self.settings = settings
         self._validate_config()
         # Load environment variables AFTER settings are initialized to ensure they override config files
-        self._load_environment_variables()
+        try:
+            print("DEBUG: About to call _load_environment_variables()")
+            self._load_environment_variables()
+            print("DEBUG: _load_environment_variables() completed successfully")
+        except Exception as e:
+            print(f"DEBUG: Exception in _load_environment_variables(): {e}")
+            import traceback
+            traceback.print_exc()
 
     def _load_environment_variables(self):
         """Manually load environment variables with CLOUDCOST prefix."""
