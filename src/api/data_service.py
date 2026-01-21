@@ -111,7 +111,7 @@ class CostSummary(BaseModel):
     period_end: date
     provider_breakdown: Dict[str, float]
     combined_daily_costs: List[DailyCostSummary]
-    provider_data: Optional[Dict[str, ProviderData]] = {}
+    provider_data: Dict[str, ProviderData]
 
 class CostDataPoint(BaseModel):
     provider: str
@@ -443,7 +443,7 @@ async def get_cost_summary(
 
             if providers:
                 service_query += " AND p.name = ANY($3)"
-                service_params.append(providers)
+                service_params.append(providers if isinstance(providers, list) else [providers])
 
             service_query += " GROUP BY p.name, cdp.service_name, cdp.currency ORDER BY p.name, cost DESC"
 
