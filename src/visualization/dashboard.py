@@ -1700,14 +1700,16 @@ class CostMonitorDashboard:
             if not account_breakdown:
                 return "No account data available."
 
-            total_accounts = len(account_breakdown)
-            total_cost = sum(acc['total_cost'] for acc in account_breakdown.values())
-
-            # Count by provider
+            # Handle nested structure: account_breakdown[provider][account_id] = account_data
+            total_accounts = 0
+            total_cost = 0
             provider_counts = {}
-            for account_data in account_breakdown.values():
-                provider = account_data['provider']
-                provider_counts[provider] = provider_counts.get(provider, 0) + 1
+
+            for provider, accounts in account_breakdown.items():
+                provider_counts[provider] = len(accounts)
+                total_accounts += len(accounts)
+                for account_data in accounts.values():
+                    total_cost += account_data['cost']
 
             # Build summary text
             provider_summary = ", ".join([f"{count} {provider.upper()}" for provider, count in provider_counts.items()])
@@ -1740,15 +1742,20 @@ class CostMonitorDashboard:
             if not account_breakdown:
                 return "No account data available."
 
-            # Convert to list for filtering and sorting, exclude zero-cost accounts
+            # Convert nested structure to flat list for filtering and sorting
             accounts_list = []
-            for account_key, account_data in account_breakdown.items():
-                # Only include accounts with non-zero costs
-                if account_data.get('total_cost', 0) > 0:
-                    accounts_list.append({
-                        'key': account_key,
-                        **account_data
-                    })
+            for provider, accounts in account_breakdown.items():
+                for account_key, account_data in accounts.items():
+                    # Only include accounts with non-zero costs
+                    if account_data.get('cost', 0) > 0:
+                        accounts_list.append({
+                            'key': account_key,
+                            'account_name': account_key,  # Use account_id as name for now
+                            'total_cost': account_data['cost'],
+                            'provider': account_data['provider'],
+                            'currency': account_data['currency'],
+                            **account_data
+                        })
 
             # Apply filters
             if provider_filter and provider_filter != 'all':
