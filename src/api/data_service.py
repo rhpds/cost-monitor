@@ -487,7 +487,7 @@ async def get_cost_summary(
             service_rows = await conn.fetch(service_query, *service_params)
             logger.info(f"Service query returned {len(service_rows)} rows")
 
-            # Get account breakdown data
+            # Get account breakdown data (limited to top 50 by cost for performance)
             account_query = """
                 SELECT p.name as provider, cdp.account_id, SUM(cdp.cost) as cost, cdp.currency
                 FROM cost_data_points cdp
@@ -502,7 +502,7 @@ async def get_cost_summary(
                 account_query += " AND p.name = ANY($3)"
                 account_params.append(providers if isinstance(providers, list) else [providers])
 
-            account_query += " GROUP BY p.name, cdp.account_id, cdp.currency ORDER BY p.name, cost DESC"
+            account_query += " GROUP BY p.name, cdp.account_id, cdp.currency ORDER BY cost DESC LIMIT 50"
 
             logger.info(f"Account query: {account_query}")
             logger.info(f"Account params: {account_params}")
