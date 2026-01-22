@@ -130,7 +130,8 @@ class AzureCostProvider(CloudCostProvider):
 
                 # Test connection by listing containers
                 containers = list(self.blob_service_client.list_containers())
-                logger.info(f"Azure blob storage authentication successful. Found {len(containers)} containers")
+                container_names = [c.name for c in containers]
+                logger.info(f"Azure blob storage authentication successful. Found {len(containers)} containers: {container_names}")
 
             except Exception as e:
                 logger.error(f"Azure blob storage authentication failed: {e}")
@@ -174,16 +175,20 @@ class AzureCostProvider(CloudCostProvider):
             latest_guid = max(export_dirs.keys(), key=lambda g: export_dirs[g]["last_modified"])
             latest_export = export_dirs[latest_guid]
 
-            # Find the main data file (part_1_0001.csv) and manifest
-            data_files = {}
+            # Find manifest file and all CSV data files
+            data_files = {"csv_files": []}
             for blob_name in latest_export["blobs"]:
-                if blob_name.endswith("part_1_0001.csv"):
-                    data_files["main_data"] = blob_name
-                elif blob_name.endswith("manifest.json"):
+                if blob_name.endswith("manifest.json"):
                     data_files["manifest"] = blob_name
+                elif blob_name.endswith(".csv"):
+                    data_files["csv_files"].append(blob_name)
 
-            if "main_data" not in data_files:
-                logger.error(f"No main data file found in export {latest_guid}")
+            if "manifest" not in data_files:
+                logger.error(f"No manifest file found in export {latest_guid}")
+                return None
+
+            if not data_files["csv_files"]:
+                logger.error(f"No CSV files found in export {latest_guid}")
                 return None
 
             logger.info(f"Found latest export for {date_pattern}: {latest_guid} (updated: {latest_export['last_modified']})")
@@ -193,15 +198,40 @@ class AzureCostProvider(CloudCostProvider):
             logger.error(f"Error finding export files: {e}")
             return None
 
+    def _parse_manifest(self, manifest_blob_name: str) -> Optional[Dict]:
+        """Parse the manifest.json file to get export metadata."""
+        try:
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name,
+                blob=manifest_blob_name
+            )
+            manifest_data = blob_client.download_blob().readall().decode('utf-8')
+            manifest = json.loads(manifest_data)
+            logger.info(f"Parsed manifest with {len(manifest.get('blobs', []))} files")
+            return manifest
+        except Exception as e:
+            logger.error(f"Failed to parse manifest {manifest_blob_name}: {e}")
+            return None
+
     def _download_and_parse_csv(self, blob_name: str, target_date: Optional[date] = None) -> List[CostDataPoint]:
         """Download and parse CSV data from blob storage with caching."""
         try:
-            # Check if CSV is already cached
-            csv_content = self._load_cached_csv(blob_name)
+            # Check if this is current month data (files still growing, don't use cache)
+            current_month = date.today().replace(day=1)
+            is_current_month = blob_name and current_month.strftime('%Y%m%d') in blob_name
+
+            # Check if CSV is already cached (skip cache for current month)
+            csv_content = None
+            if not is_current_month:
+                csv_content = self._load_cached_csv(blob_name)
 
             if csv_content:
                 logger.info(f"Using cached CSV data: {blob_name}")
             else:
+                if is_current_month:
+                    logger.info(f"Current month detected - downloading fresh data: {blob_name}")
+                else:
+                    logger.info(f"No cache found - downloading data: {blob_name}")
                 # Download blob content
                 blob_client = self.blob_service_client.get_blob_client(
                     container=self.container_name,
@@ -302,9 +332,22 @@ class AzureCostProvider(CloudCostProvider):
             # Find export files for this month
             export_files = self._find_latest_export_files(current_month)
 
-            if export_files and "main_data" in export_files:
-                # Download and parse the main data file
-                month_cost_points = self._download_and_parse_csv(export_files["main_data"])
+            if export_files and "manifest" in export_files and export_files["csv_files"]:
+                # Parse manifest to get file details
+                manifest = self._parse_manifest(export_files["manifest"])
+
+                # Process all CSV files found in the export
+                month_cost_points = []
+                csv_files_processed = 0
+
+                for csv_file in export_files["csv_files"]:
+                    logger.info(f"Processing CSV file: {csv_file}")
+                    csv_points = self._download_and_parse_csv(csv_file)
+                    month_cost_points.extend(csv_points)
+                    csv_files_processed += 1
+                    logger.info(f"📊 Azure: Processed {csv_file} - added {len(csv_points)} cost points")
+
+                logger.info(f"📊 Azure: Processed {csv_files_processed} CSV files with {len(month_cost_points)} total cost points")
 
                 # Filter to the requested date range
                 for point in month_cost_points:
