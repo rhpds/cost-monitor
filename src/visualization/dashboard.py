@@ -1788,6 +1788,11 @@ class CostMonitorDashboard:
                 display_accounts = accounts_list[:20]
                 remaining_count = len(accounts_list) - 20
 
+            # Calculate percentages for display accounts
+            total_cost_all = sum(acc['total_cost'] for acc in accounts_list)
+            for account in display_accounts:
+                account['percentage'] = (account['total_cost'] / total_cost_all * 100) if total_cost_all > 0 else 0
+
             # Resolve AWS account names for only the accounts that will be displayed
             # Account data already contains necessary information for display
             # No need for additional account name resolution
@@ -1918,6 +1923,22 @@ class CostMonitorDashboard:
                 if cost_data and 'account_breakdown' in cost_data:
                     account_breakdown = cost_data['account_breakdown']
 
+                    # Convert nested structure to flat list for export
+                    accounts_list = []
+                    for provider, accounts in account_breakdown.items():
+                        for account_key, account_data in accounts.items():
+                            accounts_list.append({
+                                'account_name': account_key,
+                                'account_id': account_key,
+                                'total_cost': account_data['cost'],
+                                'provider': account_data['provider']
+                            })
+
+                    # Calculate percentages
+                    total_cost_all = sum(acc['total_cost'] for acc in accounts_list)
+                    for account in accounts_list:
+                        account['percentage'] = (account['total_cost'] / total_cost_all * 100) if total_cost_all > 0 else 0
+
                     # Convert to CSV-friendly format
                     import io
                     import csv
@@ -1928,7 +1949,7 @@ class CostMonitorDashboard:
                     writer = csv.DictWriter(output, fieldnames=fieldnames)
                     writer.writeheader()
 
-                    for account_key, account_data in account_breakdown.items():
+                    for account_data in accounts_list:
                         writer.writerow({
                             'Account_Name': account_data['account_name'],
                             'Account_ID': account_data['account_id'],
