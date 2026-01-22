@@ -864,8 +864,8 @@ class CostMonitorDashboard:
 
                         account_data_task = fetch_account_breakdown()
                         account_data = loop.run_until_complete(account_data_task)
-                        if account_data and account_data.combined_account_breakdown:
-                            cost_data['account_breakdown'] = account_data.combined_account_breakdown
+                        if account_data:
+                            cost_data['account_breakdown'] = account_data
                     except Exception as e:
                         logger.warning(f"Failed to get account breakdown data: {e}")
                         # Continue without account breakdown
@@ -1045,7 +1045,7 @@ class CostMonitorDashboard:
 
                         account_data_task = loop.create_task(fetch_account_breakdown())
                         account_data = loop.run_until_complete(account_data_task)
-                        account_breakdown = account_data.combined_account_breakdown if account_data else {}
+                        account_breakdown = account_data if account_data else {}
                     except Exception as e:
                         logger.warning(f"Failed to get account breakdown data: {e}")
                         account_breakdown = {}
