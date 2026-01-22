@@ -516,6 +516,68 @@ async def get_cost_summary(
             account_rows = await conn.fetch(account_query, *account_params)
             logger.info(f"Account query returned {len(account_rows)} rows")
 
+            # Get AWS account breakdown separately (doesn't interfere with service data)
+            aws_account_rows = []
+            try:
+                from src.providers.aws import AWSCostProvider
+                from src.config.settings import get_config
+
+                config = get_config()
+                if config and hasattr(config, 'clouds') and config.clouds.get('aws', {}).get('enabled', False):
+                    logger.info("Collecting AWS account breakdown separately...")
+
+                    # Create AWS provider instance for account-specific data collection
+                    aws_config = config.clouds.aws
+                    aws_provider = AWSCostProvider(aws_config)
+
+                    # Authenticate and get account-specific cost data
+                    if await aws_provider.authenticate():
+                        logger.info("AWS authenticated for account collection")
+
+                        # Get cost data grouped by LINKED_ACCOUNT only (for account breakdown)
+                        aws_account_data = await aws_provider.get_cost_data(
+                            start_date=start_date,
+                            end_date=end_date,
+                            group_by=['LINKED_ACCOUNT']
+                        )
+
+                        # Process AWS account data into our format
+                        if aws_account_data and aws_account_data.data_points:
+                            logger.info(f"AWS account data collected: {len(aws_account_data.data_points)} data points")
+
+                            # Aggregate by account
+                            aws_accounts = {}
+                            for point in aws_account_data.data_points:
+                                if point.account_id:
+                                    if point.account_id not in aws_accounts:
+                                        aws_accounts[point.account_id] = 0
+                                    aws_accounts[point.account_id] += point.amount
+
+                            # Convert to our row format (top 20 by cost)
+                            aws_account_items = sorted(aws_accounts.items(), key=lambda x: x[1], reverse=True)[:20]
+
+                            for account_id, cost in aws_account_items:
+                                aws_account_rows.append({
+                                    'provider': 'aws',
+                                    'account_id': account_id,
+                                    'cost': cost,
+                                    'currency': 'USD'
+                                })
+
+                            logger.info(f"AWS account breakdown: {len(aws_account_rows)} accounts, total: ${sum(row['cost'] for row in aws_account_rows):,.2f}")
+                        else:
+                            logger.info("No AWS account data found")
+                    else:
+                        logger.warning("AWS authentication failed for account collection")
+
+            except Exception as e:
+                logger.warning(f"AWS account collection failed: {e}")
+                # Don't fail the whole request, just continue without AWS accounts
+
+            # Combine regular account data with AWS account data
+            all_account_rows = list(account_rows) + aws_account_rows
+            logger.info(f"Combined account data: {len(all_account_rows)} total accounts")
+
             # Build response
             total_cost = sum(row['total_cost'] for row in total_rows)
             provider_breakdown = {row['provider']: float(row['total_cost']) for row in total_rows}
@@ -577,7 +639,7 @@ async def get_cost_summary(
 
             # Build account_breakdown data
             account_breakdown = {}
-            for row in account_rows:
+            for row in all_account_rows:
                 provider = row['provider']
                 account_id = row['account_id']
                 cost = float(row['cost'])
