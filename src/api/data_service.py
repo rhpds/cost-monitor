@@ -487,13 +487,16 @@ async def get_cost_summary(
             service_rows = await conn.fetch(service_query, *service_params)
             logger.info(f"Service query returned {len(service_rows)} rows")
 
-            # Get account breakdown data (limited to top 50 by cost for performance)
+            # Get account breakdown data (limited to top 20 per provider for performance)
             account_query = """
-                SELECT p.name as provider, cdp.account_id, SUM(cdp.cost) as cost, cdp.currency
-                FROM cost_data_points cdp
-                JOIN providers p ON cdp.provider_id = p.id
-                WHERE cdp.date BETWEEN $1 AND $2
-                AND cdp.account_id IS NOT NULL
+                SELECT provider, account_id, cost, currency
+                FROM (
+                    SELECT p.name as provider, cdp.account_id, SUM(cdp.cost) as cost, cdp.currency,
+                           ROW_NUMBER() OVER (PARTITION BY p.name ORDER BY SUM(cdp.cost) DESC) as rn
+                    FROM cost_data_points cdp
+                    JOIN providers p ON cdp.provider_id = p.id
+                    WHERE cdp.date BETWEEN $1 AND $2
+                    AND cdp.account_id IS NOT NULL
             """
 
             account_params = [start_date, end_date]
@@ -502,7 +505,11 @@ async def get_cost_summary(
                 account_query += " AND p.name = ANY($3)"
                 account_params.append(providers if isinstance(providers, list) else [providers])
 
-            account_query += " GROUP BY p.name, cdp.account_id, cdp.currency ORDER BY cost DESC LIMIT 50"
+            account_query += """
+                    GROUP BY p.name, cdp.account_id, cdp.currency
+                ) ranked
+                WHERE rn <= 20
+                ORDER BY provider, cost DESC"""
 
             logger.info(f"Account query: {account_query}")
             logger.info(f"Account params: {account_params}")
