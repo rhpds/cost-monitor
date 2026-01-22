@@ -112,6 +112,7 @@ class CostSummary(BaseModel):
     provider_breakdown: Dict[str, float]
     combined_daily_costs: List[DailyCostSummary]
     provider_data: Dict[str, ProviderData]
+    account_breakdown: Dict[str, Dict[str, Any]]
 
 class CostDataPoint(BaseModel):
     provider: str
@@ -486,6 +487,28 @@ async def get_cost_summary(
             service_rows = await conn.fetch(service_query, *service_params)
             logger.info(f"Service query returned {len(service_rows)} rows")
 
+            # Get account breakdown data
+            account_query = """
+                SELECT p.name as provider, cdp.account_id, SUM(cdp.cost) as cost, cdp.currency
+                FROM cost_data_points cdp
+                JOIN providers p ON cdp.provider_id = p.id
+                WHERE cdp.date BETWEEN $1 AND $2
+                AND cdp.account_id IS NOT NULL
+            """
+
+            account_params = [start_date, end_date]
+
+            if providers:
+                account_query += " AND p.name = ANY($3)"
+                account_params.append(providers if isinstance(providers, list) else [providers])
+
+            account_query += " GROUP BY p.name, cdp.account_id, cdp.currency ORDER BY p.name, cost DESC"
+
+            logger.info(f"Account query: {account_query}")
+            logger.info(f"Account params: {account_params}")
+            account_rows = await conn.fetch(account_query, *account_params)
+            logger.info(f"Account query returned {len(account_rows)} rows")
+
             # Build response
             total_cost = sum(row['total_cost'] for row in total_rows)
             provider_breakdown = {row['provider']: float(row['total_cost']) for row in total_rows}
@@ -545,6 +568,23 @@ async def get_cost_summary(
                 for provider, data in provider_data.items()
             }
 
+            # Build account_breakdown data
+            account_breakdown = {}
+            for row in account_rows:
+                provider = row['provider']
+                account_id = row['account_id']
+                cost = float(row['cost'])
+
+                if provider not in account_breakdown:
+                    account_breakdown[provider] = {}
+
+                account_breakdown[provider][account_id] = {
+                    'cost': cost,
+                    'currency': row['currency'],
+                    'account_id': account_id,
+                    'provider': provider
+                }
+
             result = CostSummary(
                 total_cost=total_cost,
                 currency=currency,
@@ -552,7 +592,8 @@ async def get_cost_summary(
                 period_end=end_date,
                 provider_breakdown=provider_breakdown,
                 combined_daily_costs=combined_daily_costs,
-                provider_data=provider_data_objects
+                provider_data=provider_data_objects,
+                account_breakdown=account_breakdown
             )
             
             # Cache for 30 minutes
