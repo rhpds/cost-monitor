@@ -301,7 +301,7 @@ class CostDataManager:
         # Use the same data as regular cost data, process for account breakdown
         cost_data = await self.get_cost_data(start_date, end_date, force_refresh)
         if cost_data:
-            return cost_data.get('account_breakdown', {})
+            return getattr(cost_data, 'account_breakdown', {})
         return {}
 
 
