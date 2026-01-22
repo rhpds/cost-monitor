@@ -435,13 +435,29 @@ class AzureCostProvider(CloudCostProvider):
 
             total_rows = 0
             filtered_rows = 0
+            sample_logged = False
 
             for row in csv_reader:
                 total_rows += 1
 
-                # Parse the date field (format: MM/DD/YYYY)
+                # Parse the date field - try multiple field names and formats
+                date_str = row.get('date') or row.get('billingPeriodStartDate') or row.get('servicePeriodStartDate')
+                if not date_str:
+                    continue
+
                 try:
-                    row_date = datetime.strptime(row['date'], '%m/%d/%Y').date()
+                    # Try different date formats
+                    row_date = None
+                    for date_format in ['%m/%d/%Y', '%Y-%m-%d', '%Y%m%d']:
+                        try:
+                            row_date = datetime.strptime(date_str, date_format).date()
+                            break
+                        except ValueError:
+                            continue
+
+                    if row_date is None:
+                        logger.debug(f"Could not parse date: '{date_str}'")
+                        continue
                 except (ValueError, KeyError) as e:
                     logger.debug(f"Could not parse date from row: {e}")
                     continue
@@ -452,9 +468,11 @@ class AzureCostProvider(CloudCostProvider):
 
                 filtered_rows += 1
 
-                # Parse cost amount
+                # Parse cost amount - use costInBillingCurrency to avoid duplication
+                # Analysis shows costInBillingCurrency, costInPricingCurrency, and costInUsd
+                # often contain identical values, causing 3x cost inflation if not careful
                 try:
-                    cost_amount = float(row.get('costInUsd', 0))
+                    cost_amount = float(row.get('costInBillingCurrency', 0))
                 except (ValueError, TypeError):
                     cost_amount = 0.0
 
@@ -467,10 +485,15 @@ class AzureCostProvider(CloudCostProvider):
                 subscription_name = row.get('subscriptionName', '')
                 resource_group = row.get('resourceGroupName', '')
 
+                # Extract currency (use billingCurrency since we use costInBillingCurrency)
+                currency = row.get('billingCurrency', 'USD')
+                if not currency or currency.strip() == '':
+                    currency = 'USD'
+
                 cost_points.append(CostDataPoint(
                     date=row_date,
                     amount=cost_amount,
-                    currency="USD",
+                    currency=currency,
                     service_name=service_name,
                     account_id=subscription_id,
                     region=row.get('location', ''),
@@ -482,6 +505,12 @@ class AzureCostProvider(CloudCostProvider):
                         'meter_name': row.get('meterName', '')
                     }
                 ))
+
+                # Log first few cost points for debugging
+                if not sample_logged and len(cost_points) <= 3:
+                    logger.info(f"Sample cost point {len(cost_points)}: {row_date} - {service_name} - {currency} {cost_amount:.6f}")
+                    if len(cost_points) == 3:
+                        sample_logged = True
 
             logger.info(f"Processed {total_rows} total rows, {filtered_rows} matching date filter, {len(cost_points)} with costs")
             return cost_points
@@ -561,14 +590,21 @@ class AzureCostProvider(CloudCostProvider):
                 daily_summary[point.date] = 0.0
             daily_summary[point.date] += point.amount
 
-        logger.info(f"💰 Azure: Retrieved {len(all_cost_points)} cost points, total ${total_cost:.2f}")
+        # Determine primary currency from data (most common currency)
+        if all_cost_points:
+            currencies = [point.currency for point in all_cost_points]
+            primary_currency = max(set(currencies), key=currencies.count)
+        else:
+            primary_currency = "USD"
+
+        logger.info(f"💰 Azure: Retrieved {len(all_cost_points)} cost points, total {primary_currency} {total_cost:.2f}")
 
         return CostSummary(
             provider=self._get_provider_name(),
             start_date=start_date.date(),
             end_date=end_date.date(),
             total_cost=total_cost,
-            currency="USD",
+            currency=primary_currency,
             data_points=all_cost_points,
             granularity=granularity,
             last_updated=datetime.now()
