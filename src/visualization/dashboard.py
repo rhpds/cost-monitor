@@ -1813,7 +1813,7 @@ class CostMonitorDashboard:
                         html.Td([
                             html.Div(account['account_name'], className="fw-bold")
                         ]),
-                        html.Td(dbc.Badge(account['provider_label'], color="info", className="me-2")),
+                        html.Td(dbc.Badge(account['provider'].upper(), color="info", className="me-2")),
                         html.Td(f"${cost:,.2f}", className="text-end fw-bold"),
                         html.Td([
                             f"{account['percentage']:.1f}%",
@@ -1932,7 +1932,7 @@ class CostMonitorDashboard:
                         writer.writerow({
                             'Account_Name': account_data['account_name'],
                             'Account_ID': account_data['account_id'],
-                            'Provider': account_data['provider_label'],
+                            'Provider': account_data['provider'].upper(),
                             'Cost_USD': f"{account_data['total_cost']:.2f}",
                             'Percentage': f"{account_data['percentage']:.1f}%",
                             'Export_Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
