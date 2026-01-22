@@ -523,11 +523,11 @@ async def get_cost_summary(
                 from src.config.settings import get_config
 
                 config = get_config()
-                if config and hasattr(config, 'clouds') and config.clouds.get('aws', {}).get('enabled', False):
+                if config and config.aws.get('enabled', False):
                     logger.info("Collecting AWS account breakdown separately...")
 
                     # Create AWS provider instance for account-specific data collection
-                    aws_config = config.clouds.aws
+                    aws_config = config.aws
                     aws_provider = AWSCostProvider(aws_config)
 
                     # Authenticate and get account-specific cost data

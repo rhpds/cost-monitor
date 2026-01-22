@@ -22,20 +22,23 @@ data:
       retry_on_timeout: true
       decode_responses: true
     
-    providers:
+    clouds:
       aws:
-        regions: 
+        enabled: true
+        regions:
           - "us-east-1"
           - "us-west-2"
         cost_explorer:
           max_retries: 3
           backoff_factor: 1.5
-      
+
       azure:
+        enabled: true
         max_retries: 3
         subscription_filter: []  # Empty means all accessible subscriptions
-      
+
       gcp:
+        enabled: true
         max_retries: 3
         project_filter: []  # Empty means all accessible projects
     
