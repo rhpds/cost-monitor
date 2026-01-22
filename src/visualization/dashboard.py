@@ -916,7 +916,7 @@ class CostMonitorDashboard:
 
             # Determine if this is a forced refresh (only for specific triggers)
             ctx = dash.callback_context
-            force_refresh = False  # Default to False - use API cache when possible
+            force_refresh = True  # Force refresh to bypass cache for debugging
 
             # Debug logging
             logger.info(f"Callback triggered: interval={n_intervals}")
@@ -926,23 +926,23 @@ class CostMonitorDashboard:
                 prop_id = ctx.triggered[0]['prop_id']
                 logger.info(f"Triggered by: {prop_id}")
 
-                # Handle date range changes (check cache first, only force refresh if needed)
+                # Handle date range changes (force refresh for debugging)
                 if 'date-range-picker' in prop_id:
                     # Use debouncer to prevent rapid successive calls
                     if self.date_debouncer.should_process():
-                        # Try cache first for date range changes to improve performance
-                        force_refresh = False
+                        # Force refresh for debugging cache issues
+                        force_refresh = True
                     else:
                         # Skip this update - too soon after last change
                         raise dash.exceptions.PreventUpdate
 
-                # Handle auto-refresh interval (use cache unless cache is expired)
+                # Handle auto-refresh interval (force refresh for debugging)
                 elif 'interval-component' in prop_id:
-                    force_refresh = False  # Let cache logic decide
+                    force_refresh = True  # Force refresh for debugging
 
-                # Handle initial load (use cache if available)
+                # Handle initial load (force refresh for debugging)
                 elif prop_id == '.':
-                    force_refresh = False  # Let cache logic decide
+                    force_refresh = True  # Force refresh for debugging
 
             # Get real cost data using the data manager
             try:
@@ -1540,12 +1540,12 @@ class CostMonitorDashboard:
         )
         def update_provider_breakdown_chart(cost_data):
             """Update the provider breakdown chart."""
-            # Check cache first for performance optimization
-            cache_key = self.chart_memoizer.get_cache_key(cost_data, {'chart_type': 'provider_breakdown'})
-            cached_figure = self.chart_memoizer.get(cache_key)
-            if cached_figure:
-                logger.debug("Returning cached provider breakdown chart")
-                return cached_figure
+            # Cache disabled for debugging account breakdown issues
+            # cache_key = self.chart_memoizer.get_cache_key(cost_data, {'chart_type': 'provider_breakdown'})
+            # cached_figure = self.chart_memoizer.get(cache_key)
+            # if cached_figure:
+            #     logger.debug("Returning cached provider breakdown chart")
+            #     return cached_figure
 
             # Return loading chart if no data
             if not cost_data or 'provider_breakdown' not in cost_data:
@@ -1589,8 +1589,8 @@ class CostMonitorDashboard:
                 **DashboardTheme.LAYOUT
             )
 
-            # Cache the generated figure for future use
-            self.chart_memoizer.set(cache_key, fig)
+            # Cache disabled for debugging account breakdown issues
+            # self.chart_memoizer.set(cache_key, fig)
             return fig
 
         @callback(

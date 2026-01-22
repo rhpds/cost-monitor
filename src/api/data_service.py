@@ -517,12 +517,14 @@ async def get_cost_summary(
             logger.info(f"Account query returned {len(account_rows)} rows")
 
             # Get AWS account breakdown separately (doesn't interfere with service data)
+            logger.info("🔍 DEBUG: Starting AWS account collection section...")
             aws_account_rows = []
             try:
                 from src.providers.aws import AWSCostProvider
                 from src.config.settings import get_config
 
                 config = get_config()
+                logger.info(f"🔍 DEBUG: AWS config check - enabled: {config.aws.get('enabled', False) if config else 'no config'}")
                 if config and config.aws.get('enabled', False):
                     logger.info("Collecting AWS account breakdown separately...")
 
