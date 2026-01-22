@@ -175,24 +175,41 @@ class AzureCostProvider(CloudCostProvider):
             latest_guid = max(export_dirs.keys(), key=lambda g: export_dirs[g]["last_modified"])
             latest_export = export_dirs[latest_guid]
 
-            # Find manifest file and all CSV data files
-            data_files = {"csv_files": []}
+            # Find manifest file
+            manifest_file = None
             for blob_name in latest_export["blobs"]:
                 if blob_name.endswith("manifest.json"):
-                    data_files["manifest"] = blob_name
-                elif blob_name.endswith(".csv"):
-                    data_files["csv_files"].append(blob_name)
+                    manifest_file = blob_name
+                    break
 
-            if "manifest" not in data_files:
+            if not manifest_file:
                 logger.error(f"No manifest file found in export {latest_guid}")
                 return None
 
-            if not data_files["csv_files"]:
-                logger.error(f"No CSV files found in export {latest_guid}")
+            # Parse manifest to get the definitive list of CSV files
+            manifest = self._parse_manifest(manifest_file)
+            if not manifest or "blobs" not in manifest:
+                logger.error(f"Invalid manifest or missing blobs array in {latest_guid}")
                 return None
 
+            # Extract CSV files from manifest
+            csv_files = []
+            for blob_info in manifest["blobs"]:
+                blob_name = blob_info.get("blobName", "")
+                if blob_name.endswith(".csv"):
+                    csv_files.append({
+                        "name": blob_name,
+                        "byte_count": blob_info.get("byteCount", 0),
+                        "row_count": blob_info.get("dataRowCount", 0)
+                    })
+
+            if not csv_files:
+                logger.error(f"No CSV files found in manifest for {latest_guid}")
+                return None
+
+            logger.info(f"Found {len(csv_files)} CSV files in manifest: {[f['name'].split('/')[-1] for f in csv_files]}")
             logger.info(f"Found latest export for {date_pattern}: {latest_guid} (updated: {latest_export['last_modified']})")
-            return data_files
+            return {"csv_files": csv_files}
 
         except Exception as e:
             logger.error(f"Error finding export files: {e}")
@@ -242,9 +259,12 @@ class AzureCostProvider(CloudCostProvider):
                 blob_data = blob_client.download_blob()
                 csv_content = blob_data.readall().decode('utf-8')
 
-                # Cache the downloaded content
-                self._save_csv_to_cache(blob_name, csv_content)
-                logger.info(f"Cached CSV data for future use: {len(csv_content):,} characters")
+                # Cache the downloaded content (skip caching for current month to allow for updates)
+                if not is_current_month:
+                    self._save_csv_to_cache(blob_name, csv_content)
+                    logger.info(f"Cached CSV data for future use: {len(csv_content):,} characters")
+                else:
+                    logger.info(f"Skipping cache for current month file: {len(csv_content):,} characters")
 
             # Parse CSV data
             csv_reader = csv.DictReader(io.StringIO(csv_content))
@@ -332,22 +352,26 @@ class AzureCostProvider(CloudCostProvider):
             # Find export files for this month
             export_files = self._find_latest_export_files(current_month)
 
-            if export_files and "manifest" in export_files and export_files["csv_files"]:
-                # Parse manifest to get file details
-                manifest = self._parse_manifest(export_files["manifest"])
-
-                # Process all CSV files found in the export
+            if export_files and "csv_files" in export_files:
+                # Process all CSV files found in the manifest
                 month_cost_points = []
                 csv_files_processed = 0
+                total_manifest_rows = sum(f["row_count"] for f in export_files["csv_files"])
 
-                for csv_file in export_files["csv_files"]:
-                    logger.info(f"Processing CSV file: {csv_file}")
-                    csv_points = self._download_and_parse_csv(csv_file)
+                logger.info(f"📊 Azure: Processing export with {len(export_files['csv_files'])} files, {total_manifest_rows:,} total rows from manifest")
+
+                for csv_file_info in export_files["csv_files"]:
+                    csv_file_name = csv_file_info["name"]
+                    expected_rows = csv_file_info["row_count"]
+                    file_size_mb = csv_file_info["byte_count"] / 1024 / 1024
+
+                    logger.info(f"Processing: {csv_file_name.split('/')[-1]} ({file_size_mb:.1f}MB, {expected_rows:,} rows expected)")
+                    csv_points = self._download_and_parse_csv(csv_file_name)
                     month_cost_points.extend(csv_points)
                     csv_files_processed += 1
-                    logger.info(f"📊 Azure: Processed {csv_file} - added {len(csv_points)} cost points")
+                    logger.info(f"📊 Azure: Processed {csv_file_name.split('/')[-1]} - got {len(csv_points):,} cost points (expected {expected_rows:,})")
 
-                logger.info(f"📊 Azure: Processed {csv_files_processed} CSV files with {len(month_cost_points)} total cost points")
+                logger.info(f"📊 Azure: Processed {csv_files_processed} CSV files with {len(month_cost_points):,} total cost points")
 
                 # Filter to the requested date range
                 for point in month_cost_points:
