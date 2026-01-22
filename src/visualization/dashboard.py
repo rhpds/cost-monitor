@@ -241,7 +241,8 @@ class CostDataManager:
                 'period_end': end_date.isoformat(),
                 'provider_breakdown': {},
                 'combined_daily_costs': [],
-                'provider_data': {}
+                'provider_data': {},
+                'account_breakdown': {}
             }
             return DataWrapper(empty_data)
 
