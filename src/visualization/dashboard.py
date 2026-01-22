@@ -1782,20 +1782,8 @@ class CostMonitorDashboard:
                 remaining_count = len(accounts_list) - 20
 
             # Resolve AWS account names for only the accounts that will be displayed
-            # This optimizes performance by avoiding expensive Organizations API calls for accounts not shown
-            try:
-                # Handle event loop in callback thread (similar to main data fetch pattern)
-                import asyncio
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError as e:
-                    # Create new event loop if none exists in this thread
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-                loop.run_until_complete(data_manager._resolve_display_account_names(display_accounts))
-            except Exception as e:
-                logger.warning(f"Failed to resolve account names for display: {e}")
+            # Account data already contains necessary information for display
+            # No need for additional account name resolution
 
             # Create table rows
             table_rows = []
