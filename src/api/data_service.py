@@ -251,7 +251,7 @@ async def store_cost_data(provider_name: str, cost_points: List[ProviderCostData
             (provider_id, date, granularity, cost, currency, service_name, account_id, region)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (provider_id, date, service_name, account_id, region)
-            DO UPDATE SET granularity = EXCLUDED.granularity, cost = EXCLUDED.cost, currency = EXCLUDED.currency
+            DO UPDATE SET granularity = EXCLUDED.granularity, cost = cost_data_points.cost + EXCLUDED.cost, currency = EXCLUDED.currency
         """
 
         for point in cost_points:
