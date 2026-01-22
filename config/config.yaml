@@ -12,7 +12,7 @@ clouds:
     cost_explorer:
       granularity: "DAILY"  # DAILY, MONTHLY
       metrics: ["UNBLENDED_COST"]  # Use only UNBLENDED_COST like AWS Console
-      group_by: ["SERVICE"]
+      group_by: ["SERVICE", "LINKED_ACCOUNT"]
     thresholds:
       warning: 1000.0
       critical: 2000.0
