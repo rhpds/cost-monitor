@@ -24,16 +24,16 @@ A comprehensive Python tool for monitoring costs across AWS, Azure, and GCP with
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/cost-monitor.git
+git clone https://github.com/rhpds/cost-monitor.git
 cd cost-monitor
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Install the package
+# Install the package for development
 pip install -e .
 
-# Note: Flask may be included in requirements.txt for optional web server functionality
+# Note: Uses FastAPI for API backend and Dash for web dashboard
 ```
 
 ### Basic Configuration
@@ -50,16 +50,7 @@ vim config/config.yaml
 
 #### AWS Setup
 
-**Option 1: Automated Setup (Recommended)**
-```bash
-# Run the AWS credentials script - automatically sets up full permissions
-./scripts/create-aws-credentials.sh
-
-# Creates IAM user with Cost Explorer + Organizations permissions
-# Enables account name resolution and all cost monitoring features
-```
-
-**Option 2: Manual Setup**
+**Setup AWS Credentials**
 ```bash
 # Use AWS CLI
 aws configure
@@ -692,7 +683,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ```bash
 # Clone and install in development mode
-git clone https://github.com/your-org/cost-monitor.git
+git clone https://github.com/rhpds/cost-monitor.git
 cd cost-monitor
 pip install -e ".[dev]"
 
@@ -714,9 +705,10 @@ See [CHANGELOG.md](CHANGELOG.md) for version history and breaking changes.
 ## 🆘 Support
 
 - 📖 [Documentation](docs/)
+- 📋 [Comprehensive Project Guide](CLAUDE.md)
 - 📊 [Grafana Integration Guide](docs/GRAFANA_INTEGRATION.md)
-- 🐛 [Issue Tracker](https://github.com/your-org/cost-monitor/issues)
-- 💬 [Discussions](https://github.com/your-org/cost-monitor/discussions)
+- 🐛 [Issue Tracker](https://github.com/rhpds/cost-monitor/issues)
+- 💬 [Project Repository](https://github.com/rhpds/cost-monitor)
 - 📧 Email: support@cost-monitor.com
 
 ## 📄 License

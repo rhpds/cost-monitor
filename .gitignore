@@ -208,3 +208,4 @@ Thumbs.db
 CLAUDE-TEST-HARNESS.md
 test-harness.sh
 .env.local
+venv-*/
