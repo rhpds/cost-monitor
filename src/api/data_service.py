@@ -23,6 +23,12 @@ from ..utils.auth import MultiCloudAuthManager
 from ..config.settings import get_config
 # Import provider implementations to register them
 from .. import providers
+# Import AWS account management utilities
+from .aws_accounts import (
+    get_aws_account_names,
+    get_uncached_account_ids,
+    resolve_aws_accounts_background
+)
 
 # Configure logging
 logging.basicConfig(
@@ -498,15 +504,19 @@ async def get_cost_summary(
             service_rows = await conn.fetch(service_query, *service_params)
             logger.info(f"Service query returned {len(service_rows)} rows")
 
-            # Get account breakdown data (limited to top 20 per provider for performance)
+            # Get account breakdown data with database-driven account name resolution
             account_query = """
                 SELECT provider, account_id, cost, currency, account_name
                 FROM (
                     SELECT p.name as provider, cdp.account_id, SUM(cdp.cost) as cost, cdp.currency,
-                           COALESCE(MAX(cdp.account_name), cdp.account_id) as account_name,
+                           CASE
+                               WHEN p.name = 'aws' AND aa.account_name IS NOT NULL THEN aa.account_name
+                               ELSE COALESCE(MAX(cdp.account_name), cdp.account_id)
+                           END as account_name,
                            ROW_NUMBER() OVER (PARTITION BY p.name ORDER BY SUM(cdp.cost) DESC) as rn
                     FROM cost_data_points cdp
                     JOIN providers p ON cdp.provider_id = p.id
+                    LEFT JOIN aws_accounts aa ON (p.name = 'aws' AND cdp.account_id = aa.account_id)
                     WHERE cdp.date BETWEEN $1 AND $2
                     AND cdp.account_id IS NOT NULL
             """
@@ -528,7 +538,21 @@ async def get_cost_summary(
             account_rows = await conn.fetch(account_query, *account_params)
             logger.info(f"Account query returned {len(account_rows)} rows")
 
-            # Get AWS account breakdown separately (doesn't interfere with service data)
+            # Trigger background AWS account name resolution for uncached accounts
+            aws_account_ids = {row['account_id'] for row in account_rows if row['provider'] == 'aws'}
+            if aws_account_ids:
+                try:
+                    uncached_aws_accounts = await get_uncached_account_ids(db_pool, aws_account_ids, max_age_hours=24)
+                    if uncached_aws_accounts:
+                        logger.info(f"🔵 AWS: Triggering background resolution for {len(uncached_aws_accounts)} uncached accounts")
+                        # Start background task (non-blocking)
+                        asyncio.create_task(resolve_aws_accounts_background(db_pool, auth_manager, uncached_aws_accounts))
+                    else:
+                        logger.info(f"🔵 AWS: All {len(aws_account_ids)} AWS accounts have recent cached names")
+                except Exception as e:
+                    logger.warning(f"🔵 AWS: Failed to check/start background account resolution: {e}")
+
+            # Legacy AWS account collection - can be removed after database approach is stable
             logger.info("🔍 DEBUG: Starting AWS account collection section...")
             aws_account_rows = []
             try:

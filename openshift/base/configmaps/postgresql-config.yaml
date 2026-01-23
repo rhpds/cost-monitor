@@ -86,11 +86,21 @@ data:
     );
     
     -- Insert default providers
-    INSERT INTO providers (name, display_name) VALUES 
+    INSERT INTO providers (name, display_name) VALUES
     ('aws', 'Amazon Web Services'),
     ('azure', 'Microsoft Azure'),
     ('gcp', 'Google Cloud Platform')
     ON CONFLICT (name) DO NOTHING;
+
+    -- Create AWS account names table for persistent account resolution
+    CREATE TABLE IF NOT EXISTS aws_accounts (
+        account_id VARCHAR(12) PRIMARY KEY,
+        account_name VARCHAR(255) NOT NULL,
+        is_management_account BOOLEAN DEFAULT FALSE,
+        last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        status VARCHAR(20) DEFAULT 'active',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
     
     -- Create cost_data_points table with partitioning
     CREATE TABLE IF NOT EXISTS cost_data_points (
@@ -199,7 +209,14 @@ data:
     -- JSON indexes for provider metadata
     CREATE INDEX IF NOT EXISTS idx_cost_data_points_metadata_gin
     ON cost_data_points USING GIN(provider_metadata);
-    
+
+    -- Indexes for aws_accounts table
+    CREATE INDEX IF NOT EXISTS idx_aws_accounts_updated
+    ON aws_accounts(last_updated DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_aws_accounts_status
+    ON aws_accounts(status, last_updated DESC);
+
     EOSQL
     
     echo "Index creation completed."
