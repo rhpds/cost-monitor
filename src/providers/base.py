@@ -34,6 +34,7 @@ class CostDataPoint:
     currency: str
     service_name: Optional[str] = None
     account_id: Optional[str] = None
+    account_name: Optional[str] = None
     region: Optional[str] = None
     resource_id: Optional[str] = None
     tags: Optional[Dict[str, str]] = None

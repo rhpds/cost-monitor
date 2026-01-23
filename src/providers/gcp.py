@@ -667,6 +667,7 @@ class GCPCostProvider(CloudCostProvider):
                     currency=cost_data['currency'],
                     service_name=service_name,
                     account_id=account_id,
+                    account_name=account_id,  # For GCP, use project ID as account name
                     region=cost_data['location'],
                     tags={
                         'project_count': len(cost_data['projects']),

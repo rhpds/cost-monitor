@@ -18,6 +18,7 @@ import os
 import hashlib
 import pickle
 import re
+import time
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional, Union, Tuple
 
@@ -144,60 +145,33 @@ class AzureCostProvider(CloudCostProvider):
 
     def _get_export_containers(self) -> List[str]:
         """Get list of containers that might contain export data."""
-        try:
-            containers = []
-            container_list = self.blob_service_client.list_containers()
+        # Use only the configured container, skip automatic discovery
+        if not self.container_name:
+            logger.error("No container configured")
+            return []
 
-            # Look for containers that might contain our export
-            target_containers = [self.container_name, 'cost-exports', 'exports', 'demo-billing-exports-actual', 'demo-billing-exports-amortized']
-
-            for container in container_list:
-                if (container.name in target_containers or
-                    self.export_name.lower() in container.name.lower() or
-                    'billing' in container.name.lower() or
-                    'export' in container.name.lower()):
-                    containers.append(container.name)
-                    logger.info(f"Found potential export container: {container.name}")
-
-            # If no specific containers found, try the configured container
-            if not containers and self.container_name:
-                containers = [self.container_name]
-                logger.info(f"Using configured container: {self.container_name}")
-
-            return containers
-
-        except Exception as e:
-            logger.error(f"Error listing containers: {e}")
-            return [self.container_name] if self.container_name else []
+        logger.info(f"Using configured container: {self.container_name}")
+        return [self.container_name]
 
     def _find_export_folders_in_container(self, container_name: str, target_month: date) -> List[Dict]:
         """Find export folders in a container that contain data for target month."""
         import re
-        from datetime import datetime as dt, timedelta
+        from datetime import datetime as dt
 
         try:
-            # Generate target date patterns
-            month_start = target_month.replace(day=1)
-            if target_month.month == 12:
-                month_end = date(target_month.year + 1, 1, 31)
-            else:
-                next_month = target_month.replace(month=target_month.month + 1, day=1)
-                month_end = (next_month - timedelta(days=1))
-
-            target_date_pattern = f"{month_start.strftime('%Y%m%d')}-{month_end.strftime('%Y%m%d')}"
+            # Generate target pattern: YYYYMM01 (first day of target month)
+            target_start_pattern = target_month.strftime('%Y%m01')
 
             container_client = self.blob_service_client.get_container_client(container_name)
             blob_list = container_client.list_blobs()
             folder_candidates = []
 
-            logger.info(f"Scanning container {container_name} for exports covering {target_date_pattern}")
+            logger.info(f"Scanning container {container_name} for exports starting with {target_start_pattern}")
 
-            # Look for folders that match date ranges
+            # Look for folders that start with our target month pattern
             processed_paths = set()
             for blob in blob_list:
                 blob_path = blob.name
-
-                # Skip if we've already processed this folder path
                 path_parts = blob_path.split('/')
                 if len(path_parts) < 3:
                     continue
@@ -209,20 +183,20 @@ class AzureCostProvider(CloudCostProvider):
 
                 # Look for our export name and date range patterns
                 if (self.export_name in blob_path or 'billing' in blob_path.lower() or 'export' in blob_path.lower()):
-                    # Look for date range patterns like YYYYMMDD-YYYYMMDD in path parts
+                    # Look for date range patterns like YYYYMMDD-YYYYMMDD that start with our target
                     for part in path_parts:
                         date_range_match = re.match(r'(\d{8})-(\d{8})', part)
                         if date_range_match:
-                            try:
-                                folder_start_str = date_range_match.group(1)
-                                folder_end_str = date_range_match.group(2)
+                            folder_start_str = date_range_match.group(1)
+                            folder_end_str = date_range_match.group(2)
 
-                                # Parse folder date range
-                                folder_start = dt.strptime(folder_start_str, '%Y%m%d').date()
-                                folder_end = dt.strptime(folder_end_str, '%Y%m%d').date()
+                            # Check if this folder starts with our target month pattern
+                            if folder_start_str.startswith(target_start_pattern):
+                                try:
+                                    # Parse folder date range for metadata
+                                    folder_start = dt.strptime(folder_start_str, '%Y%m%d').date()
+                                    folder_end = dt.strptime(folder_end_str, '%Y%m%d').date()
 
-                                # Check if this folder's date range overlaps with our target month
-                                if folder_start <= month_end and folder_end >= month_start:
                                     # Build folder path up to the date range part
                                     folder_path_parts = []
                                     for i, path_part in enumerate(path_parts):
@@ -231,34 +205,30 @@ class AzureCostProvider(CloudCostProvider):
                                             break
 
                                     if len(folder_path_parts) >= 2:
-                                        # Get the full folder path including date range
                                         folder_path = '/'.join(folder_path_parts)
-
-                                        overlap_days = min(folder_end, month_end) - max(folder_start, month_start) + timedelta(days=1)
 
                                         folder_candidates.append({
                                             'path': folder_path,
                                             'container': container_name,
                                             'start_date': folder_start,
                                             'end_date': folder_end,
-                                            'overlap_days': overlap_days.days,
                                             'last_modified': blob.last_modified
                                         })
 
-                                        logger.debug(f"Found export folder: {folder_path} "
-                                                   f"(covers {folder_start} to {folder_end}, overlap: {overlap_days.days} days)")
+                                        logger.info(f"Found exact match export folder: {folder_path} "
+                                                   f"(covers {folder_start} to {folder_end})")
                                         break
 
-                            except ValueError as e:
-                                logger.debug(f"Could not parse date range from {part}: {e}")
-                                continue
+                                except ValueError as e:
+                                    logger.debug(f"Could not parse date range from {part}: {e}")
+                                    continue
 
-            # Sort candidates by overlap (most overlap first), then by recency
-            folder_candidates.sort(key=lambda x: (-x['overlap_days'], -x['last_modified'].timestamp() if x['last_modified'] else 0))
+            # Sort candidates by recency (most recent first)
+            folder_candidates.sort(key=lambda x: -x['last_modified'].timestamp() if x['last_modified'] else 0)
 
-            logger.info(f"Found {len(folder_candidates)} export folders in {container_name} covering {target_date_pattern}")
-            for candidate in folder_candidates[:5]:  # Log top 5
-                logger.info(f"  - {candidate['path']} (overlap: {candidate['overlap_days']} days)")
+            logger.info(f"Found {len(folder_candidates)} export folders in {container_name} for {target_month.strftime('%Y-%m')}")
+            for candidate in folder_candidates:
+                logger.info(f"  - {candidate['path']}")
 
             return folder_candidates
 
@@ -287,11 +257,10 @@ class AzureCostProvider(CloudCostProvider):
                 logger.warning(f"No export folders found for {target_month}")
                 return None
 
-            # Sort by overlap (most days) and recency - take the best one
+            # Take the first (most recent) candidate
             best_export = all_export_folders[0]
             logger.info(f"Selected best export: {best_export['path']} from container {best_export['container']} "
-                       f"(covers {best_export['start_date']} to {best_export['end_date']}, "
-                       f"overlap: {best_export['overlap_days']} days)")
+                       f"(covers {best_export['start_date']} to {best_export['end_date']})")
 
             # Now find the latest GUID directory within this export folder
             container_client = self.blob_service_client.get_container_client(best_export['container'])
@@ -398,41 +367,157 @@ class AzureCostProvider(CloudCostProvider):
             return None
 
     def _download_and_parse_csv(self, blob_name: str, container_name: str = None, target_date: Optional[date] = None) -> List[CostDataPoint]:
-        """Download and parse CSV data from blob storage with caching."""
+        """Download and parse CSV data from blob storage with caching and download deduplication."""
         try:
-            # Check if this is current month data (files still growing, don't use cache)
+            # Check if this is current month data (files still growing, use short-lived cache)
             current_month = date.today().replace(day=1)
             is_current_month = blob_name and current_month.strftime('%Y%m%d') in blob_name
 
-            # Check if CSV is already cached (skip cache for current month)
-            csv_content = None
-            if not is_current_month:
-                csv_content = self._load_cached_csv(blob_name)
+            # Create a lock key for this specific file to prevent concurrent downloads
+            lock_key = f"azure_download_lock:{hashlib.md5(blob_name.encode()).hexdigest()}"
+
+            # Check if CSV is already cached
+            csv_content = self._load_cached_csv(blob_name)
+
+            # For current month, check if cached version is recent (within 1 hour)
+            if csv_content and is_current_month:
+                cache_path = self._get_csv_cache_path(blob_name)
+                try:
+                    cache_age_seconds = time.time() - os.path.getmtime(cache_path)
+                    if cache_age_seconds > 3600:  # 1 hour
+                        logger.info(f"Current month cache expired ({cache_age_seconds/3600:.1f}h old), will check for updates: {blob_name}")
+                        csv_content = None  # Force refresh check
+                    else:
+                        logger.info(f"Using recent current month cache ({cache_age_seconds/60:.1f}m old): {blob_name}")
+                except (OSError, IOError) as e:
+                    logger.warning(f"Failed to check cache age: {e}")
+                    csv_content = None  # Force refresh on error
 
             if csv_content:
                 logger.info(f"Using cached CSV data: {blob_name}")
             else:
-                if is_current_month:
-                    logger.info(f"Current month detected - downloading fresh data: {blob_name}")
-                else:
-                    logger.info(f"No cache found - downloading data: {blob_name}")
-                # Download blob content
-                container = container_name or self.container_name
-                blob_client = self.blob_service_client.get_blob_client(
-                    container=container,
-                    blob=blob_name
-                )
+                # Try to acquire download lock to prevent concurrent downloads
+                lock_acquired = False
+                redis_client = None
+                try:
+                    import redis
+                    redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'), decode_responses=True)
 
-                logger.info(f"Downloading export data: {blob_name}")
-                blob_data = blob_client.download_blob()
-                csv_content = blob_data.readall().decode('utf-8')
+                    # Try to acquire lock for 10 minutes with 30 second timeout for lock acquisition
+                    lock_acquired = redis_client.set(lock_key, "downloading", ex=600, nx=True)
 
-                # Cache the downloaded content (skip caching for current month to allow for updates)
-                if not is_current_month:
-                    self._save_csv_to_cache(blob_name, csv_content)
-                    logger.info(f"Cached CSV data for future use: {len(csv_content):,} characters")
-                else:
-                    logger.info(f"Skipping cache for current month file: {len(csv_content):,} characters")
+                    if not lock_acquired:
+                        # Another process is downloading, wait and check cache again
+                        logger.info(f"Another process downloading {blob_name}, waiting...")
+                        for attempt in range(6):  # Wait up to 30 seconds
+                            time.sleep(5)
+                            csv_content = self._load_cached_csv(blob_name)
+                            if csv_content:
+                                logger.info(f"Using cached CSV data after wait: {blob_name}")
+                                break
+
+                        if not csv_content:
+                            logger.warning(f"Cache still empty after 30s wait, proceeding with download: {blob_name}")
+
+                    if not csv_content:
+                        # Proceed with download (either we got the lock or fallback after wait)
+                        if is_current_month:
+                            logger.info(f"Current month detected - checking for updates: {blob_name}")
+                        else:
+                            logger.info(f"No cache found - downloading data: {blob_name}")
+
+                        container = container_name or self.container_name
+                        blob_client = self.blob_service_client.get_blob_client(
+                            container=container,
+                            blob=blob_name
+                        )
+
+                        # For current month, use conditional download if we have cached ETag
+                        etag_cache_path = self._get_csv_cache_path(blob_name) + ".etag"
+                        cached_etag = None
+                        if is_current_month and os.path.exists(etag_cache_path):
+                            try:
+                                with open(etag_cache_path, 'r') as f:
+                                    cached_etag = f.read().strip()
+                                logger.info(f"Found cached ETag for conditional download: {cached_etag}")
+                            except Exception as e:
+                                logger.warning(f"Failed to read cached ETag: {e}")
+
+                        logger.info(f"Downloading export data: {blob_name}")
+
+                        try:
+                            if cached_etag and is_current_month:
+                                # Get blob properties to check ETag
+                                blob_properties = blob_client.get_blob_properties()
+                                current_etag = blob_properties.etag
+
+                                if current_etag == cached_etag:
+                                    # File hasn't changed, use cached version
+                                    csv_content = self._load_cached_csv(blob_name)
+                                    logger.info(f"File unchanged (ETag match), using cached data: {blob_name}")
+                                else:
+                                    # File changed, download new version
+                                    blob_data = blob_client.download_blob()
+                                    csv_content = blob_data.readall().decode('utf-8')
+                                    logger.info(f"File changed (ETag: {cached_etag} -> {current_etag}), downloaded fresh: {blob_name}")
+
+                                    # Save new ETag
+                                    with open(etag_cache_path, 'w') as f:
+                                        f.write(current_etag)
+                            else:
+                                # No cached ETag or not current month, download normally
+                                blob_data = blob_client.download_blob()
+                                csv_content = blob_data.readall().decode('utf-8')
+
+                                # Save ETag for future conditional downloads (current month only)
+                                if is_current_month:
+                                    try:
+                                        blob_properties = blob_client.get_blob_properties()
+                                        with open(etag_cache_path, 'w') as f:
+                                            f.write(blob_properties.etag)
+                                        logger.info(f"Saved ETag for future conditional downloads: {blob_properties.etag}")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to save ETag: {e}")
+
+                        except Exception as download_error:
+                            logger.error(f"Download failed: {download_error}")
+                            # Try to use cached version as fallback
+                            csv_content = self._load_cached_csv(blob_name)
+                            if csv_content:
+                                logger.info(f"Using cached data as fallback after download error: {blob_name}")
+                            else:
+                                raise download_error
+
+                        # Cache the downloaded content
+                        if csv_content:
+                            self._save_csv_to_cache(blob_name, csv_content)
+                            if is_current_month:
+                                logger.info(f"Cached current month data (1h TTL): {len(csv_content):,} characters")
+                            else:
+                                logger.info(f"Cached CSV data for future use: {len(csv_content):,} characters")
+
+                    # Release the download lock if we acquired it
+                    if lock_acquired and redis_client:
+                        try:
+                            redis_client.delete(lock_key)
+                            logger.debug(f"Released download lock: {lock_key}")
+                        except Exception as e:
+                            logger.warning(f"Failed to release lock: {e}")
+
+                except (ImportError, redis.RedisError) as e:
+                    logger.warning(f"Redis lock failed, proceeding without lock: {e}")
+                    # Continue without locking as fallback - still better than infinite loops
+                    if not csv_content:
+                        container = container_name or self.container_name
+                        blob_client = self.blob_service_client.get_blob_client(
+                            container=container,
+                            blob=blob_name
+                        )
+                        logger.info(f"Downloading export data (no lock): {blob_name}")
+                        blob_data = blob_client.download_blob()
+                        csv_content = blob_data.readall().decode('utf-8')
+                        self._save_csv_to_cache(blob_name, csv_content)
+                        logger.info(f"Cached CSV data: {len(csv_content):,} characters")
 
             # Parse CSV data
             csv_reader = csv.DictReader(io.StringIO(csv_content))
@@ -505,12 +590,19 @@ class AzureCostProvider(CloudCostProvider):
                 if not currency or currency.strip() == '':
                     currency = 'USD'
 
+                # Format account name as "Subscription Name (Subscription ID)"
+                if subscription_name and subscription_name.strip():
+                    formatted_account_name = f"{subscription_name} ({subscription_id})"
+                else:
+                    formatted_account_name = f"Azure Subscription ({subscription_id})"
+
                 cost_points.append(CostDataPoint(
                     date=row_date,
                     amount=cost_amount,
                     currency=currency,
                     service_name=service_name,
                     account_id=subscription_id,
+                    account_name=formatted_account_name,
                     region=row.get('location', ''),
                     resource_id=row.get('resourceGroupName', ''),
                     tags={

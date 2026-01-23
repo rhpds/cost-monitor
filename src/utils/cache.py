@@ -280,6 +280,141 @@ class DiskCache(CacheBackend):
             return {}
 
 
+class RedisCache(CacheBackend):
+    """Redis-based cache backend with TTL support."""
+
+    def __init__(self, redis_url: str = None,
+                 default_ttl: int = 1800, prefix: str = "cost-monitor:"):
+        """
+        Initialize Redis cache.
+
+        Args:
+            redis_url: Redis connection URL (defaults to REDIS_URL env var)
+            default_ttl: Default TTL in seconds
+            prefix: Key prefix to namespace cache entries
+        """
+        if redis_url is None:
+            redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+        self.redis_url = redis_url
+        self.default_ttl = default_ttl
+        self.prefix = prefix
+        self._client = None
+
+        try:
+            import redis
+            self.redis = redis
+            self._client = redis.from_url(redis_url, decode_responses=True)
+            # Test connection
+            self._client.ping()
+            logger.info(f"Redis cache initialized: {redis_url} with prefix '{prefix}'")
+        except ImportError:
+            raise ImportError("redis is required for Redis caching. Install with: pip install redis")
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            raise
+
+    def _get_key(self, key: str) -> str:
+        """Get prefixed cache key."""
+        return f"{self.prefix}{key}"
+
+    def get(self, key: str) -> Optional[Any]:
+        """Get a value from the cache."""
+        try:
+            prefixed_key = self._get_key(key)
+            cached = self._client.get(prefixed_key)
+            if cached:
+                return json.loads(cached)
+            return None
+        except Exception as e:
+            logger.warning(f"Redis get failed for key '{key}': {e}")
+            return None
+
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+        """Set a value in the cache with optional TTL."""
+        try:
+            prefixed_key = self._get_key(key)
+            ttl = ttl or self.default_ttl
+            serialized = json.dumps(value, default=str)
+
+            if ttl > 0:
+                self._client.setex(prefixed_key, ttl, serialized)
+            else:
+                self._client.set(prefixed_key, serialized)
+
+            logger.debug(f"Redis cached key '{key}' with TTL {ttl}s")
+            return True
+        except Exception as e:
+            logger.warning(f"Redis set failed for key '{key}': {e}")
+            return False
+
+    def delete(self, key: str) -> bool:
+        """Delete a key from the cache."""
+        try:
+            prefixed_key = self._get_key(key)
+            result = self._client.delete(prefixed_key)
+            return result > 0
+        except Exception as e:
+            logger.warning(f"Redis delete failed for key '{key}': {e}")
+            return False
+
+    def clear(self) -> bool:
+        """Clear all entries from the cache with our prefix."""
+        try:
+            # Find all keys with our prefix
+            pattern = f"{self.prefix}*"
+            keys = self._client.keys(pattern)
+            if keys:
+                self._client.delete(*keys)
+                logger.info(f"Cleared {len(keys)} keys from Redis cache")
+            return True
+        except Exception as e:
+            logger.warning(f"Redis clear failed: {e}")
+            return False
+
+    def size(self) -> int:
+        """Get the current size of the cache."""
+        try:
+            pattern = f"{self.prefix}*"
+            keys = self._client.keys(pattern)
+            return len(keys)
+        except Exception as e:
+            logger.warning(f"Redis size check failed: {e}")
+            return 0
+
+    def keys(self) -> list:
+        """Get all keys in the cache."""
+        try:
+            pattern = f"{self.prefix}*"
+            prefixed_keys = self._client.keys(pattern)
+            # Remove prefix from keys for consistent interface
+            return [key[len(self.prefix):] for key in prefixed_keys]
+        except Exception as e:
+            logger.warning(f"Redis keys listing failed: {e}")
+            return []
+
+    def info(self) -> Dict[str, Any]:
+        """Get cache backend information."""
+        try:
+            redis_info = self._client.info('memory')
+            return {
+                'type': 'redis',
+                'redis_url': self.redis_url,
+                'prefix': self.prefix,
+                'default_ttl': self.default_ttl,
+                'memory_usage': redis_info.get('used_memory_human', 'unknown'),
+                'keys_count': self.size(),
+                'connected': True
+            }
+        except Exception as e:
+            return {
+                'type': 'redis',
+                'redis_url': self.redis_url,
+                'connected': False,
+                'error': str(e)
+            }
+
+
 class CacheManager:
     """High-level cache manager with multiple backends and strategies."""
 
@@ -310,6 +445,15 @@ class CacheManager:
                 directory=cache_dir,
                 max_size=max_size,
                 default_ttl=default_ttl
+            )
+        elif cache_type == 'redis':
+            redis_url = config.get('redis_url')  # Use None if not specified, will use env var
+            prefix = config.get('prefix', 'cost-monitor:cache:')
+
+            self._backend = RedisCache(
+                redis_url=redis_url,
+                default_ttl=default_ttl,
+                prefix=prefix
             )
         else:
             max_entries = config.get('max_entries', 1000)

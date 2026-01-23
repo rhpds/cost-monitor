@@ -788,12 +788,22 @@ class AWSCostProvider(CloudCostProvider):
         for (date_val, service_name, account_id), cost_data in aggregated_costs.items():
             amount = cost_data['amount']
             if amount > 0:  # Only include non-zero costs
+                # Get account name from cache and format as "Name (Account ID)"
+                raw_account_name = self.account_names_cache.get(account_id, account_id) if account_id else account_id
+                if raw_account_name and raw_account_name != account_id:
+                    # We have a proper account name, format as "Name (Account ID)"
+                    account_name = f"{raw_account_name} ({account_id})"
+                else:
+                    # Fallback to generic format
+                    account_name = f"AWS Account ({account_id})"
+
                 data_points.append(CostDataPoint(
                     date=date_val,
                     amount=amount,
                     currency=cost_data['currency'],
                     service_name=service_name,
                     account_id=account_id,
+                    account_name=account_name,
                     region=None
                 ))
                 total_cost += amount

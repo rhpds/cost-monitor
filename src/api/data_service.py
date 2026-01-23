@@ -113,6 +113,7 @@ class CostSummary(BaseModel):
     combined_daily_costs: List[DailyCostSummary]
     provider_data: Dict[str, ProviderData]
     account_breakdown: Dict[str, Dict[str, Any]]
+    data_collection_status: str = "complete"  # "in_progress" | "complete"
 
 class CostDataPoint(BaseModel):
     provider: str
@@ -249,10 +250,10 @@ async def store_cost_data(provider_name: str, cost_points: List[ProviderCostData
         # Insert cost data points
         insert_query = """
             INSERT INTO cost_data_points
-            (provider_id, date, granularity, cost, currency, service_name, account_id, region)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            (provider_id, date, granularity, cost, currency, service_name, account_id, account_name, region, provider_metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (provider_id, date, service_name, account_id, region)
-            DO UPDATE SET granularity = EXCLUDED.granularity, cost = cost_data_points.cost + EXCLUDED.cost, currency = EXCLUDED.currency
+            DO UPDATE SET granularity = EXCLUDED.granularity, cost = cost_data_points.cost + EXCLUDED.cost, currency = EXCLUDED.currency, account_name = EXCLUDED.account_name, provider_metadata = EXCLUDED.provider_metadata
         """
 
         for point in cost_points:
@@ -266,7 +267,9 @@ async def store_cost_data(provider_name: str, cost_points: List[ProviderCostData
                 point.currency,
                 point.service_name,
                 point.account_id,
-                point.region
+                getattr(point, 'account_name', None),
+                point.region,
+                getattr(point, 'provider_metadata', None)
             )
 
         logger.info(f"Stored {len(cost_points)} data points for {provider_name}")
@@ -428,6 +431,14 @@ async def get_cost_summary(
             else:
                 logger.info("No missing data found")
 
+        # After data collection, check if the requested date range has complete coverage
+        # Re-check for any remaining missing data for this specific date range
+        final_existing_data = await check_existing_data(start_date, end_date)
+        final_missing_ranges = await get_missing_date_ranges(start_date, end_date, final_existing_data, providers_to_check)
+
+        # Determine collection status based on whether this specific date range is complete
+        data_collection_complete = not bool(final_missing_ranges)
+
         # Query database for complete data
         async with db_pool.acquire() as conn:
             # Get total cost summary
@@ -489,9 +500,10 @@ async def get_cost_summary(
 
             # Get account breakdown data (limited to top 20 per provider for performance)
             account_query = """
-                SELECT provider, account_id, cost, currency
+                SELECT provider, account_id, cost, currency, account_name
                 FROM (
                     SELECT p.name as provider, cdp.account_id, SUM(cdp.cost) as cost, cdp.currency,
+                           COALESCE(MAX(cdp.account_name), cdp.account_id) as account_name,
                            ROW_NUMBER() OVER (PARTITION BY p.name ORDER BY SUM(cdp.cost) DESC) as rn
                     FROM cost_data_points cdp
                     JOIN providers p ON cdp.provider_id = p.id
@@ -559,9 +571,19 @@ async def get_cost_summary(
                             aws_account_items = sorted(aws_accounts.items(), key=lambda x: x[1], reverse=True)[:20]
 
                             for account_id, cost in aws_account_items:
+                                # Get account name from AWS provider cache and format properly
+                                raw_account_name = aws_provider.account_names_cache.get(account_id, account_id) if account_id else account_id
+                                if raw_account_name and raw_account_name != account_id:
+                                    # We have a proper account name, format as "Name (Account ID)"
+                                    account_name = f"{raw_account_name} ({account_id})"
+                                else:
+                                    # Fallback to generic format
+                                    account_name = f"AWS Account ({account_id})"
+
                                 aws_account_rows.append({
                                     'provider': 'aws',
                                     'account_id': account_id,
+                                    'account_name': account_name,  # Add formatted account name
                                     'cost': cost,
                                     'currency': 'USD'
                                 })
@@ -576,8 +598,80 @@ async def get_cost_summary(
                 logger.warning(f"AWS account collection failed: {e}")
                 # Don't fail the whole request, just continue without AWS accounts
 
-            # Combine regular account data with AWS account data
-            all_account_rows = list(account_rows) + aws_account_rows
+            # Get GCP account breakdown separately (doesn't interfere with service data)
+            logger.info("🔍 DEBUG: Starting GCP account collection section...")
+            gcp_account_rows = []
+            try:
+                from src.providers.gcp import GCPCostProvider
+                from src.config.settings import get_config
+
+                config = get_config()
+                logger.info(f"🔍 DEBUG: GCP config check - enabled: {config.gcp.get('enabled', False) if config else 'no config'}")
+                if config and config.gcp.get('enabled', False):
+                    logger.info("Collecting GCP account breakdown separately...")
+
+                    # Create GCP provider instance for project-specific data collection
+                    gcp_config = config.gcp
+                    gcp_provider = GCPCostProvider(gcp_config)
+
+                    # Authenticate and get project-specific cost data
+                    if await gcp_provider.authenticate():
+                        logger.info("GCP authenticated for account collection")
+
+                        # Get cost data grouped by PROJECT only (for account breakdown)
+                        gcp_account_data = await gcp_provider.get_cost_data(
+                            start_date=start_date,
+                            end_date=end_date,
+                            group_by=['PROJECT']
+                        )
+
+                        # Process GCP project data into our format
+                        if gcp_account_data and gcp_account_data.data_points:
+                            logger.info(f"GCP project data collected: {len(gcp_account_data.data_points)} data points")
+
+                            # Aggregate by project for account breakdown
+                            project_costs = {}
+                            for point in gcp_account_data.data_points:
+                                project_id = point.account_id or 'unknown-project'
+                                cost = float(point.amount)
+                                currency = point.currency or 'USD'
+
+                                if project_id not in project_costs:
+                                    project_costs[project_id] = {'cost': 0.0, 'currency': currency}
+                                project_costs[project_id]['cost'] += cost
+
+                            # Convert to account rows format and limit to top 20
+                            project_list = []
+                            for project_id, data in project_costs.items():
+                                cost = data['cost']
+                                if cost > 0:  # Only include non-zero costs
+                                    project_list.append({
+                                        'provider': 'gcp',
+                                        'account_id': project_id,
+                                        'cost': cost,
+                                        'currency': data['currency']
+                                    })
+
+                            # Sort by cost (highest first) and take top 20
+                            project_list.sort(key=lambda x: x['cost'], reverse=True)
+                            gcp_account_rows = project_list[:20]
+
+                            logger.info(f"GCP account breakdown: {len(gcp_account_rows)} projects, total: ${sum(row['cost'] for row in gcp_account_rows):,.2f}")
+                        else:
+                            logger.info("No GCP project data found")
+                    else:
+                        logger.warning("GCP authentication failed for account collection")
+
+            except Exception as e:
+                logger.warning(f"GCP account collection failed: {e}")
+                # Don't fail the whole request, just continue without GCP projects
+
+            # Replace AWS and GCP entries from regular query with separate collections
+            filtered_account_rows = [row for row in account_rows if row['provider'] not in ['aws', 'gcp']]
+
+            # Add the separate AWS and GCP account data
+            all_account_rows = filtered_account_rows + aws_account_rows + gcp_account_rows
+
             logger.info(f"Combined account data: {len(all_account_rows)} total accounts")
 
             # Build response
@@ -639,22 +733,53 @@ async def get_cost_summary(
                 for provider, data in provider_data.items()
             }
 
-            # Build account_breakdown data
+            # Build account_breakdown data with account name resolution
             account_breakdown = {}
+
+            # Group accounts by provider using account names from database
+            accounts_by_provider = {}
             for row in all_account_rows:
                 provider = row['provider']
                 account_id = row['account_id']
                 cost = float(row['cost'])
+                # Use account_name from database, fallback to account_id if none
+                account_name = row.get('account_name') or account_id
 
-                if provider not in account_breakdown:
-                    account_breakdown[provider] = {}
-
-                account_breakdown[provider][account_id] = {
-                    'cost': cost,
-                    'currency': row['currency'],
+                if provider not in accounts_by_provider:
+                    accounts_by_provider[provider] = []
+                accounts_by_provider[provider].append({
                     'account_id': account_id,
-                    'provider': provider
-                }
+                    'account_name': account_name,
+                    'cost': cost,
+                    'currency': row['currency']
+                })
+
+            # Build account breakdown using account names from database
+            for provider, accounts in accounts_by_provider.items():
+                account_breakdown[provider] = {}
+                logger.info(f"🏦 {provider.upper()}: Building account breakdown for {len(accounts)} accounts")
+
+                # Build account breakdown with names from database
+                for account in accounts:
+                    account_id = account['account_id']
+                    account_name = account['account_name']
+
+                    account_breakdown[provider][account_id] = {
+                        'cost': account['cost'],
+                        'currency': account['currency'],
+                        'account_id': account_id,
+                        'account_name': account_name,
+                        'provider': provider
+                    }
+
+            # Determine final data collection status based on whether the requested date range is complete
+            collection_status = "complete" if data_collection_complete else "in_progress"
+
+            # Log the status for debugging
+            if not data_collection_complete:
+                logger.info(f"📊 Data collection status: IN PROGRESS - missing ranges still exist: {final_missing_ranges}")
+            else:
+                logger.info(f"📊 Data collection status: COMPLETE - all data for {start_date} to {end_date} is available")
 
             result = CostSummary(
                 total_cost=total_cost,
@@ -664,7 +789,8 @@ async def get_cost_summary(
                 provider_breakdown=provider_breakdown,
                 combined_daily_costs=combined_daily_costs,
                 provider_data=provider_data_objects,
-                account_breakdown=account_breakdown
+                account_breakdown=account_breakdown,
+                data_collection_status=collection_status
             )
             
             # Cache for 30 minutes
