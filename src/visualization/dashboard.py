@@ -190,17 +190,35 @@ class DashboardTheme:
 
 
 class CostDataManager:
-    """Manages cost data retrieval from the data service API."""
+    """Manages cost data retrieval from the data service API with Redis caching."""
 
     def __init__(self, config=None):
         self.data_service_url = os.getenv('DATA_SERVICE_URL', 'http://cost-data-service:8000')
-        logger.info(f"CostDataManager initialized for API mode, using data service at: {self.data_service_url}")
+        self._dashboard_cache = None
+        self._last_fetch_times = {}  # Track last fetch times per cache key
 
+        # Initialize Redis cache for dashboard-level caching
+        try:
+            from src.utils.cache import RedisCache
+            self._dashboard_cache = RedisCache(
+                default_ttl=60,  # Short TTL for dashboard cache (1 minute)
+                prefix='cost-monitor:dashboard:'
+            )
+            logger.info(f"Dashboard Redis cache initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize dashboard Redis cache: {e}")
+            self._dashboard_cache = None
+
+        logger.info(f"CostDataManager initialized for API mode, using data service at: {self.data_service_url}")
 
     async def initialize(self):
         """Initialize the data manager for API mode."""
         logger.info("Data manager initialized for API mode")
         return True
+
+    def _get_cache_key(self, start_date: date, end_date: date, force_refresh: bool = False) -> str:
+        """Generate cache key for the request."""
+        return f"cost_data:{start_date}:{end_date}:{force_refresh}"
 
 
     async def get_cost_data(
@@ -209,8 +227,28 @@ class CostDataManager:
         end_date: date,
         force_refresh: bool = False
     ) -> Optional[dict]:
-        """Get cost data from data service API."""
+        """Get cost data from data service API with Redis caching."""
+        cache_key = self._get_cache_key(start_date, end_date, force_refresh)
+        current_time = time.time()
+
+        # Check dashboard Redis cache first (unless force_refresh)
+        if not force_refresh and self._dashboard_cache:
+            try:
+                cached_data = self._dashboard_cache.get(cache_key)
+                if cached_data:
+                    logger.info(f"Dashboard cache HIT for {start_date} to {end_date}")
+                    return cached_data
+            except Exception as e:
+                logger.warning(f"Dashboard cache get failed: {e}")
+
+        # Check if we've fetched this data very recently (prevent rapid duplicate calls)
+        last_fetch = self._last_fetch_times.get(cache_key, 0)
+        if current_time - last_fetch < 5:  # 5 second cooldown
+            logger.warning(f"Rate limiting API call for {start_date} to {end_date} (last fetch {current_time - last_fetch:.1f}s ago)")
+            return None
+
         logger.info(f"Fetching cost data from API for {start_date} to {end_date} (force_refresh={force_refresh})")
+        self._last_fetch_times[cache_key] = current_time
 
         try:
             # Call data service API - now returns data in dashboard format
@@ -222,11 +260,28 @@ class CostDataManager:
                 'force_refresh': force_refresh  # Pass force_refresh to API
             }
 
-            response = requests.get(url, params=params, timeout=30)
+            # Calculate appropriate timeout based on date range
+            date_range_days = (end_date - start_date).days + 1 if start_date and end_date else 1
+            if date_range_days > 7:
+                # Long operations need more time for account collection
+                api_timeout = min(600, 60 + (date_range_days * 5))  # Max 10 minutes, ~5 seconds per day
+                logger.info(f"📊 Using extended timeout {api_timeout}s for {date_range_days}-day range")
+            else:
+                api_timeout = 30  # Standard timeout for short ranges
+
+            response = requests.get(url, params=params, timeout=api_timeout)
             response.raise_for_status()
 
             # API now returns data in the exact format dashboard expects
             api_data = response.json()
+
+            # Cache the API response in Redis for dashboard-level caching
+            if self._dashboard_cache:
+                try:
+                    self._dashboard_cache.set(cache_key, api_data)
+                    logger.debug(f"Cached dashboard data for {start_date} to {end_date}")
+                except Exception as e:
+                    logger.warning(f"Failed to cache dashboard data: {e}")
 
             logger.info(f"Retrieved cost data from API, total: ${api_data['total_cost']:.2f}")
             return DataWrapper(api_data)
@@ -269,7 +324,16 @@ class CostDataManager:
                 'providers': [provider]
             }
 
-            response = requests.get(url, params=params, timeout=30)
+            # Calculate appropriate timeout based on date range
+            date_range_days = (end_date - start_date).days + 1 if start_date and end_date else 1
+            if date_range_days > 7:
+                # Long operations need more time for data collection
+                api_timeout = min(600, 60 + (date_range_days * 5))  # Max 10 minutes, ~5 seconds per day
+                logger.info(f"📊 Service breakdown using extended timeout {api_timeout}s for {date_range_days}-day range")
+            else:
+                api_timeout = 30  # Standard timeout for short ranges
+
+            response = requests.get(url, params=params, timeout=api_timeout)
             response.raise_for_status()
 
             detailed_data = response.json()
@@ -394,6 +458,104 @@ class CostMonitorDashboard:
                     0% { transform: rotate(0deg); }
                     100% { transform: rotate(360deg); }
                 }
+
+                /* Make loading spinners more visible */
+                ._dash-loading {
+                    margin: 2rem auto !important;
+                    width: 60px !important;
+                    height: 60px !important;
+                }
+
+                /* Hide chart content completely when loading */
+                *[data-dash-is-loading="true"] {
+                    visibility: hidden !important;
+                }
+
+                /* Show loading message for all loading components */
+                *[data-dash-is-loading="true"]::before {
+                    content: "📊 Loading chart data...";
+                    visibility: visible !important;
+                    display: flex !important;
+                    justify-content: center;
+                    align-items: center;
+                    text-align: center;
+                    font-size: 1.4rem;
+                    color: #0d6efd;
+                    font-weight: bold;
+                    padding: 4rem 2rem;
+                    background-color: rgba(13, 110, 253, 0.08);
+                    border-radius: 12px;
+                    margin: 1rem 0;
+                    border: 2px solid rgba(13, 110, 253, 0.2);
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    z-index: 1000;
+                }
+
+                /* Specific styling for chart containers */
+                .dash-graph[data-dash-is-loading="true"]::before {
+                    content: "📊 Loading chart data...";
+                    height: 400px;
+                }
+
+                /* Account breakdown loading */
+                #account-breakdown-content[data-dash-is-loading="true"]::before {
+                    content: "📊 Loading account data...";
+                    height: 300px;
+                }
+
+                /* Data table loading */
+                #cost-data-table[data-dash-is-loading="true"]::before {
+                    content: "📊 Loading cost table...";
+                    height: 200px;
+                }
+
+                /* Ensure parent containers are positioned for absolute positioning */
+                ._dash-loading {
+                    position: relative !important;
+                    min-height: 400px;
+                }
+
+                /* Better positioning for account breakdown */
+                #account-breakdown-content._dash-loading {
+                    min-height: 300px;
+                }
+
+                /* Better positioning for data table */
+                #cost-data-table._dash-loading {
+                    min-height: 200px;
+                }
+
+                /* Style error messages prominently */
+                .error-message {
+                    background-color: #f8d7da !important;
+                    color: #721c24 !important;
+                    border: 2px solid #f5c6cb !important;
+                    border-radius: 8px !important;
+                    padding: 1rem !important;
+                    margin: 1rem 0 !important;
+                    font-weight: bold !important;
+                    font-size: 1.1rem !important;
+                    text-align: center !important;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+                }
+
+                /* Make database error messages even more prominent */
+                .database-error {
+                    background-color: #ffeaa7 !important;
+                    color: #d63031 !important;
+                    border: 3px solid #fd79a8 !important;
+                    animation: error-pulse 2s infinite !important;
+                }
+
+                @keyframes error-pulse {
+                    0% { box-shadow: 0 0 0 0 rgba(214, 48, 49, 0.7); }
+                    70% { box-shadow: 0 0 0 10px rgba(214, 48, 49, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(214, 48, 49, 0); }
+                }
                 </style>
             </head>
             <body>
@@ -438,6 +600,10 @@ class CostMonitorDashboard:
         first_day_last_month = last_day_last_month.replace(day=1)
         return first_day_last_month, last_day_last_month
 
+    def _get_last_month(self) -> tuple[date, date]:
+        """Get the first and last day of last month (alias for _get_last_month_range)."""
+        return self._get_last_month_range()
+
     def _get_week_start(self, target_date: date = None) -> date:
         """Get the start of the week (Monday) for the given date (or today)."""
         if target_date is None:
@@ -453,6 +619,10 @@ class CostMonitorDashboard:
         last_week_end = this_week_start - timedelta(days=1)  # Sunday of last week
         last_week_start = self._get_week_start(last_week_end)  # Monday of last week
         return last_week_start, last_week_end
+
+    def _get_last_week(self) -> tuple[date, date]:
+        """Get the start and end of last week (alias for _get_last_week_range)."""
+        return self._get_last_week_range()
 
     def _format_currency_compact(self, value: float) -> str:
         """Format currency values with K/M suffixes for large numbers."""
@@ -507,13 +677,22 @@ class CostMonitorDashboard:
             dbc.Row([
                 dbc.Col([
                     html.Label("Date Range:"),
-                    dcc.DatePickerRange(
-                        id="date-range-picker",
-                        start_date=self._get_month_start(),
-                        end_date=date.today(),
-                        display_format='YYYY-MM-DD',
-                        style={'width': '100%'}
-                    ),
+                    dbc.InputGroup([
+                        dcc.DatePickerRange(
+                            id="date-range-picker",
+                            start_date=self._get_month_start(),
+                            end_date=date.today(),
+                            display_format='YYYY-MM-DD',
+                            style={'width': '100%'}
+                        ),
+                        dbc.Button(
+                            "Apply",
+                            id="btn-apply-dates",
+                            color="success",
+                            size="sm",
+                            style={'marginLeft': '8px'}
+                        )
+                    ], style={'alignItems': 'center', 'display': 'flex'}),
                     html.Div([
                         html.Small("Quick ranges: ", className="text-muted me-2"),
                         dbc.ButtonGroup([
@@ -603,7 +782,7 @@ class CostMonitorDashboard:
                                         'showLink': False
                                     }
                                 )
-                            ], type="dot", color="#0d6efd", style={"height": "400px"})
+                            ], type="default", color="#0d6efd")
                         ])
                     ])
                 ], width=12)
@@ -628,7 +807,7 @@ class CostMonitorDashboard:
                                         'showLink': False
                                     }
                                 )
-                            ], type="dot", color="#0d6efd")
+                            ], type="default", color="#0d6efd")
                         ])
                     ])
                 ], width=12)
@@ -663,7 +842,7 @@ class CostMonitorDashboard:
                                         'showLink': False
                                     }
                                 )
-                            ], type="dot", color="#0d6efd")
+                            ], type="default", color="#0d6efd")
                         ])
                     ])
                 ], width=12)
@@ -741,7 +920,7 @@ class CostMonitorDashboard:
                             # Account breakdown content
                             dcc.Loading([
                                 html.Div(id="account-breakdown-content")
-                            ], type="dot", color="#0d6efd")
+                            ], type="default", color="#0d6efd")
                         ])
                     ])
                 ], width=12)
@@ -755,7 +934,7 @@ class CostMonitorDashboard:
                         dbc.CardBody([
                             dcc.Loading([
                                 html.Div(id="cost-data-table")
-                            ], type="dot", color="#0d6efd")
+                            ], type="default", color="#0d6efd")
                         ])
                     ])
                 ])
@@ -764,9 +943,9 @@ class CostMonitorDashboard:
             # Auto-refresh interval - default to 30 minutes for Latest mode
             dcc.Interval(
                 id='interval-component',
-                interval=10000,  # 10 seconds for debugging
+                interval=1800000,  # 30 minutes (1800000ms)
                 n_intervals=0,
-                disabled=False  # Enable auto-refresh by default
+                disabled=True  # Disabled by default during development
             ),
 
             # Store for sharing data between callbacks
@@ -788,16 +967,76 @@ class CostMonitorDashboard:
              Output('last-update-time', 'children'),
              Output('loading-store', 'data')],
             [Input('interval-component', 'n_intervals'),
-             Input('date-range-picker', 'start_date'),
-             Input('date-range-picker', 'end_date')],
+             Input('btn-apply-dates', 'n_clicks'),
+             Input('btn-latest', 'n_clicks'),
+             Input('btn-this-month', 'n_clicks'),
+             Input('btn-last-month', 'n_clicks'),
+             Input('btn-this-week', 'n_clicks'),
+             Input('btn-last-week', 'n_clicks'),
+             Input('btn-last-30-days', 'n_clicks'),
+             Input('btn-last-7-days', 'n_clicks')],
+            [State('date-range-picker', 'start_date'),
+             State('date-range-picker', 'end_date')],
             prevent_initial_call=False
         )
-        def update_data_store(n_intervals, start_date, end_date):
+        def update_data_store(n_intervals, apply_clicks, latest_clicks, this_month_clicks,
+                            last_month_clicks, this_week_clicks, last_week_clicks,
+                            last_30_clicks, last_7_clicks, start_date_picker, end_date_picker):
             """Update the main data store."""
             try:
-                # Parse dates
-                start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date() if start_date else date.today() - timedelta(days=30)
-                end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date else date.today()
+                import dash
+                ctx = dash.callback_context
+
+                # Determine which button was pressed to get the date range
+                today = date.today()
+                triggered_prop = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+
+                # DEBUG: Log button click details
+                logger.info(f"🔘 BUTTON DEBUG: Triggered by {triggered_prop}")
+                logger.info(f"🔘 BUTTON DEBUG: Today: {today}")
+
+                # Check if preset button was pressed (immediate update) or Apply button (manual dates)
+                if triggered_prop == 'btn-latest':
+                    start_date_obj = self._get_month_start(today)
+                    end_date_obj = today
+                elif triggered_prop == 'btn-this-month':
+                    start_date_obj = self._get_month_start(today)
+                    end_date_obj = today
+                    logger.info(f"🔘 BUTTON DEBUG: This Month calculated - start: {start_date_obj}, end: {end_date_obj}")
+                elif triggered_prop == 'btn-last-month':
+                    start_date_obj, end_date_obj = self._get_last_month()
+                    logger.info(f"🔘 BUTTON DEBUG: Last Month calculated - start: {start_date_obj}, end: {end_date_obj}")
+                elif triggered_prop == 'btn-this-week':
+                    start_date_obj = self._get_week_start(today)
+                    end_date_obj = today
+                elif triggered_prop == 'btn-last-week':
+                    start_date_obj, end_date_obj = self._get_last_week()
+                elif triggered_prop == 'btn-last-30-days':
+                    start_date_obj = today - timedelta(days=30)
+                    end_date_obj = today
+                elif triggered_prop == 'btn-last-7-days':
+                    start_date_obj = today - timedelta(days=7)
+                    end_date_obj = today
+                elif triggered_prop == 'btn-apply-dates':
+                    # Use date picker values for Apply button
+                    if start_date_picker and end_date_picker:
+                        start_date_obj = datetime.strptime(start_date_picker, '%Y-%m-%d').date()
+                        end_date_obj = datetime.strptime(end_date_picker, '%Y-%m-%d').date()
+                        logger.info(f"🔘 BUTTON DEBUG: Apply button - using picker dates: {start_date_obj} to {end_date_obj}")
+                    else:
+                        # Fallback if date picker values are missing
+                        start_date_obj = self._get_month_start(today)
+                        end_date_obj = today
+                        logger.warning(f"🔘 BUTTON DEBUG: Apply button - missing picker dates, using This Month fallback")
+                elif triggered_prop == 'interval-component':
+                    # Auto-refresh: use This Month for consistency (no access to date picker values)
+                    start_date_obj = self._get_month_start(today)
+                    end_date_obj = today
+                    logger.info(f"🔘 BUTTON DEBUG: Interval refresh using This Month - start: {start_date_obj}, end: {end_date_obj}")
+                else:
+                    # Default case or initial load
+                    start_date_obj = self._get_month_start(today)
+                    end_date_obj = today
 
                 # Start performance monitoring for data fetch
                 self.performance_monitor.start_operation("data_fetch")
@@ -812,89 +1051,44 @@ class CostMonitorDashboard:
 
                 data_manager = self.data_manager
 
-                async def fetch_data():
-                    return await data_manager.get_cost_data(start_date_obj, end_date_obj, force_refresh=False)
+                # Quick cache check to avoid unnecessary loading screens
+                cache_key = data_manager._get_cache_key(start_date_obj, end_date_obj, False)
+                cached_data = None
 
-                data_fetch_start = time.time()
-                real_cost_data = loop.run_until_complete(fetch_data())
-                data_fetch_time = time.time() - data_fetch_start
+                # DEBUG: Log cache key and date range used
+                logger.info(f"🔘 CACHE DEBUG: Using date range {start_date_obj} to {end_date_obj}")
+                logger.info(f"🔘 CACHE DEBUG: Cache key: {cache_key}")
 
-                if real_cost_data:
-                    # Ensure real_cost_data is a DataWrapper, not a dict
-                    if isinstance(real_cost_data, dict):
-                        real_cost_data = DataWrapper(real_cost_data)
-
-                    # Transform real data to dashboard format
-                    # Transform daily costs to match chart expectations (flatten provider breakdown)
-                    transformed_daily_costs = []
-                    for daily_entry in real_cost_data.combined_daily_costs:
-                        transformed_entry = {
-                            'date': daily_entry['date'],
-                            'total_cost': daily_entry['total_cost'],
-                            'currency': daily_entry['currency'],
-                        }
-
-                        # Flatten provider breakdown to top level for chart compatibility
-                        if 'provider_breakdown' in daily_entry:
-                            provider_breakdown_data = daily_entry['provider_breakdown']
-                            transformed_entry['aws'] = provider_breakdown_data.get('aws', 0)
-                            transformed_entry['azure'] = provider_breakdown_data.get('azure', 0)
-                            transformed_entry['gcp'] = provider_breakdown_data.get('gcp', 0)
-                        else:
-                            # Fallback if no provider breakdown
-                            transformed_entry['aws'] = 0
-                            transformed_entry['azure'] = 0
-                            transformed_entry['gcp'] = 0
-
-                        transformed_daily_costs.append(transformed_entry)
-
-                    cost_data = {
-                        'total_cost': real_cost_data.total_cost,
-                        'provider_breakdown': real_cost_data.provider_breakdown,
-                        'daily_costs': transformed_daily_costs,
-                        'service_breakdown': {provider_name: (provider_data.get('service_breakdown', {}) if isinstance(provider_data, dict) else getattr(provider_data, 'service_breakdown', {}))
-                                             for provider_name, provider_data in real_cost_data.provider_data.items()},
-                        'account_breakdown': {}
-                    }
-
-                    # Get account breakdown from separate account-specific data fetch
+                # Quick cache check to avoid unnecessary loading screens
+                if data_manager._dashboard_cache:
                     try:
-                        async def fetch_account_breakdown():
-                            return await data_manager.get_account_breakdown_data(start_date_obj, end_date_obj, force_refresh=False)
-
-                        account_data_task = fetch_account_breakdown()
-                        account_data = loop.run_until_complete(account_data_task)
-                        if account_data:
-                            cost_data['account_breakdown'] = account_data
+                        cached_data = data_manager._dashboard_cache.get(cache_key)
+                        if cached_data:
+                            logger.info(f"🎯 CACHE HIT: {start_date_obj} to {end_date_obj}")
+                            real_cost_data = DataWrapper(cached_data)
+                            data_fetch_time = 0.001  # Near-instant cache hit
                     except Exception as e:
-                        logger.warning(f"Failed to get account breakdown data: {e}")
-                        # Continue without account breakdown
+                        logger.warning(f"Cache check failed: {e}")
+
+                if not cached_data:
+                    logger.info(f"Cache miss - fetching data from API for {start_date_obj} to {end_date_obj}")
+
+                    async def fetch_data():
+                        return await data_manager.get_cost_data(start_date_obj, end_date_obj, force_refresh=False)
+
+                    data_fetch_start = time.time()
+                    real_cost_data = loop.run_until_complete(fetch_data())
+                    data_fetch_time = time.time() - data_fetch_start
+                    logger.info(f"Data fetch completed in {data_fetch_time:.2f}s")
                 else:
-                    cost_data = {
-                        'total_cost': 0.0,
-                        'provider_breakdown': {},
-                        'daily_costs': [],
-                        'service_breakdown': {},
-                        'account_breakdown': {}
-                    }
+                    # Use cached data
+                    real_cost_data = cached_data
 
-                # Simple alert data
-                alert_data = {
-                    'active_alerts': 0,
-                    'critical_alerts': 0,
-                    'alerts': []
-                }
-
-                # End performance monitoring
-                breakdown = {"data_fetch": data_fetch_time}
-                self.performance_monitor.end_operation("data_fetch", breakdown)
-
-                last_update = f"Last updated: {datetime.now().strftime('%H:%M:%S')}"
-                return cost_data, alert_data, last_update, {'loading': False}
+                # Continue to newer transformation logic below...
 
             except Exception as e:
                 logger.error(f"Error in main callback: {e}")
-                # Return proper empty data structure instead of empty dict to prevent attribute errors
+                # Return proper empty data structure and ALWAYS clear loading state on error
                 empty_cost_data = {
                     'total_cost': 0.0,
                     'provider_breakdown': {},
@@ -907,16 +1101,18 @@ class CostMonitorDashboard:
                     'critical_alerts': 0,
                     'alerts': []
                 }
-                return empty_cost_data, empty_alert_data, f"Error: {str(e)}", {'loading': False}
+                error_div = html.Div([f"❌ Error: {str(e)}"], className="error-message")
+                return empty_cost_data, empty_alert_data, error_div, {'loading': False}
 
             import dash
 
-            start_date = datetime.strptime(start_date, '%Y-%m-%d').date() if start_date else date.today() - timedelta(days=30)
-            end_date = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date else date.today()
+            # Use the date objects we already calculated from button logic
+            start_date = start_date_obj
+            end_date = end_date_obj
 
             # Determine if this is a forced refresh (only for specific triggers)
             ctx = dash.callback_context
-            force_refresh = True  # Force refresh to bypass cache for debugging
+            force_refresh = False  # Use cache when available
 
             # Debug logging
             logger.info(f"Callback triggered: interval={n_intervals}")
@@ -926,23 +1122,23 @@ class CostMonitorDashboard:
                 prop_id = ctx.triggered[0]['prop_id']
                 logger.info(f"Triggered by: {prop_id}")
 
-                # Handle date range changes (force refresh for debugging)
+                # Handle date range changes (only force refresh if explicitly needed)
                 if 'date-range-picker' in prop_id:
                     # Use debouncer to prevent rapid successive calls
                     if self.date_debouncer.should_process():
-                        # Force refresh for debugging cache issues
-                        force_refresh = True
+                        # Use cache for date changes unless data is missing
+                        force_refresh = False
                     else:
                         # Skip this update - too soon after last change
                         raise dash.exceptions.PreventUpdate
 
-                # Handle auto-refresh interval (force refresh for debugging)
+                # Handle auto-refresh interval (use cache unless stale)
                 elif 'interval-component' in prop_id:
-                    force_refresh = True  # Force refresh for debugging
+                    force_refresh = False  # Use cache for auto-refresh
 
-                # Handle initial load (force refresh for debugging)
+                # Handle initial load (use cache if available)
                 elif prop_id == '.':
-                    force_refresh = True  # Force refresh for debugging
+                    force_refresh = False  # Use cache on initial load
 
             # Get real cost data using the data manager
             try:
@@ -1038,17 +1234,21 @@ class CostMonitorDashboard:
                             else:
                                 logger.warning(f"🔄 TRANSFORM DEBUG: No provider_breakdown for {daily_entry['date']}")
 
-                    # Get account breakdown from separate account-specific data fetch
-                    try:
-                        async def fetch_account_breakdown():
-                            return await data_manager.get_account_breakdown_data(start_date, end_date, force_refresh=force_refresh)
+                    # Extract account breakdown from the existing API response
+                    account_breakdown = getattr(real_cost_data, 'account_breakdown', {})
 
-                        account_data_task = loop.create_task(fetch_account_breakdown())
-                        account_data = loop.run_until_complete(account_data_task)
-                        account_breakdown = account_data if account_data else {}
-                    except Exception as e:
-                        logger.warning(f"Failed to get account breakdown data: {e}")
-                        account_breakdown = {}
+                    # Debug: Log what we get from the API for account breakdown
+                    logger.info(f"🏦 API ACCOUNT DEBUG: account_breakdown from API type: {type(account_breakdown)}")
+                    if account_breakdown and isinstance(account_breakdown, dict):
+                        logger.info(f"🏦 API ACCOUNT DEBUG: account_breakdown providers: {list(account_breakdown.keys())}")
+                        for provider, accounts in account_breakdown.items():
+                            if accounts:
+                                sample_key = list(accounts.keys())[0]
+                                sample_data = accounts[sample_key]
+                                logger.info(f"🏦 API ACCOUNT DEBUG: {provider} sample from API: {sample_data}")
+                                logger.info(f"🏦 API ACCOUNT DEBUG: {provider} sample keys from API: {list(sample_data.keys()) if isinstance(sample_data, dict) else 'not dict'}")
+                    else:
+                        logger.info(f"🏦 API ACCOUNT DEBUG: account_breakdown is empty or not dict: {account_breakdown}")
 
                     cost_data = {
                         'total_cost': total_cost,
@@ -1106,8 +1306,55 @@ class CostMonitorDashboard:
                 # End performance monitoring with breakdown
                 self.performance_monitor.end_operation("data_fetch", breakdown)
 
-                # Set loading state to false when done
-                loading_state = {'loading': False}
+                # Check API data collection status to determine if we should keep loading
+                api_collection_status = cost_data.get('data_collection_status', 'complete')
+
+                # Calculate date range for enhanced loading messaging
+                try:
+                    if start_date and end_date:
+                        # Ensure dates are date objects for arithmetic
+                        date_range_days = (end_date - start_date).days + 1
+                    else:
+                        date_range_days = 0
+                except Exception as e:
+                    logger.warning(f"Date arithmetic failed: {e}")
+                    date_range_days = 0
+                is_long_range = date_range_days > 7
+
+                # Keep loading if API indicates data collection is still in progress
+                # BUT prioritize cache hits and add safety mechanisms
+                if data_fetch_time < 0.1:  # Cache hit (very fast response)
+                    logger.info(f"📊 CACHE HIT: Data loaded instantly ({data_fetch_time:.3f}s) - clearing loading state")
+                    loading_state = {'loading': False}
+                elif api_collection_status == "in_progress":
+                    # Check if this is historical data (> 2 days old) - should not be "in progress"
+                    days_since_end = (datetime.now().date() - end_date).days
+                    if days_since_end > 2:
+                        logger.warning(f"📊 SAFETY: Historical data ({days_since_end} days old) showing 'in_progress' - forcing complete status")
+                        loading_state = {'loading': False}
+                    else:
+                        logger.info(f"📊 API data collection status: IN PROGRESS - returning empty data to maintain loading state")
+                        loading_state = {'loading': True}
+                        # Return empty data to charts so they continue showing loading indicators
+                        # instead of incomplete/partial data that causes gray charts
+                        empty_cost_data = {
+                            'total_cost': 0.0,
+                            'provider_breakdown': {},
+                            'daily_costs': [],
+                            'service_breakdown': {},
+                            'account_breakdown': {},
+                            'data_collection_status': 'in_progress'
+                        }
+                        empty_alert_data = {
+                            'active_alerts': 0,
+                            'critical_alerts': 0,
+                            'alerts': []
+                        }
+                        last_update = "Collecting missing data..."
+                        return empty_cost_data, empty_alert_data, last_update, loading_state
+                else:
+                    logger.info(f"📊 API data collection status: COMPLETE - clearing loading state")
+                    loading_state = {'loading': False}
                 return cost_data, alert_data, last_update, loading_state
 
             except asyncio.CancelledError:
@@ -1122,7 +1369,32 @@ class CostMonitorDashboard:
                 logger.error(f"Error updating data store: {e}")
                 logger.error(f"Full traceback: {traceback.format_exc()}")
                 loading_state = {'loading': False}
-                return {}, {}, f"Error: {str(e)}", loading_state
+
+                # Provide specific error messages for common issues
+                error_message = str(e)
+                if "no partition of relation" in error_message and "found for row" in error_message:
+                    # Database partitioning error - most prominent styling
+                    formatted_error = html.Div([
+                        "❌ Database Error: No data partition exists for the selected date range. Please choose a different date range or contact your administrator."
+                    ], className="error-message database-error")
+                elif "500 Internal Server Error" in error_message:
+                    formatted_error = html.Div([
+                        "❌ Server Error: The cost monitoring service encountered an internal error. Please try again or select a different date range."
+                    ], className="error-message")
+                elif "authentication" in error_message.lower() or "unauthorized" in error_message.lower():
+                    formatted_error = html.Div([
+                        "❌ Authentication Error: Unable to authenticate with cloud providers. Please check your credentials."
+                    ], className="error-message")
+                elif "timeout" in error_message.lower() or "connection" in error_message.lower():
+                    formatted_error = html.Div([
+                        "❌ Connection Error: Unable to connect to cloud providers. Please check your network connection and try again."
+                    ], className="error-message")
+                else:
+                    formatted_error = html.Div([
+                        f"❌ Error: {str(e)}"
+                    ], className="error-message")
+
+                return {}, {}, formatted_error, loading_state
 
         @self.app.callback(
             [Output('total-cost-metric', 'children'),
@@ -1130,17 +1402,27 @@ class CostMonitorDashboard:
              Output('monthly-projection-metric', 'children'),
              Output('cost-trend-metric', 'children'),
              Output('cost-trend-metric', 'className')],
-            [Input('cost-data-store', 'data')]
+            [Input('cost-data-store', 'data'),
+             Input('provider-selector', 'value')]
         )
-        def update_key_metrics(cost_data):
+        def update_key_metrics(cost_data, selected_provider):
             """Update key metrics cards."""
             if not cost_data:
                 return "Loading...", "Loading...", "Loading...", "Loading...", "card-title"
 
-            total_cost = cost_data.get('total_cost', 0)
             daily_costs = cost_data.get('daily_costs', [])
 
-            # Calculate metrics
+            # Calculate provider-specific metrics
+            if selected_provider == 'all':
+                # Use total cost across all providers
+                total_cost = cost_data.get('total_cost', 0)
+                daily_values = [day.get('total_cost', 0) for day in daily_costs]
+            else:
+                # Filter to selected provider only
+                daily_values = [day.get(selected_provider, 0) for day in daily_costs]
+                total_cost = sum(daily_values)
+
+            # Calculate metrics based on filtered data
             daily_average = total_cost / max(len(daily_costs), 1)
             monthly_projection = daily_average * 30
 
@@ -1149,15 +1431,15 @@ class CostMonitorDashboard:
             trend_text = "N/A"
             trend_class = "card-title text-secondary"
 
-            if len(daily_costs) >= 7:
+            if len(daily_values) >= 7:
                 # Calculate average of last 7 days vs previous 7 days
-                sorted_costs = sorted(daily_costs, key=lambda x: x['date'])
-                last_7_days = sorted_costs[-7:]
-                prev_7_days = sorted_costs[-14:-7] if len(sorted_costs) >= 14 else []
+                sorted_costs = sorted(zip(daily_costs, daily_values), key=lambda x: x[0]['date'])
+                last_7_days_values = [item[1] for item in sorted_costs[-7:]]
+                prev_7_days_values = [item[1] for item in sorted_costs[-14:-7]] if len(sorted_costs) >= 14 else []
 
-                if prev_7_days and last_7_days:
-                    last_avg = sum(day.get('total_cost', 0) for day in last_7_days) / 7
-                    prev_avg = sum(day.get('total_cost', 0) for day in prev_7_days) / 7
+                if prev_7_days_values and last_7_days_values:
+                    last_avg = sum(last_7_days_values) / 7
+                    prev_avg = sum(prev_7_days_values) / 7
 
                     if prev_avg > 0:
                         trend_percentage = ((last_avg - prev_avg) / prev_avg) * 100
@@ -1199,8 +1481,7 @@ class CostMonitorDashboard:
 
         @self.app.callback(
             Output('loading-store', 'data', allow_duplicate=True),
-            [Input('date-range-picker', 'start_date'),
-             Input('date-range-picker', 'end_date'),
+            [Input('btn-apply-dates', 'n_clicks'),
              Input('btn-latest', 'n_clicks'),
              Input('btn-this-month', 'n_clicks'),
              Input('btn-last-month', 'n_clicks'),
@@ -1228,69 +1509,59 @@ class CostMonitorDashboard:
         @self.app.callback(
             Output('loading-banner', 'children'),
             [Input('loading-store', 'data'),
-             Input('cost-data-store', 'data')]
+             Input('cost-data-store', 'data')],
+            [State('date-range-picker', 'start_date'),
+             State('date-range-picker', 'end_date')]
         )
-        def update_loading_banner(loading_data, cost_data):
-            """Update loading banner."""
-            # Debug logging with print statements for visibility
-            logger.info(f"📊 Loading banner update - loading_data: {loading_data}, has_cost_data: {bool(cost_data)}")
-            logger.debug(f"📊 Loading banner update - loading_data: {loading_data}, has_cost_data: {bool(cost_data)}")
+        def update_loading_banner(loading_data, cost_data, start_date, end_date):
+            """Smart loading banner - only shows for actual data fetches, not cache hits."""
 
-            # Show loading if loading store says to OR if there's no cost data yet
+            # Show loading only if:
+            # 1. Loading store explicitly says to show loading AND
+            # 2. We don't have cost data yet OR the API says data collection is in progress
             should_show_loading = (
-                (loading_data and loading_data.get('loading', False)) or
-                (not cost_data)
+                loading_data and loading_data.get('loading', False) and
+                (not cost_data or cost_data.get('data_collection_status') == 'in_progress')
             )
 
-            logger.info(f"Should show loading: {should_show_loading}")
-            logger.debug(f"📊 Should show loading: {should_show_loading}")
-
             if not should_show_loading:
-                logger.debug("📊 Not showing loading - returning empty")
                 return ""
 
-            logger.debug("📊 SHOWING LOADING BANNER NOW!")
-
-            # More prominent loading banner
+            # Prominent loading banner and overlay for actual data fetches
             return html.Div([
-                # Prominent sticky loading alert
+                # Top banner
                 dbc.Alert([
-                    dbc.Spinner(size="lg", color="primary", className="me-3"),
+                    dbc.Spinner(size="lg", color="primary", spinnerClassName="me-3"),
                     html.Div([
-                        html.H4("🔄 Loading Cost Data", className="mb-1", style={"color": "#fff"}),
-                        html.P("Fetching latest cost information from cloud providers...",
-                               className="mb-0", style={"color": "#fff"})
+                        html.H5("🔄 Loading Cost Data", className="mb-1", style={"color": "#004085"}),
+                        html.P(f"Fetching data for {start_date} to {end_date}..." if start_date and end_date else "Loading cost information...",
+                               className="mb-0", style={"fontSize": "0.9rem", "color": "#004085"})
                     ])
-                ], color="info", className="mb-0 py-4 text-center",
+                ], color="info", className="mb-3 py-3 text-center",
                   style={
-                      "position": "sticky",
-                      "top": "0",
-                      "zIndex": "2000",
-                      "border": "3px solid #17a2b8",
-                      "boxShadow": "0 4px 8px rgba(0,0,0,0.3)",
-                      "backgroundColor": "#17a2b8"
+                      "border": "2px solid #0066cc",
+                      "backgroundColor": "#e6f3ff",
+                      "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
                   }),
 
-                # Full screen overlay
-                html.Div(style={
+                # Semi-transparent overlay to indicate loading state
+                html.Div([
+                    html.Div([
+                        dbc.Spinner(size="xl", color="primary"),
+                        html.H4("Loading...", className="mt-3 text-primary")
+                    ], className="text-center")
+                ], style={
                     "position": "fixed",
                     "top": "0",
                     "left": "0",
-                    "right": "0",
-                    "bottom": "0",
-                    "backgroundColor": "rgba(255, 255, 255, 0.9)",
-                    "zIndex": "1999",
+                    "width": "100%",
+                    "height": "100%",
+                    "backgroundColor": "rgba(255,255,255,0.7)",
+                    "zIndex": "999",
                     "display": "flex",
                     "alignItems": "center",
                     "justifyContent": "center"
-                }, children=[
-                    html.Div([
-                        dbc.Spinner(size="lg", color="primary", style={"width": "4rem", "height": "4rem"}),
-                        html.H3("🔄 Loading Cost Data...", className="mt-4 text-primary",
-                               style={"fontWeight": "bold"})
-                    ], className="text-center bg-white p-5 rounded shadow-lg",
-                       style={"border": "2px solid #0d6efd"})
-                ])
+                })
             ])
 
         @callback(
@@ -1455,7 +1726,6 @@ class CostMonitorDashboard:
                             name=selected_provider.upper(),
                             marker_color=DashboardTheme.COLORS.get(selected_provider, '#000000'),
                             marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
-                            width=0.6,  # Single provider gets wider bars
                             text=text_labels,
                             textposition='outside',
                             textfont=dict(size=14, color='black'),
@@ -1475,7 +1745,6 @@ class CostMonitorDashboard:
                             name=selected_provider.upper(),
                             marker_color=DashboardTheme.COLORS.get(selected_provider, '#000000'),
                             marker_line=dict(width=1, color='rgba(0,0,0,0.3)'),
-                            width=0.6,  # Single provider gets wider bars
                             text=text_labels,
                             textposition='outside',
                             textfont=dict(size=14, color='black'),
@@ -1735,6 +2004,7 @@ class CostMonitorDashboard:
             # Get data manager for account name resolution
             data_manager = self.data_manager
 
+
             if not cost_data or 'account_breakdown' not in cost_data:
                 return "Loading account data..."
 
@@ -1742,15 +2012,53 @@ class CostMonitorDashboard:
             if not account_breakdown:
                 return "No account data available."
 
+            # Debug: Log the structure of account breakdown data
+            logger.info(f"🏦 ACCOUNT DEBUG: account_breakdown keys: {list(account_breakdown.keys())}")
+            for provider, accounts in account_breakdown.items():
+                logger.info(f"🏦 ACCOUNT DEBUG: {provider} has {len(accounts)} accounts")
+                if accounts:
+                    sample_key = list(accounts.keys())[0]
+                    sample_data = accounts[sample_key]
+                    logger.info(f"🏦 ACCOUNT DEBUG: {provider} sample account data: {sample_data}")
+                    logger.info(f"🏦 ACCOUNT DEBUG: {provider} sample account keys: {list(sample_data.keys())}")
+
             # Convert nested structure to flat list for filtering and sorting
             accounts_list = []
             for provider, accounts in account_breakdown.items():
                 for account_key, account_data in accounts.items():
                     # Only include accounts with non-zero costs
                     if account_data.get('cost', 0) > 0:
+                        # Get account details from the API response
+                        account_id = account_data.get('account_id', account_key)
+                        account_name = account_data.get('account_name', account_id)
+
+                        # Use the account name from API if available, otherwise format appropriately
+                        if 'account_name' in account_data and account_name != account_id:
+                            # API provided a proper account name, use it
+                            formatted_name = account_name
+                        else:
+                            # Fallback formatting for when account name is missing
+                            if provider == 'gcp' and account_id.startswith('MultiProject'):
+                                # For GCP: Extract project name from MultiProject(name) format
+                                import re
+                                match = re.search(r'MultiProject\(([^)]+)\)', account_id)
+                                if match:
+                                    project_name = match.group(1)
+                                    formatted_name = project_name
+                                else:
+                                    formatted_name = account_id
+                            elif provider == 'aws':
+                                # For AWS: Show account ID with label
+                                formatted_name = f"AWS Account ({account_id})"
+                            elif provider == 'azure':
+                                # For Azure: Show subscription ID with label
+                                formatted_name = f"Azure Subscription ({account_id})"
+                            else:
+                                formatted_name = account_id
+
                         accounts_list.append({
                             'key': account_key,
-                            'account_name': account_key,  # Use account_id as name for now
+                            'account_name': formatted_name,
                             'total_cost': account_data['cost'],
                             'provider': account_data['provider'],
                             'currency': account_data['currency'],
@@ -1927,9 +2235,37 @@ class CostMonitorDashboard:
                     accounts_list = []
                     for provider, accounts in account_breakdown.items():
                         for account_key, account_data in accounts.items():
+                            # Use the same formatting logic as display (same as above)
+                            account_id = account_data.get('account_id', account_key)
+                            account_name = account_data.get('account_name', account_id)
+
+                            # Use the account name from API if available, otherwise format appropriately
+                            if 'account_name' in account_data and account_name != account_id:
+                                # API provided a proper account name, use it
+                                formatted_name = account_name
+                            else:
+                                # Fallback formatting for when account name is missing
+                                if provider == 'gcp' and account_id.startswith('MultiProject'):
+                                    # For GCP: Extract project name from MultiProject(name) format
+                                    import re
+                                    match = re.search(r'MultiProject\(([^)]+)\)', account_id)
+                                    if match:
+                                        project_name = match.group(1)
+                                        formatted_name = project_name
+                                    else:
+                                        formatted_name = account_id
+                                elif provider == 'aws':
+                                    # For AWS: Show account ID with label
+                                    formatted_name = f"AWS Account ({account_id})"
+                                elif provider == 'azure':
+                                    # For Azure: Show subscription ID with label
+                                    formatted_name = f"Azure Subscription ({account_id})"
+                                else:
+                                    formatted_name = account_id
+
                             accounts_list.append({
-                                'account_name': account_key,
-                                'account_id': account_key,
+                                'account_name': formatted_name,
+                                'account_id': account_id,
                                 'total_cost': account_data['cost'],
                                 'provider': account_data['provider']
                             })
@@ -2118,9 +2454,10 @@ class CostMonitorDashboard:
              Input('btn-last-week', 'n_clicks'),
              Input('btn-last-30-days', 'n_clicks'),
              Input('btn-last-7-days', 'n_clicks'),
-             Input('date-range-picker', 'start_date'),
-             Input('date-range-picker', 'end_date'),
+             Input('btn-apply-dates', 'n_clicks'),
              Input('interval-component', 'n_intervals')],
+            [State('date-range-picker', 'start_date'),
+             State('date-range-picker', 'end_date')],
              [State('date-range-type-store', 'data')],
             prevent_initial_call=False
         )
@@ -2204,8 +2541,9 @@ class CostMonitorDashboard:
              Input('btn-last-week', 'n_clicks'),
              Input('btn-last-30-days', 'n_clicks'),
              Input('btn-last-7-days', 'n_clicks'),
-             Input('date-range-picker', 'start_date'),
-             Input('date-range-picker', 'end_date')],
+             Input('btn-apply-dates', 'n_clicks')],
+            [State('date-range-picker', 'start_date'),
+             State('date-range-picker', 'end_date')],
             prevent_initial_call=True
         )
         def update_auto_refresh_settings(*args):
