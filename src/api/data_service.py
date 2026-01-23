@@ -528,7 +528,7 @@ async def get_cost_summary(
                 account_params.append(providers if isinstance(providers, list) else [providers])
 
             account_query += """
-                    GROUP BY p.name, cdp.account_id, cdp.currency
+                    GROUP BY p.name, cdp.account_id, cdp.currency, aa.account_name
                 ) ranked
                 WHERE rn <= 20
                 ORDER BY provider, cost DESC"""
