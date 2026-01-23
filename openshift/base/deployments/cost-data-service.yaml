@@ -120,9 +120,9 @@ spec:
             port: 8000
           initialDelaySeconds: 60
           periodSeconds: 30
-          timeoutSeconds: 10
+          timeoutSeconds: 120  # Increased for heavy AWS account processing
           successThreshold: 1
-          failureThreshold: 3
+          failureThreshold: 5  # Allow more failures before restart
 
         readinessProbe:
           httpGet:
@@ -130,9 +130,9 @@ spec:
             port: 8000
           initialDelaySeconds: 30
           periodSeconds: 10
-          timeoutSeconds: 5
+          timeoutSeconds: 60  # Increased for heavy processing periods
           successThreshold: 1
-          failureThreshold: 3
+          failureThreshold: 5  # Allow more failures before marking not ready
 
         startupProbe:
           httpGet:
