@@ -8,6 +8,13 @@ echo "Data Service URL: ${DATA_SERVICE_URL:-not set}"
 # Ensure virtual environment is first in PATH
 export PATH="/opt/app-root/venv/bin:$PATH"
 
+# Construct REDIS_URL from individual environment variables with URL encoding
+if [ -n "${REDIS_PASSWORD}" ]; then
+    ENCODED_REDIS_PASSWORD=$(python -c "import urllib.parse; print(urllib.parse.quote('${REDIS_PASSWORD}', safe=''))")
+    export REDIS_URL="redis://:${ENCODED_REDIS_PASSWORD}@redis-service:6379/0"
+    echo "Redis URL configured with authentication"
+fi
+
 # Debug Python environment
 echo "Python version: $(python --version)"
 echo "Python executable: $(which python)"
