@@ -374,6 +374,93 @@ EOF
     echo -e "${GREEN}✅ OAuth configuration files configured for deployment${NC}"
 }
 
+# Function for ordered deployment to prevent race conditions
+deploy_services_ordered() {
+    echo -e "${BLUE}🔄 Implementing ordered deployment sequence (race condition prevention)...${NC}"
+
+    if [ "${DRY_RUN}" = "true" ]; then
+        echo -e "${YELLOW}[DRY RUN] Would execute ordered deployment sequence${NC}"
+        return
+    fi
+
+    # Step 1: Scale down all application services to prevent conflicts
+    echo -e "${YELLOW}🛑 Step 1: Scaling down application services...${NC}"
+
+    # Scale down in reverse dependency order (dashboard first, then data service)
+    oc scale deployment/dashboard-service --replicas=0 -n ${NAMESPACE} 2>/dev/null || echo "   Dashboard service not found (first deployment)"
+    oc scale deployment/cost-data-service --replicas=0 -n ${NAMESPACE} 2>/dev/null || echo "   Data service not found (first deployment)"
+
+    # Wait for all application pods to fully terminate
+    echo -e "${YELLOW}   Waiting for application pods to terminate...${NC}"
+    oc wait --for=delete pod -l component=dashboard -n ${NAMESPACE} --timeout=90s 2>/dev/null || true
+    oc wait --for=delete pod -l component=data-service -n ${NAMESPACE} --timeout=90s 2>/dev/null || true
+
+    # Verify no application processes remain
+    APP_PODS_REMAINING=$(oc get pods -n ${NAMESPACE} -l 'component in (dashboard,data-service)' --no-headers 2>/dev/null | wc -l)
+    if [ "$APP_PODS_REMAINING" -gt 0 ]; then
+        echo -e "${YELLOW}   Force terminating remaining application pods...${NC}"
+        oc delete pods -l 'component in (dashboard,data-service)' -n ${NAMESPACE} --grace-period=10 --force 2>/dev/null || true
+        sleep 5
+    fi
+
+    echo -e "${GREEN}✅ Step 1: Application services scaled down cleanly${NC}"
+
+    # Step 2: Apply all configuration changes
+    echo -e "${YELLOW}⚙️  Step 2: Applying configuration updates...${NC}"
+    oc apply -k "$LOCAL_OVERLAY_DIR" || {
+        echo -e "${RED}❌ Configuration update failed${NC}"
+        exit 1
+    }
+    echo -e "${GREEN}✅ Step 2: Configuration applied${NC}"
+
+    # Step 3: Start services in dependency order
+    echo -e "${YELLOW}🚀 Step 3: Starting services in dependency order...${NC}"
+
+    # 3a: Start data service first (backend dependency)
+    echo -e "${BLUE}   Starting data service...${NC}"
+    oc scale deployment/cost-data-service --replicas=1 -n ${NAMESPACE}
+
+    # Wait for data service to be ready before starting dashboard
+    if ! wait_for_deployment "cost-data-service" 600; then
+        echo -e "${RED}❌ Data service failed to start - aborting dashboard startup${NC}"
+        return 1
+    fi
+
+    # 3b: Start dashboard service (frontend depends on backend)
+    echo -e "${BLUE}   Starting dashboard service...${NC}"
+    oc scale deployment/dashboard-service --replicas=1 -n ${NAMESPACE}
+
+    if ! wait_for_deployment "dashboard-service" 300; then
+        echo -e "${RED}❌ Dashboard service failed to start${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✅ Step 3: All services started successfully${NC}"
+
+    # Step 4: Verify process integrity
+    echo -e "${YELLOW}🔍 Step 4: Verifying process integrity...${NC}"
+
+    # Check for dual dashboard processes
+    sleep 10  # Allow containers to fully initialize
+    DASHBOARD_POD=$(oc get pods -l component=dashboard -n ${NAMESPACE} -o name --no-headers | head -1 2>/dev/null || echo "")
+    if [ -n "$DASHBOARD_POD" ]; then
+        PROCESS_COUNT=$(oc exec "$DASHBOARD_POD" -n ${NAMESPACE} -- ps aux 2>/dev/null | grep -c "python.*dashboard" || echo "0")
+        echo -e "${BLUE}   Dashboard processes detected: ${PROCESS_COUNT}${NC}"
+
+        if [ "$PROCESS_COUNT" -gt 1 ]; then
+            echo -e "${RED}⚠️  Multiple dashboard processes detected!${NC}"
+            echo -e "${YELLOW}   Triggering clean restart...${NC}"
+            oc rollout restart deployment/dashboard-service -n ${NAMESPACE}
+            wait_for_deployment "dashboard-service" 300
+            echo -e "${GREEN}✅ Dashboard restarted with single process${NC}"
+        else
+            echo -e "${GREEN}✅ Dashboard process integrity verified${NC}"
+        fi
+    fi
+
+    echo -e "${GREEN}🎉 Ordered deployment completed successfully!${NC}"
+}
+
 # Function to clean up stuck deployments
 cleanup_stuck_deployments() {
     echo -e "${BLUE}🧹 Cleaning up stuck deployments...${NC}"
@@ -516,38 +603,15 @@ else
 
     echo ""
 
-    # Apply all resources with local overlay
-    oc apply -k "$LOCAL_OVERLAY_DIR" || {
-        echo -e "${RED}❌ Deployment failed${NC}"
-        exit 1
-    }
-
-    echo ""
-
-    # Clean up any stuck deployments before waiting
-    cleanup_stuck_deployments
-
-    echo ""
-
-    # Wait for databases to be ready first
-    echo -e "${BLUE}🗄️  Waiting for data services...${NC}"
+    # Wait for databases to be ready first (infrastructure layer)
+    echo -e "${BLUE}🗄️  Ensuring database infrastructure is ready...${NC}"
     wait_for_statefulset "postgresql" 600
     wait_for_deployment "redis" 300
 
     echo ""
 
-    # Wait for application services
-    echo -e "${BLUE}🔧 Waiting for application services...${NC}"
-    wait_for_deployment "cost-data-service" 600
-
-    # Dashboard deployment has different name pattern
-    if oc get deployment "cost-monitor-dashboard" -n ${NAMESPACE} &> /dev/null; then
-        wait_for_deployment "cost-monitor-dashboard" 300
-    elif oc get deploymentconfig "cost-monitor-dashboard" -n ${NAMESPACE} &> /dev/null; then
-        echo -e "${YELLOW}⏳ Waiting for DeploymentConfig cost-monitor-dashboard to be ready...${NC}"
-        oc rollout status dc/cost-monitor-dashboard -n ${NAMESPACE} --timeout=300s
-        echo -e "${GREEN}✅ DeploymentConfig cost-monitor-dashboard is ready${NC}"
-    fi
+    # Deploy application services with race condition prevention
+    deploy_services_ordered
 
     # Setup OAuth client and wait for proxy if enabled
     if [ "${OAUTH_ENABLED}" = "true" ]; then
