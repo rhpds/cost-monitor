@@ -125,14 +125,31 @@ class AWSCostProvider(CloudCostProvider):
             else:
                 end_date = datetime.combine(next_day, datetime.min.time())
 
-        # Validate range
+        # Validate range after initial adjustments, but before final date overrides
         if start_date >= end_date:
-            raise ValueError("Start date must be before end date (after adjusting for AWS data lag)")
+            # Handle edge case where adjustments result in invalid range
+            logger.info(f"🔵 AWS: Date range conflict after adjustment, using single-day range for {yesterday}")
+            start_date = datetime.combine(yesterday, datetime.min.time())
+            end_date = datetime.combine(yesterday, datetime.max.time())
 
         # Check if dates are too far in the future (should be yesterday or earlier now)
         start_date_for_comparison = start_date.date() if isinstance(start_date, datetime) else start_date
         if start_date_for_comparison > yesterday:
-            raise ValueError(f"Start date cannot be beyond {yesterday} (AWS data lag)")
+            # Override start date to latest available data instead of failing
+            logger.info(f"🔵 AWS: Requested start date {start_date_for_comparison} adjusted to {yesterday} (latest available due to 24-hour lag)")
+            start_date = datetime.combine(yesterday, datetime.min.time())
+
+        # Also ensure end date is not beyond yesterday
+        end_date_for_comparison = end_date.date() if isinstance(end_date, datetime) else end_date
+        if end_date_for_comparison > yesterday:
+            logger.info(f"🔵 AWS: Requested end date {end_date_for_comparison} adjusted to {yesterday} (latest available due to 24-hour lag)")
+            end_date = datetime.combine(yesterday, datetime.max.time())
+
+        # Final validation after all adjustments
+        if start_date >= end_date:
+            logger.info(f"🔵 AWS: Final range validation failed, using yesterday as single-day range")
+            start_date = datetime.combine(yesterday, datetime.min.time())
+            end_date = datetime.combine(yesterday, datetime.max.time())
 
         return start_date, end_date
 
