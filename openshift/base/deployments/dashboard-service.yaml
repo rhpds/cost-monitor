@@ -4,6 +4,9 @@ metadata:
   name: dashboard-service
   labels:
     app: cost-monitor
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: cost-monitor
+    app.kubernetes.io/version: 1.0.0
     component: dashboard
     tier: frontend
 spec:
@@ -13,11 +16,17 @@ spec:
   selector:
     matchLabels:
       app: cost-monitor
+      app.kubernetes.io/managed-by: kustomize
+      app.kubernetes.io/name: cost-monitor
+      app.kubernetes.io/version: 1.0.0
       component: dashboard
   template:
     metadata:
       labels:
         app: cost-monitor
+        app.kubernetes.io/managed-by: kustomize
+        app.kubernetes.io/name: cost-monitor
+        app.kubernetes.io/version: 1.0.0
         component: dashboard
         tier: frontend
     spec:
