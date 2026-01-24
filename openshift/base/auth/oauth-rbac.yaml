@@ -1,0 +1,121 @@
+---
+# ServiceAccount for OAuth integration
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cost-monitor-oauth
+  labels:
+    app: cost-monitor
+    component: oauth
+    tier: security
+  annotations:
+    serviceaccounts.openshift.io/oauth-redirectreference.primary: |
+      {
+        "kind": "OAuthRedirectReference",
+        "apiVersion": "v1",
+        "reference": {
+          "kind": "Route",
+          "name": "oauth-proxy-route"
+        }
+      }
+automountServiceAccountToken: true
+
+---
+# ClusterRole for OAuth proxy to access OpenShift OAuth
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cost-monitor-oauth
+  labels:
+    app: cost-monitor
+    component: oauth
+rules:
+# OAuth client permissions
+- apiGroups: ["oauth.openshift.io"]
+  resources: ["oauthclients"]
+  verbs: ["get", "list"]
+# User identity permissions
+- apiGroups: ["user.openshift.io"]
+  resources: ["users"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["users"]
+  verbs: ["get"]
+# Group membership (for RBAC)
+- apiGroups: ["user.openshift.io"]
+  resources: ["groups"]
+  verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding for OAuth ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cost-monitor-oauth
+  labels:
+    app: cost-monitor
+    component: oauth
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cost-monitor-oauth
+subjects:
+- kind: ServiceAccount
+  name: cost-monitor-oauth
+  namespace: cost-monitor
+
+---
+# Role for accessing application resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cost-monitor-app-access
+  namespace: cost-monitor
+  labels:
+    app: cost-monitor
+    component: oauth
+rules:
+# ConfigMap access for user mapping
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["user-roles", "app-config"]
+# Secret access for OAuth secrets
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+  resourceNames: ["oauth-proxy-secret"]
+
+---
+# RoleBinding for application access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cost-monitor-app-access
+  namespace: cost-monitor
+  labels:
+    app: cost-monitor
+    component: oauth
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cost-monitor-app-access
+subjects:
+- kind: ServiceAccount
+  name: cost-monitor-oauth
+  namespace: cost-monitor
+
+---
+# OpenShift OAuth Client for the cost monitor application
+apiVersion: oauth.openshift.io/v1
+kind: OAuthClient
+metadata:
+  name: cost-monitor-oauth-client
+  labels:
+    app: cost-monitor
+    component: oauth
+secret: cost-monitor-oauth-secret
+redirectURIs:
+- "https://cost-monitor.apps.cluster.local/oauth/callback"
+grantMethod: auto
+respondWithChallenges: false

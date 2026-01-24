@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: cost-monitor-auth
+
+# Resources for OAuth2 proxy SSO integration
+resources:
+  - oauth-rbac.yaml
+  - oauth-proxy.yaml
+  - oauth-routes.yaml
+  # oauth-secrets.yaml is generated programmatically by deploy.sh
+
+# Common labels for auth components
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/component: authentication
+    app.kubernetes.io/part-of: cost-monitor
+
+# Configuration for OAuth2 proxy
+configMapGenerator:
+- name: oauth-proxy-config
+  literals:
+  - OAUTH2_PROXY_PROVIDER=oidc
+  - OAUTH2_PROXY_REVERSE_PROXY=true
+  - OAUTH2_PROXY_PASS_USER_HEADERS=true
+  - OAUTH2_PROXY_SET_XAUTHREQUEST=true

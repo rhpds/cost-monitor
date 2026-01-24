@@ -1,0 +1,121 @@
+---
+# OAuth2 Proxy Deployment for SSO Integration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth-proxy
+  labels:
+    app: cost-monitor
+    component: oauth-proxy
+    tier: security
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: oauth-proxy
+      component: oauth-proxy
+  template:
+    metadata:
+      labels:
+        app: oauth-proxy
+        component: oauth-proxy
+        tier: security
+    spec:
+      serviceAccountName: cost-monitor-oauth
+      securityContext:
+        runAsNonRoot: true
+        # Let OpenShift assign user/group automatically for SCC compatibility
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: oauth-proxy
+        image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:latest
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        args:
+        - -provider=openshift
+        - -https-address=:8443
+        - -http-address=
+        - -email-domain=*
+        - -upstream=http://dashboard-service:8050/
+        - -tls-cert=/etc/tls/private/tls.crt
+        - -tls-key=/etc/tls/private/tls.key
+        - -cookie-secret-file=/etc/proxy/secrets/session_secret
+        - -openshift-service-account=cost-monitor-oauth
+        - -openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        - -skip-auth-regex=^/health
+        volumeMounts:
+        - name: oauth-proxy-secret
+          mountPath: /etc/proxy/secrets
+          readOnly: true
+        - name: oauth-serving-cert
+          mountPath: /etc/tls/private
+          readOnly: true
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          # Let OpenShift assign user automatically for SCC compatibility
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+
+        livenessProbe:
+          httpGet:
+            path: /oauth/healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+          periodSeconds: 10
+
+        readinessProbe:
+          httpGet:
+            path: /oauth/healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          timeoutSeconds: 3
+          periodSeconds: 5
+      volumes:
+      - name: oauth-proxy-secret
+        secret:
+          secretName: oauth-proxy-secret
+      - name: oauth-serving-cert
+        secret:
+          secretName: oauth-serving-cert
+
+---
+# OAuth2 Proxy Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth-proxy-service
+  labels:
+    app: cost-monitor
+    component: oauth-proxy
+    tier: security
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: oauth-serving-cert
+spec:
+  type: ClusterIP
+  selector:
+    app: oauth-proxy
+    component: oauth-proxy
+  ports:
+  - name: https
+    port: 8443
+    targetPort: 8443
+    protocol: TCP
