@@ -1,0 +1,159 @@
+# Pre-commit hooks configuration for cost-monitor
+# Enforces code quality, security, and standards across the codebase
+
+repos:
+  # Security: Secret scanning (PRIMARY - Yelp's detect-secrets)
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        exclude: |
+          (?x)(
+            package-lock\.json|
+            yarn\.lock|
+            \.git/|
+            \.secrets\.baseline
+          )
+
+  # Security: Alternative secret detection (gitleaks)
+  - repo: https://github.com/zricethezav/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+
+  # Standard file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+        exclude: \.md$
+      - id: check-yaml
+        args: ["--unsafe"] # Allow custom YAML tags in OpenShift configs
+      - id: check-json
+      - id: check-toml
+      - id: check-xml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: debug-statements
+        exclude: scripts/health_check\.py # Health check may use print statements
+      - id: check-docstring-first
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+
+  # Python code formatting with Black
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        language_version: python3
+        args: ["--config", "pyproject.toml"]
+
+  # Python import sorting with isort
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--settings-path", "pyproject.toml"]
+
+  # Python linting with Ruff (modern flake8 replacement)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.9
+    hooks:
+      - id: ruff
+        args: ["--config", "pyproject.toml", "--fix"]
+
+  # Python type checking with MyPy
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        args: ["--config-file", "pyproject.toml"]
+        additional_dependencies:
+          [
+            "types-requests",
+            "types-redis",
+            "types-PyYAML",
+            "pydantic",
+            "fastapi",
+          ]
+        exclude: |
+          (?x)(
+            ^tests/|
+            ^scripts/health_check\.py$
+          )
+
+  # Dead code detection with Vulture
+  - repo: https://github.com/jendrikseipp/vulture
+    rev: v2.10
+    hooks:
+      - id: vulture
+        args:
+          [
+            "--min-confidence",
+            "90",
+            "--ignore-names",
+            "*_clicks,n_intervals,args,kwargs",
+            "--ignore-decorators",
+            "@callback,@dash.callback,@app.route,@click.command,@click.option,@click.argument",
+            "src",
+          ]
+        exclude: |
+          (?x)(
+            ^tests/|
+            ^openshift/|
+            ^docs/|
+            __pycache__
+          )
+
+  # YAML/JSON formatting and validation
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        types_or: [yaml, json]
+        exclude: |
+          (?x)(
+            ^openshift/.*\.yaml$|
+            ^config/.*\.yaml$|
+            \.secrets\.baseline$
+          )
+
+  # Dockerfile linting (if Docker images are modified)
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint-docker
+        files: dockerfiles/.*
+
+  # Spell checking for documentation
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.17.2
+    hooks:
+      - id: typos
+        exclude: |
+          (?x)(
+            \.git/|
+            \.secrets\.baseline|
+            ^assets/.*\.json$|
+            package-lock\.json
+          )
+
+# Global configuration
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ""
+  autoupdate_commit_msg: "[pre-commit.ci] pre-commit autoupdate"
+  autoupdate_schedule: weekly
+  skip: [mypy, vulture] # Skip intensive checks in CI
+  submodules: false
+
+# Performance: Skip hooks for large files (>500KB)
+fail_fast: false
+minimum_pre_commit_version: "2.20.0"
