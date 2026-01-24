@@ -552,75 +552,8 @@ async def get_cost_summary(
                 except Exception as e:
                     logger.warning(f"🔵 AWS: Failed to check/start background account resolution: {e}")
 
-            # Legacy AWS account collection - can be removed after database approach is stable
-            logger.info("🔍 DEBUG: Starting AWS account collection section...")
+            # Legacy AWS account collection removed - using database-driven approach instead
             aws_account_rows = []
-            try:
-                from src.providers.aws import AWSCostProvider
-                from src.config.settings import get_config
-
-                config = get_config()
-                logger.info(f"🔍 DEBUG: AWS config check - enabled: {config.aws.get('enabled', False) if config else 'no config'}")
-                if config and config.aws.get('enabled', False):
-                    logger.info("Collecting AWS account breakdown separately...")
-
-                    # Create AWS provider instance for account-specific data collection
-                    aws_config = config.aws
-                    aws_provider = AWSCostProvider(aws_config)
-
-                    # Authenticate and get account-specific cost data
-                    if await aws_provider.authenticate():
-                        logger.info("AWS authenticated for account collection")
-
-                        # Get cost data grouped by LINKED_ACCOUNT only (for account breakdown)
-                        aws_account_data = await aws_provider.get_cost_data(
-                            start_date=start_date,
-                            end_date=end_date,
-                            group_by=['LINKED_ACCOUNT']
-                        )
-
-                        # Process AWS account data into our format
-                        if aws_account_data and aws_account_data.data_points:
-                            logger.info(f"AWS account data collected: {len(aws_account_data.data_points)} data points")
-
-                            # Aggregate by account
-                            aws_accounts = {}
-                            for point in aws_account_data.data_points:
-                                if point.account_id:
-                                    if point.account_id not in aws_accounts:
-                                        aws_accounts[point.account_id] = 0
-                                    aws_accounts[point.account_id] += point.amount
-
-                            # Convert to our row format (top 20 by cost)
-                            aws_account_items = sorted(aws_accounts.items(), key=lambda x: x[1], reverse=True)[:20]
-
-                            for account_id, cost in aws_account_items:
-                                # Get account name from AWS provider cache and format properly
-                                raw_account_name = aws_provider.account_names_cache.get(account_id, account_id) if account_id else account_id
-                                if raw_account_name and raw_account_name != account_id:
-                                    # We have a proper account name, format as "Name (Account ID)"
-                                    account_name = f"{raw_account_name} ({account_id})"
-                                else:
-                                    # Fallback to generic format
-                                    account_name = f"AWS Account ({account_id})"
-
-                                aws_account_rows.append({
-                                    'provider': 'aws',
-                                    'account_id': account_id,
-                                    'account_name': account_name,  # Add formatted account name
-                                    'cost': cost,
-                                    'currency': 'USD'
-                                })
-
-                            logger.info(f"AWS account breakdown: {len(aws_account_rows)} accounts, total: ${sum(row['cost'] for row in aws_account_rows):,.2f}")
-                        else:
-                            logger.info("No AWS account data found")
-                    else:
-                        logger.warning("AWS authentication failed for account collection")
-
-            except Exception as e:
-                logger.warning(f"AWS account collection failed: {e}")
-                # Don't fail the whole request, just continue without AWS accounts
 
             # Get GCP account breakdown separately (doesn't interfere with service data)
             logger.info("🔍 DEBUG: Starting GCP account collection section...")
