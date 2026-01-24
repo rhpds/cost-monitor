@@ -5,14 +5,16 @@ Defines the interface that all cloud provider implementations must follow.
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime, date
-from typing import List, Dict, Any, Optional, Union
-from dataclasses import dataclass
+from datetime import date, datetime
 from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class TimeGranularity(Enum):
     """Supported time granularities for cost queries."""
+
     DAILY = "daily"
     MONTHLY = "monthly"
     YEARLY = "yearly"
@@ -20,54 +22,207 @@ class TimeGranularity(Enum):
 
 class CostMetricType(Enum):
     """Types of cost metrics available."""
+
     BLENDED_COST = "blended_cost"
     UNBLENDED_COST = "unblended_cost"
     NET_COST = "net_cost"
     AMORTIZED_COST = "amortized_cost"
 
 
-@dataclass
-class CostDataPoint:
-    """Represents a single cost data point."""
-    date: Union[datetime, date]
+class CostDataPoint(BaseModel):
+    """Represents a single cost data point with comprehensive validation."""
+
+    date: datetime | date
     amount: float
     currency: str
-    service_name: Optional[str] = None
-    account_id: Optional[str] = None
-    account_name: Optional[str] = None
-    region: Optional[str] = None
-    resource_id: Optional[str] = None
-    tags: Optional[Dict[str, str]] = None
+    service_name: str | None = None
+    account_id: str | None = None
+    account_name: str | None = None
+    region: str | None = None
+    resource_id: str | None = None
+    tags: dict[str, str] | None = None
 
-    def __post_init__(self):
-        """Validate cost data point after initialization."""
-        # Note: Negative amounts are allowed (credits, refunds, adjustments)
-        if not self.currency:
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, v: str) -> str:
+        """Validate and normalize currency code."""
+        if not v or not v.strip():
             raise ValueError("Currency must be specified")
 
+        normalized = v.upper().strip()
 
-@dataclass
-class CostSummary:
-    """Summary of costs for a time period."""
+        # Common ISO 4217 currency codes for validation
+        valid_currencies = {
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "CAD",
+            "CHF",
+            "CNY",
+            "SEK",
+            "NZD",
+            "MXN",
+            "SGD",
+            "HKD",
+            "NOK",
+            "ZAR",
+            "BRL",
+        }
+
+        if normalized not in valid_currencies:
+            # Allow any 3-letter code but warn about unknown currencies
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Unknown currency code: {normalized}")
+
+        return normalized
+
+    @field_validator("service_name", "account_name")
+    @classmethod
+    def validate_display_names(cls, v: str | None) -> str | None:
+        """Validate and normalize display names."""
+        if v is not None:
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: dict[str, str] | None) -> dict[str, str] | None:
+        """Validate tags dictionary."""
+        if v is None:
+            return v
+
+        # Validate tag keys and values
+        validated_tags = {}
+        for key, value in v.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise ValueError(
+                    f"Tags must be string key-value pairs, got {type(key)}: {type(value)}"
+                )
+
+            # Normalize whitespace
+            clean_key = key.strip()
+            clean_value = value.strip()
+
+            if clean_key:  # Skip empty keys
+                validated_tags[clean_key] = clean_value
+
+        return validated_tags if validated_tags else None
+
+    @model_validator(mode="after")
+    def validate_cost_data_point(self):
+        """Validate the complete cost data point."""
+        # Check for future dates
+        today = date.today()
+        point_date = self.date.date() if isinstance(self.date, datetime) else self.date
+
+        if point_date > today:
+            raise ValueError(f"Cost data point date {point_date} cannot be in the future")
+
+        # Validate amount range (prevent extreme values)
+        if abs(self.amount) > 1e12:  # 1 trillion
+            raise ValueError(f"Cost amount {self.amount} exceeds reasonable limits")
+
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return self.model_dump(by_alias=True, exclude_unset=True)
+
+
+class CostSummary(BaseModel):
+    """Summary of costs for a time period with comprehensive validation."""
+
     provider: str
-    start_date: Union[datetime, date]
-    end_date: Union[datetime, date]
+    start_date: datetime | date
+    end_date: datetime | date
     total_cost: float
     currency: str
-    data_points: List[CostDataPoint]
+    data_points: list[CostDataPoint]
     granularity: TimeGranularity
     last_updated: datetime
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, v: str) -> str:
+        """Validate and normalize currency code."""
+        if not v or not v.strip():
+            raise ValueError("Currency must be specified")
+        return v.upper().strip()
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Validate and normalize provider name."""
+        normalized = v.lower().strip()
+        valid_providers = {"aws", "azure", "gcp", "all"}
+
+        if normalized not in valid_providers:
+            raise ValueError(
+                f'Invalid provider "{v}". Must be one of: {", ".join(sorted(valid_providers))}'
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        """Validate date range and data consistency."""
+        # Convert dates for comparison
+        start = self.start_date.date() if isinstance(self.start_date, datetime) else self.start_date
+        end = self.end_date.date() if isinstance(self.end_date, datetime) else self.end_date
+
+        # Validate date range
+        if start >= end:
+            raise ValueError(f"Start date {start} must be before end date {end}")
+
+        # Check for reasonable time ranges (not more than 10 years)
+        if (end - start).days > 3650:
+            raise ValueError("Date range cannot exceed 10 years")
+
+        # Validate that last_updated is not in the future
+        if self.last_updated > datetime.now():
+            raise ValueError("Last updated timestamp cannot be in the future")
+
+        # Validate data point consistency
+        if self.data_points:
+            # Check that all data points use the same currency
+            currencies = {point.currency for point in self.data_points}
+            if len(currencies) > 1:
+                raise ValueError(f"Mixed currencies in data points: {currencies}")
+
+            primary_currency = next(iter(currencies))
+            if primary_currency != self.currency:
+                raise ValueError(
+                    f"Summary currency {self.currency} doesn't match data points currency {primary_currency}"
+                )
+
+            # Verify total cost calculation (allow small floating point differences)
+            calculated_total = sum(point.amount for point in self.data_points)
+            tolerance = abs(self.total_cost) * 0.01  # 1% tolerance
+            if abs(calculated_total - self.total_cost) > max(tolerance, 0.01):
+                raise ValueError(
+                    f"Total cost {self.total_cost} doesn't match sum of data points {calculated_total:.2f}"
+                )
+
+        return self
 
     @property
     def daily_average(self) -> float:
         """Calculate daily average cost."""
         if not self.data_points:
             return 0.0
-        days = (self.end_date - self.start_date).days + 1
+
+        start = self.start_date.date() if isinstance(self.start_date, datetime) else self.start_date
+        end = self.end_date.date() if isinstance(self.end_date, datetime) else self.end_date
+        days = (end - start).days + 1
+
         return self.total_cost / max(days, 1)
 
     @property
-    def service_breakdown(self) -> Dict[str, float]:
+    def service_breakdown(self) -> dict[str, float]:
         """Get cost breakdown by service."""
         breakdown = {}
         for point in self.data_points:
@@ -75,20 +230,27 @@ class CostSummary:
             breakdown[service] = breakdown.get(service, 0.0) + point.amount
         return breakdown
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return self.model_dump(by_alias=True, exclude_unset=True)
+
 
 class CloudProviderError(Exception):
     """Base exception for cloud provider errors."""
+
     pass
 
 
 class AuthenticationError(CloudProviderError):
     """Authentication-related errors."""
+
     pass
 
 
 class APIError(CloudProviderError):
     """API-related errors."""
-    def __init__(self, message: str, status_code: Optional[int] = None, provider: Optional[str] = None):
+
+    def __init__(self, message: str, status_code: int | None = None, provider: str | None = None):
         super().__init__(message)
         self.status_code = status_code
         self.provider = provider
@@ -96,20 +258,22 @@ class APIError(CloudProviderError):
 
 class RateLimitError(APIError):
     """Rate limiting errors."""
-    def __init__(self, message: str, retry_after: Optional[int] = None, provider: Optional[str] = None):
+
+    def __init__(self, message: str, retry_after: int | None = None, provider: str | None = None):
         super().__init__(message, status_code=429, provider=provider)
         self.retry_after = retry_after
 
 
 class ConfigurationError(CloudProviderError):
     """Configuration-related errors."""
+
     pass
 
 
 class CloudCostProvider(ABC):
     """Abstract base class for cloud cost providers."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize the cloud provider with configuration.
 
@@ -151,11 +315,11 @@ class CloudCostProvider(ABC):
     @abstractmethod
     async def get_cost_data(
         self,
-        start_date: Union[datetime, date],
-        end_date: Union[datetime, date],
+        start_date: datetime | date,
+        end_date: datetime | date,
         granularity: TimeGranularity = TimeGranularity.DAILY,
-        group_by: Optional[List[str]] = None,
-        filter_by: Optional[Dict[str, Any]] = None
+        group_by: list[str] | None = None,
+        filter_by: dict[str, Any] | None = None,
     ) -> CostSummary:
         """
         Retrieve cost data for the specified time period.
@@ -191,10 +355,8 @@ class CloudCostProvider(ABC):
 
     @abstractmethod
     async def get_daily_costs(
-        self,
-        start_date: Union[datetime, date],
-        end_date: Union[datetime, date]
-    ) -> List[CostDataPoint]:
+        self, start_date: datetime | date, end_date: datetime | date
+    ) -> list[CostDataPoint]:
         """
         Get daily cost breakdown for the specified period.
 
@@ -209,11 +371,8 @@ class CloudCostProvider(ABC):
 
     @abstractmethod
     async def get_service_costs(
-        self,
-        start_date: Union[datetime, date],
-        end_date: Union[datetime, date],
-        top_n: int = 10
-    ) -> Dict[str, float]:
+        self, start_date: datetime | date, end_date: datetime | date, top_n: int = 10
+    ) -> dict[str, float]:
         """
         Get cost breakdown by service for the specified period.
 
@@ -228,7 +387,7 @@ class CloudCostProvider(ABC):
         pass
 
     @abstractmethod
-    def get_supported_regions(self) -> List[str]:
+    def get_supported_regions(self) -> list[str]:
         """
         Get list of supported regions for this provider.
 
@@ -238,7 +397,7 @@ class CloudCostProvider(ABC):
         pass
 
     @abstractmethod
-    def get_supported_services(self) -> List[str]:
+    def get_supported_services(self) -> list[str]:
         """
         Get list of supported services for cost monitoring.
 
@@ -270,9 +429,7 @@ class CloudCostProvider(ABC):
         return service_name.strip().title()
 
     def validate_date_range(
-        self,
-        start_date: Union[datetime, date],
-        end_date: Union[datetime, date]
+        self, start_date: datetime | date, end_date: datetime | date
     ) -> tuple[datetime, datetime]:
         """
         Validate and normalize date range.
@@ -297,6 +454,7 @@ class CloudCostProvider(ABC):
         if start_date.date() == end_date.date():
             # For same-day queries, extend end date to next day to satisfy API requirements
             from datetime import timedelta
+
             end_date = datetime.combine(end_date.date() + timedelta(days=1), datetime.min.time())
 
         # Validate range
@@ -306,7 +464,9 @@ class CloudCostProvider(ABC):
         # Check if dates are too far in the future
         now = datetime.now()
         # Convert start_date to date object for comparison if it's a datetime
-        start_date_for_comparison = start_date.date() if isinstance(start_date, datetime) else start_date
+        start_date_for_comparison = (
+            start_date.date() if isinstance(start_date, datetime) else start_date
+        )
         if start_date_for_comparison > now.date():
             raise ValueError("Start date cannot be in the future")
 
@@ -328,7 +488,7 @@ class CloudCostProvider(ABC):
         else:
             return f"{amount:.2f} {currency}"
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """
         Perform a health check of the provider.
 
@@ -344,7 +504,7 @@ class CloudCostProvider(ABC):
                 "authenticated": self._authenticated,
                 "connection": connection_ok,
                 "status": "healthy" if (self._authenticated and connection_ok) else "unhealthy",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
@@ -353,7 +513,7 @@ class CloudCostProvider(ABC):
                 "connection": False,
                 "status": "error",
                 "error": str(e),
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
 
@@ -368,7 +528,7 @@ class ProviderFactory:
         cls._providers[name.lower()] = provider_class
 
     @classmethod
-    def create_provider(cls, name: str, config: Dict[str, Any]) -> CloudCostProvider:
+    def create_provider(cls, name: str, config: dict[str, Any]) -> CloudCostProvider:
         """
         Create a provider instance.
 
@@ -391,6 +551,6 @@ class ProviderFactory:
         return provider_class(config)
 
     @classmethod
-    def get_available_providers(cls) -> List[str]:
+    def get_available_providers(cls) -> list[str]:
         """Get list of available provider names."""
         return list(cls._providers.keys())

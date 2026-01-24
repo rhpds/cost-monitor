@@ -6,21 +6,23 @@ capabilities for cost anomalies and budget overruns across cloud providers.
 """
 
 import logging
-from datetime import datetime, date, timedelta
-from typing import List, Dict, Any, Optional, Union, Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
 from enum import Enum
-import asyncio
+from typing import Any
 
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from ..config.settings import CloudConfig
 from ..providers.base import CloudCostProvider, CostSummary
 from ..utils.data_normalizer import CostDataNormalizer, MultiCloudCostSummary
-from ..config.settings import CloudConfig
 
 logger = logging.getLogger(__name__)
 
 
 class AlertLevel(Enum):
     """Alert severity levels."""
+
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"
@@ -28,6 +30,7 @@ class AlertLevel(Enum):
 
 class AlertType(Enum):
     """Types of cost alerts."""
+
     DAILY_THRESHOLD = "daily_threshold"
     MONTHLY_THRESHOLD = "monthly_threshold"
     BUDGET_EXCEEDED = "budget_exceeded"
@@ -36,55 +39,236 @@ class AlertType(Enum):
     SERVICE_ANOMALY = "service_anomaly"
 
 
-@dataclass
-class AlertRule:
-    """Configuration for an alert rule."""
-    name: str
-    alert_type: AlertType
-    provider: Optional[str] = None  # None means all providers
-    threshold_value: Optional[float] = None
-    percentage_change: Optional[float] = None
-    time_window: int = 1  # days
-    enabled: bool = True
-    alert_level: AlertLevel = AlertLevel.WARNING
-    description: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+class AlertRule(BaseModel):
+    """Configuration for an alert rule with comprehensive validation."""
 
+    name: str = Field(..., min_length=1, max_length=100, description="Alert rule name")
+    alert_type: AlertType = Field(..., description="Type of alert rule")
+    provider: str | None = Field(None, description="Cloud provider (None means all providers)")
+    threshold_value: float | None = Field(None, gt=0, description="Absolute threshold value")
+    percentage_change: float | None = Field(None, gt=0, description="Percentage change threshold")
+    time_window: int = Field(1, gt=0, le=365, description="Time window in days")
+    enabled: bool = Field(True, description="Whether the rule is enabled")
+    alert_level: AlertLevel = Field(AlertLevel.WARNING, description="Alert severity level")
+    description: str | None = Field(None, max_length=500, description="Optional rule description")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
-@dataclass
-class Alert:
-    """Represents a cost alert."""
-    id: str
-    rule_name: str
-    alert_type: AlertType
-    alert_level: AlertLevel
-    provider: str
-    current_value: float
-    threshold_value: float
-    currency: str
-    message: str
-    timestamp: datetime
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    acknowledged: bool = False
-    resolved: bool = False
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str | None) -> str | None:
+        """Validate provider name."""
+        if v is None:
+            return v
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert alert to dictionary for serialization."""
-        return {
-            'id': self.id,
-            'rule_name': self.rule_name,
-            'alert_type': self.alert_type.value,
-            'alert_level': self.alert_level.value,
-            'provider': self.provider,
-            'current_value': self.current_value,
-            'threshold_value': self.threshold_value,
-            'currency': self.currency,
-            'message': self.message,
-            'timestamp': self.timestamp.isoformat(),
-            'metadata': self.metadata,
-            'acknowledged': self.acknowledged,
-            'resolved': self.resolved
+        normalized = v.lower().strip()
+        valid_providers = {"aws", "azure", "gcp"}
+
+        if normalized not in valid_providers:
+            raise ValueError(
+                f'Invalid provider "{v}". Must be one of: {", ".join(sorted(valid_providers))}'
+            )
+        return normalized
+
+    @field_validator("name", "description")
+    @classmethod
+    def validate_strings(cls, v: str | None) -> str | None:
+        """Validate and clean string fields."""
+        if v is not None:
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
+
+    @model_validator(mode="after")
+    def validate_alert_rule(self):
+        """Validate alert rule logic and constraints."""
+        # Ensure at least one threshold is set for threshold-based alerts
+        threshold_types = {
+            AlertType.DAILY_THRESHOLD,
+            AlertType.MONTHLY_THRESHOLD,
+            AlertType.BUDGET_EXCEEDED,
         }
+
+        if self.alert_type in threshold_types:
+            if self.threshold_value is None and self.percentage_change is None:
+                raise ValueError(
+                    f"Alert type {self.alert_type.value} requires either threshold_value or percentage_change"
+                )
+
+            # Ensure mutual exclusivity
+            if self.threshold_value is not None and self.percentage_change is not None:
+                raise ValueError("threshold_value and percentage_change are mutually exclusive")
+
+        # For spike and trend detection, percentage_change is typically used
+        change_types = {AlertType.COST_SPIKE, AlertType.COST_TREND}
+        if self.alert_type in change_types and self.percentage_change is None:
+            raise ValueError(
+                f"Alert type {self.alert_type.value} typically requires percentage_change"
+            )
+
+        # Validate time window ranges for different alert types
+        if self.alert_type == AlertType.DAILY_THRESHOLD and self.time_window > 1:
+            # Warning: daily thresholds typically use time_window=1
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Daily threshold with time_window={self.time_window} may not behave as expected"
+            )
+
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return self.model_dump(by_alias=True, exclude_unset=True)
+
+
+class Alert(BaseModel):
+    """Represents a cost alert with comprehensive validation."""
+
+    id: str = Field(..., min_length=1, max_length=50, description="Unique alert identifier")
+    rule_name: str = Field(..., min_length=1, max_length=100, description="Name of the alert rule")
+    alert_type: AlertType = Field(..., description="Type of alert")
+    alert_level: AlertLevel = Field(..., description="Alert severity level")
+    provider: str = Field(..., description="Cloud provider or 'all'")
+    current_value: float = Field(..., ge=0, description="Current cost value")
+    threshold_value: float = Field(..., ge=0, description="Threshold that was exceeded")
+    currency: str = Field(..., min_length=3, max_length=3, description="Currency code")
+    message: str = Field(..., min_length=1, max_length=1000, description="Alert message")
+    timestamp: datetime = Field(..., description="When the alert was generated")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    acknowledged: bool = Field(False, description="Whether alert has been acknowledged")
+    resolved: bool = Field(False, description="Whether alert has been resolved")
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, v: str) -> str:
+        """Validate alert ID format."""
+        if not v or not v.strip():
+            raise ValueError("Alert ID cannot be empty")
+
+        # Allow various ID formats (UUID, short hash, etc.)
+        cleaned = v.strip()
+
+        # Basic validation - alphanumeric with some special chars
+        import re
+
+        if not re.match(r"^[a-zA-Z0-9_-]+$", cleaned):
+            raise ValueError(
+                "Alert ID can only contain alphanumeric characters, underscores, and dashes"
+            )
+
+        return cleaned
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Validate provider name."""
+        normalized = v.lower().strip()
+        valid_providers = {"aws", "azure", "gcp", "all"}
+
+        if normalized not in valid_providers:
+            raise ValueError(
+                f'Invalid provider "{v}". Must be one of: {", ".join(sorted(valid_providers))}'
+            )
+        return normalized
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, v: str) -> str:
+        """Validate and normalize currency code."""
+        if not v or not v.strip():
+            raise ValueError("Currency must be specified")
+
+        normalized = v.upper().strip()
+
+        # Common ISO 4217 currency codes
+        valid_currencies = {
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "CAD",
+            "CHF",
+            "CNY",
+            "SEK",
+            "NZD",
+            "MXN",
+            "SGD",
+            "HKD",
+            "NOK",
+            "ZAR",
+            "BRL",
+        }
+
+        if normalized not in valid_currencies:
+            # Allow any 3-letter code but warn
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Unknown currency code in alert: {normalized}")
+
+        return normalized
+
+    @field_validator("message", "rule_name")
+    @classmethod
+    def validate_text_fields(cls, v: str) -> str:
+        """Validate and clean text fields."""
+        if not v or not v.strip():
+            raise ValueError("Text field cannot be empty")
+        return v.strip()
+
+    @field_validator("current_value", "threshold_value")
+    @classmethod
+    def validate_values(cls, v: float) -> float:
+        """Validate cost values."""
+        if v < 0:
+            raise ValueError("Cost values cannot be negative")
+        if v > 1e12:  # 1 trillion
+            raise ValueError("Cost value exceeds reasonable limits")
+        return v
+
+    @model_validator(mode="after")
+    def validate_alert_state(self):
+        """Validate alert state consistency and business rules."""
+        # Validate timestamp is not too far in the future (allow small clock skew)
+        now = datetime.now()
+        max_future = now + timedelta(minutes=5)
+
+        if self.timestamp > max_future:
+            raise ValueError(f"Alert timestamp {self.timestamp} cannot be in the future")
+
+        # Validate state consistency
+        if self.resolved and not self.acknowledged:
+            # Auto-acknowledge resolved alerts
+            self.acknowledged = True
+
+        # Validate alert makes sense (current > threshold for cost alerts)
+        threshold_types = {
+            AlertType.DAILY_THRESHOLD,
+            AlertType.MONTHLY_THRESHOLD,
+            AlertType.BUDGET_EXCEEDED,
+        }
+
+        if self.alert_type in threshold_types and self.current_value <= self.threshold_value:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Alert {self.id}: current_value ({self.current_value}) <= threshold_value ({self.threshold_value})"
+            )
+
+        # Validate metadata
+        if self.metadata:
+            for key, _value in self.metadata.items():
+                if not isinstance(key, str):
+                    raise ValueError(f"Metadata keys must be strings, got {type(key)}")
+
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert alert to dictionary for serialization."""
+        return self.model_dump(by_alias=True, exclude_unset=True)
 
 
 class ThresholdMonitor:
@@ -93,10 +277,10 @@ class ThresholdMonitor:
     def __init__(self, config: CloudConfig):
         self.config = config
         self.normalizer = CostDataNormalizer()
-        self.alert_rules: List[AlertRule] = []
-        self.active_alerts: List[Alert] = []
-        self.alert_history: List[Alert] = []
-        self.alert_callbacks: List[Callable[[Alert], None]] = []
+        self.alert_rules: list[AlertRule] = []
+        self.active_alerts: list[Alert] = []
+        self.alert_history: list[Alert] = []
+        self.alert_callbacks: list[Callable[[Alert], None]] = []
 
         # Load alert rules from configuration
         self._load_alert_rules_from_config()
@@ -104,51 +288,59 @@ class ThresholdMonitor:
     def _load_alert_rules_from_config(self):
         """Load alert rules from configuration."""
         # Global threshold rules
-        global_warning = self.config.get_threshold('warning')
-        global_critical = self.config.get_threshold('critical')
+        global_warning = self.config.get_threshold("warning")
+        global_critical = self.config.get_threshold("critical")
 
         if global_warning:
-            self.alert_rules.append(AlertRule(
-                name="global_daily_warning",
-                alert_type=AlertType.DAILY_THRESHOLD,
-                threshold_value=global_warning,
-                alert_level=AlertLevel.WARNING,
-                description=f"Daily cost exceeds warning threshold of {global_warning}"
-            ))
+            self.alert_rules.append(
+                AlertRule(
+                    name="global_daily_warning",
+                    alert_type=AlertType.DAILY_THRESHOLD,
+                    threshold_value=global_warning,
+                    alert_level=AlertLevel.WARNING,
+                    description=f"Daily cost exceeds warning threshold of {global_warning}",
+                )
+            )
 
         if global_critical:
-            self.alert_rules.append(AlertRule(
-                name="global_daily_critical",
-                alert_type=AlertType.DAILY_THRESHOLD,
-                threshold_value=global_critical,
-                alert_level=AlertLevel.CRITICAL,
-                description=f"Daily cost exceeds critical threshold of {global_critical}"
-            ))
+            self.alert_rules.append(
+                AlertRule(
+                    name="global_daily_critical",
+                    alert_type=AlertType.DAILY_THRESHOLD,
+                    threshold_value=global_critical,
+                    alert_level=AlertLevel.CRITICAL,
+                    description=f"Daily cost exceeds critical threshold of {global_critical}",
+                )
+            )
 
         # Provider-specific threshold rules
         for provider in self.config.enabled_providers:
-            provider_warning = self.config.get_threshold('warning', provider)
-            provider_critical = self.config.get_threshold('critical', provider)
+            provider_warning = self.config.get_threshold("warning", provider)
+            provider_critical = self.config.get_threshold("critical", provider)
 
             if provider_warning:
-                self.alert_rules.append(AlertRule(
-                    name=f"{provider}_daily_warning",
-                    alert_type=AlertType.DAILY_THRESHOLD,
-                    provider=provider,
-                    threshold_value=provider_warning,
-                    alert_level=AlertLevel.WARNING,
-                    description=f"{provider.upper()} daily cost exceeds warning threshold"
-                ))
+                self.alert_rules.append(
+                    AlertRule(
+                        name=f"{provider}_daily_warning",
+                        alert_type=AlertType.DAILY_THRESHOLD,
+                        provider=provider,
+                        threshold_value=provider_warning,
+                        alert_level=AlertLevel.WARNING,
+                        description=f"{provider.upper()} daily cost exceeds warning threshold",
+                    )
+                )
 
             if provider_critical:
-                self.alert_rules.append(AlertRule(
-                    name=f"{provider}_daily_critical",
-                    alert_type=AlertType.DAILY_THRESHOLD,
-                    provider=provider,
-                    threshold_value=provider_critical,
-                    alert_level=AlertLevel.CRITICAL,
-                    description=f"{provider.upper()} daily cost exceeds critical threshold"
-                ))
+                self.alert_rules.append(
+                    AlertRule(
+                        name=f"{provider}_daily_critical",
+                        alert_type=AlertType.DAILY_THRESHOLD,
+                        provider=provider,
+                        threshold_value=provider_critical,
+                        alert_level=AlertLevel.CRITICAL,
+                        description=f"{provider.upper()} daily cost exceeds critical threshold",
+                    )
+                )
 
     def add_alert_rule(self, rule: AlertRule):
         """Add a custom alert rule."""
@@ -171,10 +363,8 @@ class ThresholdMonitor:
         self.alert_callbacks.append(callback)
 
     async def check_thresholds(
-        self,
-        providers: Dict[str, CloudCostProvider],
-        check_date: Optional[date] = None
-    ) -> List[Alert]:
+        self, providers: dict[str, CloudCostProvider], check_date: date | None = None
+    ) -> list[Alert]:
         """
         Check all configured thresholds against current costs.
 
@@ -199,9 +389,7 @@ class ThresholdMonitor:
 
                 # Get daily costs (AWS requires start < end, so add one day to end date)
                 end_date = check_date + timedelta(days=1)
-                daily_summary = await provider.get_cost_data(
-                    check_date, end_date
-                )
+                daily_summary = await provider.get_cost_data(check_date, end_date)
                 cost_summaries.append(daily_summary)
 
             except Exception as e:
@@ -244,17 +432,21 @@ class ThresholdMonitor:
         self,
         rule: AlertRule,
         multi_cloud_summary: MultiCloudCostSummary,
-        cost_summaries: List[CostSummary]
-    ) -> List[Alert]:
+        cost_summaries: list[CostSummary],
+    ) -> list[Alert]:
         """Check a specific alert rule."""
         alerts = []
 
         if rule.alert_type == AlertType.DAILY_THRESHOLD:
-            alerts.extend(await self._check_daily_threshold(rule, multi_cloud_summary, cost_summaries))
+            alerts.extend(
+                await self._check_daily_threshold(rule, multi_cloud_summary, cost_summaries)
+            )
         elif rule.alert_type == AlertType.COST_SPIKE:
             alerts.extend(await self._check_cost_spike(rule, multi_cloud_summary, cost_summaries))
         elif rule.alert_type == AlertType.SERVICE_ANOMALY:
-            alerts.extend(await self._check_service_anomaly(rule, multi_cloud_summary, cost_summaries))
+            alerts.extend(
+                await self._check_service_anomaly(rule, multi_cloud_summary, cost_summaries)
+            )
 
         return alerts
 
@@ -262,8 +454,8 @@ class ThresholdMonitor:
         self,
         rule: AlertRule,
         multi_cloud_summary: MultiCloudCostSummary,
-        cost_summaries: List[CostSummary]
-    ) -> List[Alert]:
+        cost_summaries: list[CostSummary],
+    ) -> list[Alert]:
         """Check daily cost thresholds."""
         alerts = []
 
@@ -283,9 +475,9 @@ class ThresholdMonitor:
                     message=f"Total daily cost ${current_cost:.2f} exceeds threshold ${rule.threshold_value:.2f}",
                     timestamp=datetime.now(),
                     metadata={
-                        'provider_breakdown': multi_cloud_summary.provider_breakdown,
-                        'threshold_exceeded_by': current_cost - rule.threshold_value
-                    }
+                        "provider_breakdown": multi_cloud_summary.provider_breakdown,
+                        "threshold_exceeded_by": current_cost - rule.threshold_value,
+                    },
                 )
                 alerts.append(alert)
         else:
@@ -305,9 +497,7 @@ class ThresholdMonitor:
                             currency=summary.currency,
                             message=f"{summary.provider.upper()} daily cost ${current_cost:.2f} exceeds threshold ${rule.threshold_value:.2f}",
                             timestamp=datetime.now(),
-                            metadata={
-                                'threshold_exceeded_by': current_cost - rule.threshold_value
-                            }
+                            metadata={"threshold_exceeded_by": current_cost - rule.threshold_value},
                         )
                         alerts.append(alert)
                     break
@@ -318,8 +508,8 @@ class ThresholdMonitor:
         self,
         rule: AlertRule,
         multi_cloud_summary: MultiCloudCostSummary,
-        cost_summaries: List[CostSummary]
-    ) -> List[Alert]:
+        cost_summaries: list[CostSummary],
+    ) -> list[Alert]:
         """Check for cost spikes compared to historical data."""
         # This would require historical data comparison
         # For now, return empty list - could be implemented with database storage
@@ -329,18 +519,16 @@ class ThresholdMonitor:
         self,
         rule: AlertRule,
         multi_cloud_summary: MultiCloudCostSummary,
-        cost_summaries: List[CostSummary]
-    ) -> List[Alert]:
+        cost_summaries: list[CostSummary],
+    ) -> list[Alert]:
         """Check for service-level cost anomalies."""
         # This would require service-level analysis
         # For now, return empty list - could be implemented with statistical analysis
         return []
 
     def get_active_alerts(
-        self,
-        provider: Optional[str] = None,
-        alert_level: Optional[AlertLevel] = None
-    ) -> List[Alert]:
+        self, provider: str | None = None, alert_level: AlertLevel | None = None
+    ) -> list[Alert]:
         """Get currently active alerts with optional filtering."""
         alerts = self.active_alerts
 
@@ -376,10 +564,12 @@ class ThresholdMonitor:
         """Remove resolved alerts from active alerts list."""
         self.active_alerts = [a for a in self.active_alerts if not a.resolved]
 
-    def get_alert_summary(self) -> Dict[str, Any]:
+    def get_alert_summary(self) -> dict[str, Any]:
         """Get a summary of current alert status."""
         active_count = len(self.active_alerts)
-        critical_count = len([a for a in self.active_alerts if a.alert_level == AlertLevel.CRITICAL])
+        critical_count = len(
+            [a for a in self.active_alerts if a.alert_level == AlertLevel.CRITICAL]
+        )
         warning_count = len([a for a in self.active_alerts if a.alert_level == AlertLevel.WARNING])
 
         provider_alerts = {}
@@ -389,16 +579,17 @@ class ThresholdMonitor:
             provider_alerts[alert.provider] += 1
 
         return {
-            'total_active_alerts': active_count,
-            'critical_alerts': critical_count,
-            'warning_alerts': warning_count,
-            'alerts_by_provider': provider_alerts,
-            'last_check_time': datetime.now().isoformat()
+            "total_active_alerts": active_count,
+            "critical_alerts": critical_count,
+            "warning_alerts": warning_count,
+            "alerts_by_provider": provider_alerts,
+            "last_check_time": datetime.now().isoformat(),
         }
 
     def _generate_alert_id(self) -> str:
         """Generate a unique alert ID."""
         import uuid
+
         return str(uuid.uuid4())[:8]
 
 
@@ -414,11 +605,7 @@ class CostAnomalyDetector:
         """
         self.sensitivity = sensitivity
 
-    def detect_anomalies(
-        self,
-        daily_costs: List[float],
-        window_size: int = 7
-    ) -> List[bool]:
+    def detect_anomalies(self, daily_costs: list[float], window_size: int = 7) -> list[bool]:
         """
         Detect anomalies in daily cost data.
 
@@ -436,14 +623,14 @@ class CostAnomalyDetector:
 
         for i in range(window_size, len(daily_costs)):
             # Calculate mean and std dev of previous window
-            window = daily_costs[i-window_size:i]
+            window = daily_costs[i - window_size : i]
             mean_cost = sum(window) / len(window)
 
             if len(set(window)) == 1:  # All values are the same
                 continue
 
             variance = sum((x - mean_cost) ** 2 for x in window) / len(window)
-            std_dev = variance ** 0.5
+            std_dev = variance**0.5
 
             # Check if current value is anomalous
             current_cost = daily_costs[i]
@@ -459,15 +646,9 @@ class BudgetMonitor:
     """Monitors costs against predefined budgets."""
 
     def __init__(self):
-        self.budgets: Dict[str, Dict[str, float]] = {}
+        self.budgets: dict[str, dict[str, float]] = {}
 
-    def set_budget(
-        self,
-        provider: str,
-        period: str,
-        amount: float,
-        currency: str = 'USD'
-    ):
+    def set_budget(self, provider: str, period: str, amount: float, currency: str = "USD"):
         """
         Set a budget for a provider and time period.
 
@@ -480,18 +661,11 @@ class BudgetMonitor:
         if provider not in self.budgets:
             self.budgets[provider] = {}
 
-        self.budgets[provider][period] = {
-            'amount': amount,
-            'currency': currency
-        }
+        self.budgets[provider][period] = {"amount": amount, "currency": currency}
 
     def check_budget_status(
-        self,
-        provider: str,
-        period: str,
-        current_spend: float,
-        currency: str = 'USD'
-    ) -> Dict[str, Any]:
+        self, provider: str, period: str, current_spend: float, currency: str = "USD"
+    ) -> dict[str, Any]:
         """
         Check budget status for a provider and period.
 
@@ -505,36 +679,33 @@ class BudgetMonitor:
             Dictionary with budget status information
         """
         if provider not in self.budgets or period not in self.budgets[provider]:
-            return {
-                'budget_set': False,
-                'status': 'no_budget'
-            }
+            return {"budget_set": False, "status": "no_budget"}
 
         budget_info = self.budgets[provider][period]
-        budget_amount = budget_info['amount']
+        budget_amount = budget_info["amount"]
 
         # Simple currency handling (in production, use real conversion)
-        if currency != budget_info['currency']:
+        if currency != budget_info["currency"]:
             # For now, assume same currency
             pass
 
         percentage_used = (current_spend / budget_amount) * 100
         remaining = budget_amount - current_spend
 
-        status = 'ok'
+        status = "ok"
         if percentage_used >= 100:
-            status = 'exceeded'
+            status = "exceeded"
         elif percentage_used >= 90:
-            status = 'critical'
+            status = "critical"
         elif percentage_used >= 75:
-            status = 'warning'
+            status = "warning"
 
         return {
-            'budget_set': True,
-            'budget_amount': budget_amount,
-            'current_spend': current_spend,
-            'remaining': remaining,
-            'percentage_used': percentage_used,
-            'status': status,
-            'currency': budget_info['currency']
+            "budget_set": True,
+            "budget_amount": budget_amount,
+            "current_spend": current_spend,
+            "remaining": remaining,
+            "percentage_used": percentage_used,
+            "status": status,
+            "currency": budget_info["currency"],
         }

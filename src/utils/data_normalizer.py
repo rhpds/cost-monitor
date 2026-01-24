@@ -6,19 +6,21 @@ cost data across AWS, Azure, and GCP providers for comparison and analysis.
 """
 
 import logging
-from datetime import datetime, date
-from typing import List, Dict, Any, Optional, Union, Tuple
-from dataclasses import dataclass, field
 from collections import defaultdict
+from datetime import date, datetime
 from enum import Enum
+from typing import Any
 
-from ..providers.base import CostDataPoint, CostSummary, TimeGranularity
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from ..providers.base import CostSummary, TimeGranularity
 
 logger = logging.getLogger(__name__)
 
 
 class CurrencyCode(Enum):
     """Supported currency codes."""
+
     USD = "USD"
     EUR = "EUR"
     GBP = "GBP"
@@ -27,64 +29,425 @@ class CurrencyCode(Enum):
     AUD = "AUD"
 
 
-@dataclass
-class NormalizedCostData:
-    """Normalized multi-cloud cost data structure."""
-    provider: str
-    total_cost: float
-    currency: str
-    start_date: date
-    end_date: date
-    granularity: TimeGranularity
-    daily_costs: List[Dict[str, Any]] = field(default_factory=list)
-    service_breakdown: Dict[str, float] = field(default_factory=dict)
-    regional_breakdown: Dict[str, float] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+class NormalizedCostData(BaseModel):
+    """Normalized multi-cloud cost data structure with comprehensive validation."""
 
-    def to_dict(self) -> Dict[str, Any]:
+    provider: str = Field(..., description="Cloud provider name")
+    total_cost: float = Field(..., ge=0, description="Total cost for the period")
+    currency: str = Field(..., min_length=3, max_length=3, description="Currency code")
+    start_date: date = Field(..., description="Start date of the data period")
+    end_date: date = Field(..., description="End date of the data period")
+    granularity: TimeGranularity = Field(..., description="Data granularity")
+    daily_costs: list[dict[str, Any]] = Field(
+        default_factory=list, description="Daily cost breakdown"
+    )
+    service_breakdown: dict[str, float] = Field(
+        default_factory=dict, description="Cost breakdown by service"
+    )
+    regional_breakdown: dict[str, float] = Field(
+        default_factory=dict, description="Cost breakdown by region"
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Validate and normalize provider name."""
+        normalized = v.lower().strip()
+        valid_providers = {"aws", "azure", "gcp", "all"}
+
+        if normalized not in valid_providers:
+            raise ValueError(
+                f'Invalid provider "{v}". Must be one of: {", ".join(sorted(valid_providers))}'
+            )
+        return normalized
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, v: str) -> str:
+        """Validate and normalize currency code."""
+        if not v or not v.strip():
+            raise ValueError("Currency must be specified")
+        return v.upper().strip()
+
+    @field_validator("service_breakdown", "regional_breakdown")
+    @classmethod
+    def validate_cost_breakdowns(cls, v: dict[str, float]) -> dict[str, float]:
+        """Validate cost breakdown dictionaries."""
+        if not v:
+            return {}
+
+        validated = {}
+        total_negative = 0.0
+        total_positive = 0.0
+
+        for service, cost in v.items():
+            if not isinstance(service, str):
+                raise ValueError(f"Service names must be strings, got {type(service)}")
+            if not isinstance(cost, int | float):
+                raise ValueError(f"Cost values must be numeric, got {type(cost)} for {service}")
+
+            # Clean service name
+            clean_service = service.strip()
+            if not clean_service:
+                continue  # Skip empty service names
+
+            # Track positive and negative costs separately for validation
+            if cost < 0:
+                total_negative += cost
+            else:
+                total_positive += cost
+
+            validated[clean_service] = float(cost)
+
+        # Warn if breakdown has extreme imbalance (could indicate data quality issues)
+        if total_positive > 0 and abs(total_negative) > total_positive * 0.5:
+            logger.warning(
+                f"Large negative costs detected in breakdown: {total_negative:.2f} vs {total_positive:.2f}"
+            )
+
+        return validated
+
+    @field_validator("daily_costs")
+    @classmethod
+    def validate_daily_costs(cls, v: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Validate daily costs structure."""
+        if not v:
+            return []
+
+        validated = []
+        for i, day_data in enumerate(v):
+            if not isinstance(day_data, dict):
+                raise ValueError(f"Daily cost entry {i} must be a dictionary")
+
+            # Ensure required fields exist
+            required_fields = {"date", "cost"}
+            missing_fields = required_fields - set(day_data.keys())
+            if missing_fields:
+                raise ValueError(f"Daily cost entry {i} missing required fields: {missing_fields}")
+
+            # Validate date format if it's a string
+            date_value = day_data["date"]
+            if isinstance(date_value, str):
+                try:
+                    # Try to parse ISO date format
+                    datetime.fromisoformat(date_value.replace("Z", "+00:00"))
+                except ValueError:
+                    raise ValueError(f"Invalid date format in daily cost entry {i}: {date_value}")
+
+            # Validate cost is numeric
+            cost_value = day_data["cost"]
+            if not isinstance(cost_value, int | float):
+                raise ValueError(f"Cost in daily entry {i} must be numeric, got {type(cost_value)}")
+
+            validated.append(day_data)
+
+        return validated
+
+    @model_validator(mode="after")
+    def validate_normalized_cost_data(self):
+        """Validate data consistency and business rules."""
+        # Validate date range
+        if self.start_date >= self.end_date:
+            raise ValueError(
+                f"Start date {self.start_date} must be before end date {self.end_date}"
+            )
+
+        # Check for reasonable date ranges
+        date_diff = (self.end_date - self.start_date).days
+        if date_diff > 3650:  # 10 years
+            raise ValueError("Date range cannot exceed 10 years")
+
+        # Validate total cost consistency with breakdowns
+        if self.service_breakdown:
+            service_total = sum(self.service_breakdown.values())
+            tolerance = max(abs(self.total_cost) * 0.05, 0.01)  # 5% tolerance or 1 cent
+
+            if abs(service_total - self.total_cost) > tolerance:
+                logger.warning(
+                    f"Service breakdown total ({service_total:.2f}) doesn't match total_cost ({self.total_cost:.2f})"
+                )
+
+        # Similar check for regional breakdown
+        if self.regional_breakdown:
+            regional_total = sum(self.regional_breakdown.values())
+            tolerance = max(abs(self.total_cost) * 0.05, 0.01)
+
+            if abs(regional_total - self.total_cost) > tolerance:
+                logger.warning(
+                    f"Regional breakdown total ({regional_total:.2f}) doesn't match total_cost ({self.total_cost:.2f})"
+                )
+
+        # Validate daily costs consistency
+        if self.daily_costs:
+            daily_total = sum(day.get("cost", 0) for day in self.daily_costs)
+            tolerance = max(abs(self.total_cost) * 0.05, 0.01)
+
+            if abs(daily_total - self.total_cost) > tolerance:
+                logger.warning(
+                    f"Daily costs total ({daily_total:.2f}) doesn't match total_cost ({self.total_cost:.2f})"
+                )
+
+        # Validate granularity vs data structure consistency
+        if self.granularity == TimeGranularity.DAILY and self.daily_costs:
+            expected_days = date_diff + 1
+            actual_days = len(self.daily_costs)
+
+            # Allow some flexibility for partial data
+            if abs(actual_days - expected_days) > expected_days * 0.1:
+                logger.warning(
+                    f"Daily granularity expects ~{expected_days} days but got {actual_days} daily cost entries"
+                )
+
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
-        return {
-            'provider': self.provider,
-            'total_cost': self.total_cost,
-            'currency': self.currency,
-            'start_date': self.start_date.isoformat(),
-            'end_date': self.end_date.isoformat(),
-            'granularity': self.granularity.value,
-            'daily_costs': self.daily_costs,
-            'service_breakdown': self.service_breakdown,
-            'regional_breakdown': self.regional_breakdown,
-            'metadata': self.metadata
-        }
+        return self.model_dump(by_alias=True, exclude_unset=True)
 
 
-@dataclass
-class MultiCloudCostSummary:
-    """Aggregated multi-cloud cost summary."""
-    total_cost: float
-    currency: str
-    start_date: date
-    end_date: date
-    provider_breakdown: Dict[str, float] = field(default_factory=dict)
-    combined_daily_costs: List[Dict[str, Any]] = field(default_factory=list)
-    combined_service_breakdown: Dict[str, float] = field(default_factory=dict)
-    combined_regional_breakdown: Dict[str, float] = field(default_factory=dict)
-    combined_account_breakdown: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    provider_data: Dict[str, NormalizedCostData] = field(default_factory=dict)
+class MultiCloudCostSummary(BaseModel):
+    """Aggregated multi-cloud cost summary with comprehensive validation."""
 
-    def to_dict(self) -> Dict[str, Any]:
+    total_cost: float = Field(..., ge=0, description="Total aggregated cost across all providers")
+    currency: str = Field(..., min_length=3, max_length=3, description="Primary currency code")
+    start_date: date = Field(..., description="Start date of the summary period")
+    end_date: date = Field(..., description="End date of the summary period")
+    provider_breakdown: dict[str, float] = Field(
+        default_factory=dict, description="Cost breakdown by provider"
+    )
+    combined_daily_costs: list[dict[str, Any]] = Field(
+        default_factory=list, description="Combined daily costs across providers"
+    )
+    combined_service_breakdown: dict[str, float] = Field(
+        default_factory=dict, description="Combined service cost breakdown"
+    )
+    combined_regional_breakdown: dict[str, float] = Field(
+        default_factory=dict, description="Combined regional cost breakdown"
+    )
+    combined_account_breakdown: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, description="Combined account cost breakdown"
+    )
+    provider_data: dict[str, NormalizedCostData] = Field(
+        default_factory=dict, description="Individual provider cost data"
+    )
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, v: str) -> str:
+        """Validate and normalize currency code."""
+        if not v or not v.strip():
+            raise ValueError("Currency must be specified")
+        return v.upper().strip()
+
+    @field_validator("provider_breakdown")
+    @classmethod
+    def validate_provider_breakdown(cls, v: dict[str, float]) -> dict[str, float]:
+        """Validate provider breakdown."""
+        if not v:
+            return {}
+
+        validated = {}
+        valid_providers = {"aws", "azure", "gcp", "all"}
+
+        for provider, cost in v.items():
+            if not isinstance(provider, str):
+                raise ValueError(f"Provider names must be strings, got {type(provider)}")
+            if not isinstance(cost, int | float):
+                raise ValueError(f"Cost values must be numeric, got {type(cost)} for {provider}")
+
+            normalized_provider = provider.lower().strip()
+            if normalized_provider not in valid_providers:
+                # Allow additional providers but warn
+                logger.warning(f"Unknown provider in breakdown: {provider}")
+                normalized_provider = provider.strip()
+
+            validated[normalized_provider] = float(cost)
+
+        return validated
+
+    @field_validator("combined_service_breakdown", "combined_regional_breakdown")
+    @classmethod
+    def validate_combined_breakdowns(cls, v: dict[str, float]) -> dict[str, float]:
+        """Validate combined breakdown dictionaries."""
+        if not v:
+            return {}
+
+        validated = {}
+        for key, cost in v.items():
+            if not isinstance(key, str):
+                raise ValueError(f"Breakdown keys must be strings, got {type(key)}")
+            if not isinstance(cost, int | float):
+                raise ValueError(f"Cost values must be numeric, got {type(cost)} for {key}")
+
+            clean_key = key.strip()
+            if clean_key:
+                validated[clean_key] = float(cost)
+
+        return validated
+
+    @field_validator("combined_account_breakdown")
+    @classmethod
+    def validate_account_breakdown(cls, v: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Validate combined account breakdown."""
+        if not v:
+            return {}
+
+        validated = {}
+        for account_id, account_data in v.items():
+            if not isinstance(account_id, str):
+                raise ValueError(f"Account IDs must be strings, got {type(account_id)}")
+            if not isinstance(account_data, dict):
+                raise ValueError(f"Account data must be a dictionary, got {type(account_data)}")
+
+            clean_account_id = account_id.strip()
+            if clean_account_id:
+                # Validate account data structure
+                if "cost" in account_data and not isinstance(account_data["cost"], int | float):
+                    raise ValueError(f"Account cost must be numeric for {clean_account_id}")
+
+                validated[clean_account_id] = account_data
+
+        return validated
+
+    @field_validator("combined_daily_costs")
+    @classmethod
+    def validate_combined_daily_costs(cls, v: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Validate combined daily costs structure."""
+        if not v:
+            return []
+
+        validated = []
+        seen_dates = set()
+
+        for i, day_data in enumerate(v):
+            if not isinstance(day_data, dict):
+                raise ValueError(f"Daily cost entry {i} must be a dictionary")
+
+            # Check for required fields
+            if "date" not in day_data:
+                raise ValueError(f"Daily cost entry {i} missing 'date' field")
+
+            date_str = day_data["date"]
+            if isinstance(date_str, str):
+                # Check for duplicate dates
+                if date_str in seen_dates:
+                    raise ValueError(f"Duplicate date in combined daily costs: {date_str}")
+                seen_dates.add(date_str)
+
+                # Validate date format
+                try:
+                    datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                except ValueError:
+                    raise ValueError(f"Invalid date format in entry {i}: {date_str}")
+
+            # Validate cost fields by provider
+            for key, value in day_data.items():
+                if key != "date" and "cost" in key.lower() and not isinstance(value, int | float):
+                    raise ValueError(f"Cost value {key} in entry {i} must be numeric")
+
+            validated.append(day_data)
+
+        return validated
+
+    @field_validator("provider_data")
+    @classmethod
+    def validate_provider_data(
+        cls, v: dict[str, NormalizedCostData]
+    ) -> dict[str, NormalizedCostData]:
+        """Validate provider data dictionary."""
+        if not v:
+            return {}
+
+        validated = {}
+        valid_providers = {"aws", "azure", "gcp", "all"}
+
+        for provider, data in v.items():
+            if not isinstance(provider, str):
+                raise ValueError(f"Provider names must be strings, got {type(provider)}")
+            if not isinstance(data, NormalizedCostData):
+                raise ValueError(
+                    f"Provider data must be NormalizedCostData instances, got {type(data)}"
+                )
+
+            normalized_provider = provider.lower().strip()
+            if normalized_provider not in valid_providers:
+                logger.warning(f"Unknown provider in provider_data: {provider}")
+                normalized_provider = provider.strip()
+
+            validated[normalized_provider] = data
+
+        return validated
+
+    @model_validator(mode="after")
+    def validate_multi_cloud_summary(self):
+        """Validate multi-cloud summary consistency and business rules."""
+        # Validate date range
+        if self.start_date >= self.end_date:
+            raise ValueError(
+                f"Start date {self.start_date} must be before end date {self.end_date}"
+            )
+
+        # Validate total cost consistency with provider breakdown
+        if self.provider_breakdown:
+            breakdown_total = sum(self.provider_breakdown.values())
+            tolerance = max(abs(self.total_cost) * 0.05, 0.01)  # 5% tolerance
+
+            if abs(breakdown_total - self.total_cost) > tolerance:
+                logger.warning(
+                    f"Provider breakdown total ({breakdown_total:.2f}) doesn't match total_cost ({self.total_cost:.2f})"
+                )
+
+        # Validate consistency between provider_data and provider_breakdown
+        if self.provider_data and self.provider_breakdown:
+            data_providers = set(self.provider_data.keys())
+            breakdown_providers = set(self.provider_breakdown.keys())
+
+            missing_in_breakdown = data_providers - breakdown_providers
+            missing_in_data = breakdown_providers - data_providers
+
+            if missing_in_breakdown:
+                logger.warning(f"Providers in data but not breakdown: {missing_in_breakdown}")
+            if missing_in_data:
+                logger.warning(f"Providers in breakdown but not data: {missing_in_data}")
+
+        # Validate currency consistency across provider data
+        if self.provider_data:
+            provider_currencies = {data.currency for data in self.provider_data.values()}
+            if len(provider_currencies) > 1:
+                logger.warning(f"Multiple currencies in provider data: {provider_currencies}")
+
+            # Check if main currency matches provider currencies
+            if self.currency not in provider_currencies and provider_currencies:
+                logger.warning(
+                    f"Main currency {self.currency} not found in provider currencies: {provider_currencies}"
+                )
+
+        # Validate date consistency across provider data
+        if self.provider_data:
+            for provider, data in self.provider_data.items():
+                if data.start_date != self.start_date:
+                    logger.warning(
+                        f"Start date mismatch for {provider}: {data.start_date} vs {self.start_date}"
+                    )
+                if data.end_date != self.end_date:
+                    logger.warning(
+                        f"End date mismatch for {provider}: {data.end_date} vs {self.end_date}"
+                    )
+
+        # Validate combined daily costs date range
+        if self.combined_daily_costs:
+            expected_days = (self.end_date - self.start_date).days + 1
+            actual_days = len(self.combined_daily_costs)
+
+            if abs(actual_days - expected_days) > expected_days * 0.1:
+                logger.warning(f"Expected ~{expected_days} daily entries but got {actual_days}")
+
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
-        return {
-            'total_cost': self.total_cost,
-            'currency': self.currency,
-            'start_date': self.start_date.isoformat(),
-            'end_date': self.end_date.isoformat(),
-            'provider_breakdown': self.provider_breakdown,
-            'combined_daily_costs': self.combined_daily_costs,
-            'combined_service_breakdown': self.combined_service_breakdown,
-            'combined_regional_breakdown': self.combined_regional_breakdown,
-            'combined_account_breakdown': self.combined_account_breakdown,
-            'provider_data': {k: v.to_dict() for k, v in self.provider_data.items()}
-        }
+        return self.model_dump(by_alias=True, exclude_unset=True)
 
 
 class ServiceNameNormalizer:
@@ -92,71 +455,71 @@ class ServiceNameNormalizer:
 
     # Mapping of provider-specific service names to normalized names
     SERVICE_MAPPINGS = {
-        'aws': {
-            'Amazon EC2-Instance': 'Compute',
-            'Amazon Elastic Compute Cloud - Compute': 'Compute',
-            'Amazon Simple Storage Service': 'Object Storage',
-            'Amazon S3': 'Object Storage',
-            'Amazon Relational Database Service': 'Database',
-            'Amazon RDS': 'Database',
-            'Amazon CloudFront': 'CDN',
-            'AWS Lambda': 'Functions',
-            'Amazon Lambda': 'Functions',
-            'Amazon Elastic Block Store': 'Block Storage',
-            'Amazon EBS': 'Block Storage',
-            'Amazon Virtual Private Cloud': 'Networking',
-            'Amazon VPC': 'Networking',
-            'Amazon Route 53': 'DNS',
-            'Amazon CloudWatch': 'Monitoring',
-            'Amazon DynamoDB': 'NoSQL Database',
-            'Amazon ElastiCache': 'Cache',
-            'Amazon API Gateway': 'API Gateway',
-            'AWS Data Transfer': 'Data Transfer'
+        "aws": {
+            "Amazon EC2-Instance": "Compute",
+            "Amazon Elastic Compute Cloud - Compute": "Compute",
+            "Amazon Simple Storage Service": "Object Storage",
+            "Amazon S3": "Object Storage",
+            "Amazon Relational Database Service": "Database",
+            "Amazon RDS": "Database",
+            "Amazon CloudFront": "CDN",
+            "AWS Lambda": "Functions",
+            "Amazon Lambda": "Functions",
+            "Amazon Elastic Block Store": "Block Storage",
+            "Amazon EBS": "Block Storage",
+            "Amazon Virtual Private Cloud": "Networking",
+            "Amazon VPC": "Networking",
+            "Amazon Route 53": "DNS",
+            "Amazon CloudWatch": "Monitoring",
+            "Amazon DynamoDB": "NoSQL Database",
+            "Amazon ElastiCache": "Cache",
+            "Amazon API Gateway": "API Gateway",
+            "AWS Data Transfer": "Data Transfer",
         },
-        'azure': {
-            'Virtual Machines': 'Compute',
-            'Microsoft.Compute': 'Compute',
-            'Storage': 'Object Storage',
-            'Microsoft.Storage': 'Object Storage',
-            'SQL Database': 'Database',
-            'Microsoft.Sql': 'Database',
-            'App Service': 'App Service',
-            'Microsoft.Web': 'App Service',
-            'Azure Functions': 'Functions',
-            'Azure Kubernetes Service': 'Container Service',
-            'Microsoft.ContainerService': 'Container Service',
-            'Azure Cosmos DB': 'NoSQL Database',
-            'Microsoft.DocumentDB': 'NoSQL Database',
-            'Azure Cache for Redis': 'Cache',
-            'Microsoft.Cache': 'Cache',
-            'Networking': 'Networking',
-            'Microsoft.Network': 'Networking',
-            'Key Vault': 'Key Management',
-            'Microsoft.KeyVault': 'Key Management',
-            'Application Gateway': 'Load Balancer',
-            'Load Balancer': 'Load Balancer',
-            'Azure Monitor': 'Monitoring',
-            'Log Analytics': 'Logging'
+        "azure": {
+            "Virtual Machines": "Compute",
+            "Microsoft.Compute": "Compute",
+            "Storage": "Object Storage",
+            "Microsoft.Storage": "Object Storage",
+            "SQL Database": "Database",
+            "Microsoft.Sql": "Database",
+            "App Service": "App Service",
+            "Microsoft.Web": "App Service",
+            "Azure Functions": "Functions",
+            "Azure Kubernetes Service": "Container Service",
+            "Microsoft.ContainerService": "Container Service",
+            "Azure Cosmos DB": "NoSQL Database",
+            "Microsoft.DocumentDB": "NoSQL Database",
+            "Azure Cache for Redis": "Cache",
+            "Microsoft.Cache": "Cache",
+            "Networking": "Networking",
+            "Microsoft.Network": "Networking",
+            "Key Vault": "Key Management",
+            "Microsoft.KeyVault": "Key Management",
+            "Application Gateway": "Load Balancer",
+            "Load Balancer": "Load Balancer",
+            "Azure Monitor": "Monitoring",
+            "Log Analytics": "Logging",
         },
-        'gcp': {
-            'Compute Engine': 'Compute',
-            'Cloud Storage': 'Object Storage',
-            'Google Cloud Storage': 'Object Storage',
-            'BigQuery': 'Data Warehouse',
-            'Cloud SQL': 'Database',
-            'App Engine': 'App Service',
-            'Cloud Functions': 'Functions',
-            'Google Kubernetes Engine': 'Container Service',
-            'Kubernetes Engine': 'Container Service',
-            'Cloud Run': 'Container Service',
-            'Cloud CDN': 'CDN',
-            'Cloud Load Balancing': 'Load Balancer',
-            'Load Balancing': 'Load Balancer',
-            'Cloud DNS': 'DNS',
-            'Cloud Pub/Sub': 'Messaging',
-            'Cloud Dataflow': 'Data Processing',
-            'Firebase': 'Backend as a Service'
-        }
+        "gcp": {
+            "Compute Engine": "Compute",
+            "Cloud Storage": "Object Storage",
+            "Google Cloud Storage": "Object Storage",
+            "BigQuery": "Data Warehouse",
+            "Cloud SQL": "Database",
+            "App Engine": "App Service",
+            "Cloud Functions": "Functions",
+            "Google Kubernetes Engine": "Container Service",
+            "Kubernetes Engine": "Container Service",
+            "Cloud Run": "Container Service",
+            "Cloud CDN": "CDN",
+            "Cloud Load Balancing": "Load Balancer",
+            "Load Balancing": "Load Balancer",
+            "Cloud DNS": "DNS",
+            "Cloud Pub/Sub": "Messaging",
+            "Cloud Dataflow": "Data Processing",
+            "Firebase": "Backend as a Service",
+        },
     }
 
     @classmethod
@@ -200,43 +563,43 @@ class RegionNormalizer:
 
     # Mapping of provider-specific region names to normalized regions
     REGION_MAPPINGS = {
-        'aws': {
-            'us-east-1': 'US East (Virginia)',
-            'us-east-2': 'US East (Ohio)',
-            'us-west-1': 'US West (N. California)',
-            'us-west-2': 'US West (Oregon)',
-            'eu-west-1': 'Europe (Ireland)',
-            'eu-west-2': 'Europe (London)',
-            'eu-central-1': 'Europe (Frankfurt)',
-            'ap-southeast-1': 'Asia Pacific (Singapore)',
-            'ap-southeast-2': 'Asia Pacific (Sydney)',
-            'ap-northeast-1': 'Asia Pacific (Tokyo)',
+        "aws": {
+            "us-east-1": "US East (Virginia)",
+            "us-east-2": "US East (Ohio)",
+            "us-west-1": "US West (N. California)",
+            "us-west-2": "US West (Oregon)",
+            "eu-west-1": "Europe (Ireland)",
+            "eu-west-2": "Europe (London)",
+            "eu-central-1": "Europe (Frankfurt)",
+            "ap-southeast-1": "Asia Pacific (Singapore)",
+            "ap-southeast-2": "Asia Pacific (Sydney)",
+            "ap-northeast-1": "Asia Pacific (Tokyo)",
         },
-        'azure': {
-            'eastus': 'US East (Virginia)',
-            'eastus2': 'US East (Virginia)',
-            'westus': 'US West (California)',
-            'westus2': 'US West (Washington)',
-            'northeurope': 'Europe (Ireland)',
-            'westeurope': 'Europe (Netherlands)',
-            'uksouth': 'Europe (London)',
-            'germanywestcentral': 'Europe (Frankfurt)',
-            'eastasia': 'Asia Pacific (Hong Kong)',
-            'southeastasia': 'Asia Pacific (Singapore)',
-            'japaneast': 'Asia Pacific (Tokyo)',
+        "azure": {
+            "eastus": "US East (Virginia)",
+            "eastus2": "US East (Virginia)",
+            "westus": "US West (California)",
+            "westus2": "US West (Washington)",
+            "northeurope": "Europe (Ireland)",
+            "westeurope": "Europe (Netherlands)",
+            "uksouth": "Europe (London)",
+            "germanywestcentral": "Europe (Frankfurt)",
+            "eastasia": "Asia Pacific (Hong Kong)",
+            "southeastasia": "Asia Pacific (Singapore)",
+            "japaneast": "Asia Pacific (Tokyo)",
         },
-        'gcp': {
-            'us-east1': 'US East (South Carolina)',
-            'us-east4': 'US East (Virginia)',
-            'us-west1': 'US West (Oregon)',
-            'us-west2': 'US West (California)',
-            'europe-west1': 'Europe (Belgium)',
-            'europe-west2': 'Europe (London)',
-            'europe-west3': 'Europe (Frankfurt)',
-            'asia-southeast1': 'Asia Pacific (Singapore)',
-            'asia-northeast1': 'Asia Pacific (Tokyo)',
-            'australia-southeast1': 'Asia Pacific (Sydney)',
-        }
+        "gcp": {
+            "us-east1": "US East (South Carolina)",
+            "us-east4": "US East (Virginia)",
+            "us-west1": "US West (Oregon)",
+            "us-west2": "US West (California)",
+            "europe-west1": "Europe (Belgium)",
+            "europe-west2": "Europe (London)",
+            "europe-west3": "Europe (Frankfurt)",
+            "asia-southeast1": "Asia Pacific (Singapore)",
+            "asia-northeast1": "Asia Pacific (Tokyo)",
+            "australia-southeast1": "Asia Pacific (Sydney)",
+        },
     }
 
     @classmethod
@@ -264,17 +627,10 @@ class CurrencyConverter:
     """Simple currency converter for cost normalization."""
 
     # Mock exchange rates - in production, use a real currency API
-    EXCHANGE_RATES = {
-        'USD': 1.0,
-        'EUR': 1.1,
-        'GBP': 1.25,
-        'JPY': 0.0067,
-        'CAD': 0.74,
-        'AUD': 0.66
-    }
+    EXCHANGE_RATES = {"USD": 1.0, "EUR": 1.1, "GBP": 1.25, "JPY": 0.0067, "CAD": 0.74, "AUD": 0.66}
 
     @classmethod
-    def convert(cls, amount: float, from_currency: str, to_currency: str = 'USD') -> float:
+    def convert(cls, amount: float, from_currency: str, to_currency: str = "USD") -> float:
         """
         Convert amount between currencies.
 
@@ -300,7 +656,7 @@ class CurrencyConverter:
 class CostDataNormalizer:
     """Main class for normalizing multi-cloud cost data."""
 
-    def __init__(self, target_currency: str = 'USD'):
+    def __init__(self, target_currency: str = "USD"):
         """
         Initialize the normalizer.
 
@@ -313,7 +669,7 @@ class CostDataNormalizer:
         self.currency_converter = CurrencyConverter()
         self.providers = {}
 
-    def set_providers(self, providers: Dict[str, Any]):
+    def set_providers(self, providers: dict[str, Any]):
         """Set provider instances for accessing cached data like account names."""
         self.providers = providers
 
@@ -329,9 +685,7 @@ class CostDataNormalizer:
         """
         # Convert total cost to target currency
         normalized_total = self.currency_converter.convert(
-            cost_summary.total_cost,
-            cost_summary.currency,
-            self.target_currency
+            cost_summary.total_cost, cost_summary.currency, self.target_currency
         )
 
         # Process daily costs
@@ -354,36 +708,30 @@ class CostDataNormalizer:
             service_breakdown=service_breakdown,
             regional_breakdown=regional_breakdown,
             metadata={
-                'original_currency': cost_summary.currency,
-                'data_points_count': len(cost_summary.data_points),
-                'last_updated': cost_summary.last_updated.isoformat()
-            }
+                "original_currency": cost_summary.currency,
+                "data_points_count": len(cost_summary.data_points),
+                "last_updated": cost_summary.last_updated.isoformat(),
+            },
         )
 
-    def _normalize_daily_costs(self, cost_summary: CostSummary) -> List[Dict[str, Any]]:
+    def _normalize_daily_costs(self, cost_summary: CostSummary) -> list[dict[str, Any]]:
         """Normalize daily cost data."""
         daily_totals = defaultdict(float)
 
         # Aggregate by date
         for point in cost_summary.data_points:
             converted_amount = self.currency_converter.convert(
-                point.amount,
-                point.currency,
-                self.target_currency
+                point.amount, point.currency, self.target_currency
             )
             daily_totals[point.date] += converted_amount
 
         # Convert to list format
         return [
-            {
-                'date': date_key.isoformat(),
-                'cost': amount,
-                'currency': self.target_currency
-            }
+            {"date": date_key.isoformat(), "cost": amount, "currency": self.target_currency}
             for date_key, amount in sorted(daily_totals.items())
         ]
 
-    def _normalize_service_breakdown(self, cost_summary: CostSummary) -> Dict[str, float]:
+    def _normalize_service_breakdown(self, cost_summary: CostSummary) -> dict[str, float]:
         """Normalize service breakdown data."""
         service_totals = defaultdict(float)
 
@@ -391,22 +739,19 @@ class CostDataNormalizer:
             if point.service_name:
                 # Normalize service name
                 normalized_service = self.service_normalizer.normalize(
-                    point.service_name,
-                    cost_summary.provider
+                    point.service_name, cost_summary.provider
                 )
 
                 # Convert currency
                 converted_amount = self.currency_converter.convert(
-                    point.amount,
-                    point.currency,
-                    self.target_currency
+                    point.amount, point.currency, self.target_currency
                 )
 
                 service_totals[normalized_service] += converted_amount
 
         return dict(service_totals)
 
-    def _normalize_regional_breakdown(self, cost_summary: CostSummary) -> Dict[str, float]:
+    def _normalize_regional_breakdown(self, cost_summary: CostSummary) -> dict[str, float]:
         """Normalize regional breakdown data."""
         regional_totals = defaultdict(float)
 
@@ -414,15 +759,12 @@ class CostDataNormalizer:
             if point.region:
                 # Normalize region name
                 normalized_region = self.region_normalizer.normalize(
-                    point.region,
-                    cost_summary.provider
+                    point.region, cost_summary.provider
                 )
 
                 # Convert currency
                 converted_amount = self.currency_converter.convert(
-                    point.amount,
-                    point.currency,
-                    self.target_currency
+                    point.amount, point.currency, self.target_currency
                 )
 
                 regional_totals[normalized_region] += converted_amount
@@ -430,8 +772,7 @@ class CostDataNormalizer:
         return dict(regional_totals)
 
     def aggregate_multi_cloud_data(
-        self,
-        cost_summaries: List[CostSummary]
+        self, cost_summaries: list[CostSummary]
     ) -> MultiCloudCostSummary:
         """
         Aggregate cost data from multiple cloud providers.
@@ -450,8 +791,12 @@ class CostDataNormalizer:
         end_dates = []
         for cs in cost_summaries:
             # Convert datetime objects to date objects for consistent comparison
-            start_date_normalized = cs.start_date.date() if isinstance(cs.start_date, datetime) else cs.start_date
-            end_date_normalized = cs.end_date.date() if isinstance(cs.end_date, datetime) else cs.end_date
+            start_date_normalized = (
+                cs.start_date.date() if isinstance(cs.start_date, datetime) else cs.start_date
+            )
+            end_date_normalized = (
+                cs.end_date.date() if isinstance(cs.end_date, datetime) else cs.end_date
+            )
             start_dates.append(start_date_normalized)
             end_dates.append(end_date_normalized)
 
@@ -496,7 +841,9 @@ class CostDataNormalizer:
         # Log performance breakdown
         total_normalize = normalize_time + daily_time + service_time + region_time + account_time
         if total_normalize > 0.5:  # Only log if it takes more than 500ms
-            logger.info(f"🐌 Data normalization performance: normalize:{normalize_time:.3f}s, daily:{daily_time:.3f}s, service:{service_time:.3f}s, region:{region_time:.3f}s, account:{account_time:.3f}s, total:{total_normalize:.3f}s")
+            logger.info(
+                f"🐌 Data normalization performance: normalize:{normalize_time:.3f}s, daily:{daily_time:.3f}s, service:{service_time:.3f}s, region:{region_time:.3f}s, account:{account_time:.3f}s, total:{total_normalize:.3f}s"
+            )
 
         return MultiCloudCostSummary(
             total_cost=total_cost,
@@ -508,15 +855,17 @@ class CostDataNormalizer:
             combined_service_breakdown=combined_services,
             combined_regional_breakdown=combined_regions,
             combined_account_breakdown=combined_accounts,
-            provider_data=normalized_data
+            provider_data=normalized_data,
         )
 
-    def _aggregate_daily_costs(self, normalized_data: List[NormalizedCostData]) -> List[Dict[str, Any]]:
+    def _aggregate_daily_costs(
+        self, normalized_data: list[NormalizedCostData]
+    ) -> list[dict[str, Any]]:
         """Aggregate daily costs across providers."""
         all_dates = set()
         for data in normalized_data:
             for daily_cost in data.daily_costs:
-                all_dates.add(daily_cost['date'])
+                all_dates.add(daily_cost["date"])
 
         combined_daily = []
         for date_str in sorted(all_dates):
@@ -525,21 +874,25 @@ class CostDataNormalizer:
 
             for data in normalized_data:
                 for daily_cost in data.daily_costs:
-                    if daily_cost['date'] == date_str:
-                        total_for_date += daily_cost['cost']
-                        provider_costs[data.provider] = daily_cost['cost']
+                    if daily_cost["date"] == date_str:
+                        total_for_date += daily_cost["cost"]
+                        provider_costs[data.provider] = daily_cost["cost"]
                         break
 
-            combined_daily.append({
-                'date': date_str,
-                'total_cost': total_for_date,
-                'currency': self.target_currency,
-                'provider_breakdown': provider_costs
-            })
+            combined_daily.append(
+                {
+                    "date": date_str,
+                    "total_cost": total_for_date,
+                    "currency": self.target_currency,
+                    "provider_breakdown": provider_costs,
+                }
+            )
 
         return combined_daily
 
-    def _aggregate_service_breakdown(self, normalized_data: List[NormalizedCostData]) -> Dict[str, float]:
+    def _aggregate_service_breakdown(
+        self, normalized_data: list[NormalizedCostData]
+    ) -> dict[str, float]:
         """Aggregate service breakdown across providers with provider prefixes."""
         combined_services = defaultdict(float)
 
@@ -552,7 +905,9 @@ class CostDataNormalizer:
 
         return dict(combined_services)
 
-    def _aggregate_regional_breakdown(self, normalized_data: List[NormalizedCostData]) -> Dict[str, float]:
+    def _aggregate_regional_breakdown(
+        self, normalized_data: list[NormalizedCostData]
+    ) -> dict[str, float]:
         """Aggregate regional breakdown across providers."""
         combined_regions = defaultdict(float)
 
@@ -562,16 +917,18 @@ class CostDataNormalizer:
 
         return dict(combined_regions)
 
-    def _aggregate_account_breakdown(self, cost_summaries: List[CostSummary]) -> Dict[str, Dict[str, Any]]:
+    def _aggregate_account_breakdown(
+        self, cost_summaries: list[CostSummary]
+    ) -> dict[str, dict[str, Any]]:
         """Aggregate account/project/subscription breakdown across providers."""
         account_totals = defaultdict(float)
         account_details = {}
 
         # Map of provider to account type label
         provider_labels = {
-            'aws': 'AWS Account',
-            'azure': 'Azure Subscription',
-            'gcp': 'GCP Project'
+            "aws": "AWS Account",
+            "azure": "Azure Subscription",
+            "gcp": "GCP Project",
         }
 
         for cost_summary in cost_summaries:
@@ -581,47 +938,48 @@ class CostDataNormalizer:
                 if point.account_id:
                     # Convert currency to target currency
                     converted_amount = self.currency_converter.convert(
-                        point.amount,
-                        point.currency,
-                        self.target_currency
+                        point.amount, point.currency, self.target_currency
                     )
 
                     # Create unique key for account across providers
                     account_key = f"{provider}:{point.account_id}"
                     account_totals[account_key] += converted_amount
 
-
                     # Store account details (only once per account)
                     if account_key not in account_details:
                         # Get account name from tags if available, otherwise use account_id
                         account_name = point.account_id
-                        if point.tags and 'subscription_display_name' in point.tags:
+                        if point.tags and "subscription_display_name" in point.tags:
                             # Use Azure's subscription display name (includes both name and ID)
-                            account_name = point.tags['subscription_display_name']
-                        elif point.tags and 'account_name' in point.tags:
-                            account_name = point.tags['account_name']
-                        elif point.tags and 'project_name' in point.tags:
-                            account_name = point.tags['project_name']
-                        elif point.tags and 'subscription_name' in point.tags:
-                            account_name = point.tags['subscription_name']
-                        elif provider == 'aws' and point.account_id:
+                            account_name = point.tags["subscription_display_name"]
+                        elif point.tags and "account_name" in point.tags:
+                            account_name = point.tags["account_name"]
+                        elif point.tags and "project_name" in point.tags:
+                            account_name = point.tags["project_name"]
+                        elif point.tags and "subscription_name" in point.tags:
+                            account_name = point.tags["subscription_name"]
+                        elif provider == "aws" and point.account_id:
                             # Try to get account name from AWS provider's cache
                             account_name = self._get_aws_account_name_from_cache(point.account_id)
 
                         account_details[account_key] = {
-                            'account_id': point.account_id,
-                            'account_name': account_name,
-                            'provider': provider,
-                            'provider_label': provider_labels.get(provider, f'{provider.title()} Account'),
-                            'currency': self.target_currency
+                            "account_id": point.account_id,
+                            "account_name": account_name,
+                            "provider": provider,
+                            "provider_label": provider_labels.get(
+                                provider, f"{provider.title()} Account"
+                            ),
+                            "currency": self.target_currency,
                         }
 
         # Combine totals with details and sort by cost (descending)
         combined_accounts = {}
         for account_key, total_cost in account_totals.items():
             details = account_details[account_key]
-            details['total_cost'] = total_cost
-            details['percentage'] = (total_cost / sum(account_totals.values()) * 100) if account_totals else 0
+            details["total_cost"] = total_cost
+            details["percentage"] = (
+                (total_cost / sum(account_totals.values()) * 100) if account_totals else 0
+            )
             combined_accounts[account_key] = details
 
         return combined_accounts
@@ -629,8 +987,8 @@ class CostDataNormalizer:
     def _get_aws_account_name_from_cache(self, account_id: str) -> str:
         """Get AWS account name from provider cache or return raw account ID."""
         # Try to get from AWS provider cache
-        aws_provider = self.providers.get('aws')
-        if aws_provider and hasattr(aws_provider, 'account_names_cache'):
+        aws_provider = self.providers.get("aws")
+        if aws_provider and hasattr(aws_provider, "account_names_cache"):
             cached_name = aws_provider.account_names_cache.get(account_id)
             if cached_name and cached_name != account_id:
                 # Format as "Name (account_id)" if we have a real name
@@ -638,4 +996,3 @@ class CostDataNormalizer:
 
         # Return raw account ID if no cached name available - will be resolved later
         return account_id
-

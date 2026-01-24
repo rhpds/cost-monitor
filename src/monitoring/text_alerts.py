@@ -6,19 +6,20 @@ for cost threshold alerts and warnings.
 """
 
 import logging
-from datetime import datetime
-from typing import List, Dict, Any, Optional, TextIO
 import sys
 from enum import Enum
-from dataclasses import dataclass
+from typing import Any, TextIO
 
-from .alerts import Alert, AlertLevel, AlertType
+from pydantic import BaseModel, Field, field_validator
+
+from .alerts import Alert, AlertLevel
 
 logger = logging.getLogger(__name__)
 
 
 class OutputFormat(Enum):
     """Supported output formats for alerts."""
+
     PLAIN = "plain"
     COLORED = "colored"
     JSON = "json"
@@ -28,39 +29,65 @@ class OutputFormat(Enum):
 
 class Color:
     """ANSI color codes for terminal output."""
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    GREEN = '\033[92m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    WHITE = '\033[97m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-    END = '\033[0m'  # Reset color
+
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    GREEN = "\033[92m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    WHITE = "\033[97m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+    END = "\033[0m"  # Reset color
 
     @classmethod
     def disable(cls):
         """Disable color output."""
-        cls.RED = ''
-        cls.YELLOW = ''
-        cls.GREEN = ''
-        cls.BLUE = ''
-        cls.CYAN = ''
-        cls.WHITE = ''
-        cls.BOLD = ''
-        cls.UNDERLINE = ''
-        cls.END = ''
+        cls.RED = ""
+        cls.YELLOW = ""
+        cls.GREEN = ""
+        cls.BLUE = ""
+        cls.CYAN = ""
+        cls.WHITE = ""
+        cls.BOLD = ""
+        cls.UNDERLINE = ""
+        cls.END = ""
 
 
-@dataclass
-class AlertFormatConfig:
-    """Configuration for alert formatting."""
-    show_timestamp: bool = True
-    show_provider: bool = True
-    show_details: bool = True
-    use_colors: bool = True
-    max_message_length: Optional[int] = None
-    include_metadata: bool = False
+class AlertFormatConfig(BaseModel):
+    """Configuration for alert formatting with validation."""
+
+    show_timestamp: bool = Field(True, description="Whether to show timestamp in alerts")
+    show_provider: bool = Field(True, description="Whether to show provider in alerts")
+    show_details: bool = Field(True, description="Whether to show detailed alert information")
+    use_colors: bool = Field(True, description="Whether to use colors in output")
+    max_message_length: int | None = Field(
+        None, gt=0, le=10000, description="Maximum message length"
+    )
+    include_metadata: bool = Field(False, description="Whether to include alert metadata")
+
+    @field_validator("max_message_length")
+    @classmethod
+    def validate_max_message_length(cls, v: int | None) -> int | None:
+        """Validate maximum message length."""
+        if v is None:
+            return v
+
+        if v <= 0:
+            raise ValueError("Maximum message length must be positive")
+
+        # Set reasonable bounds
+        if v < 10:
+            raise ValueError("Maximum message length too small (minimum 10 characters)")
+
+        if v > 10000:
+            raise ValueError("Maximum message length too large (maximum 10000 characters)")
+
+        return v
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return self.model_dump(by_alias=True, exclude_unset=True)
 
 
 class TextAlertFormatter:
@@ -75,26 +102,14 @@ class TextAlertFormatter:
 
         # Alert level symbols and colors
         self.level_config = {
-            AlertLevel.INFO: {
-                'symbol': 'ℹ',
-                'color': Color.BLUE,
-                'prefix': 'INFO'
-            },
-            AlertLevel.WARNING: {
-                'symbol': '⚠',
-                'color': Color.YELLOW,
-                'prefix': 'WARNING'
-            },
-            AlertLevel.CRITICAL: {
-                'symbol': '🚨',
-                'color': Color.RED,
-                'prefix': 'CRITICAL'
-            }
+            AlertLevel.INFO: {"symbol": "ℹ", "color": Color.BLUE, "prefix": "INFO"},
+            AlertLevel.WARNING: {"symbol": "⚠", "color": Color.YELLOW, "prefix": "WARNING"},
+            AlertLevel.CRITICAL: {"symbol": "🚨", "color": Color.RED, "prefix": "CRITICAL"},
         }
 
     def _supports_color(self) -> bool:
         """Check if the terminal supports color output."""
-        return hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
+        return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
     def format_alert(self, alert: Alert, format_type: OutputFormat = OutputFormat.COLORED) -> str:
         """
@@ -109,6 +124,7 @@ class TextAlertFormatter:
         """
         if format_type == OutputFormat.JSON:
             import json
+
             return json.dumps(alert.to_dict(), indent=2)
         elif format_type == OutputFormat.MARKDOWN:
             return self._format_markdown(alert)
@@ -126,7 +142,7 @@ class TextAlertFormatter:
 
         # Timestamp
         if self.config.show_timestamp:
-            timestamp = alert.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            timestamp = alert.timestamp.strftime("%Y-%m-%d %H:%M:%S")
             if use_colors:
                 parts.append(f"{Color.CYAN}{timestamp}{Color.END}")
             else:
@@ -150,7 +166,7 @@ class TextAlertFormatter:
         # Main message
         message = alert.message
         if self.config.max_message_length and len(message) > self.config.max_message_length:
-            message = message[:self.config.max_message_length - 3] + "..."
+            message = message[: self.config.max_message_length - 3] + "..."
 
         if use_colors and alert.alert_level == AlertLevel.CRITICAL:
             message = f"{Color.BOLD}{message}{Color.END}"
@@ -174,10 +190,10 @@ class TextAlertFormatter:
         if self.config.include_metadata and alert.metadata:
             metadata_items = []
             for key, value in alert.metadata.items():
-                if key == 'threshold_exceeded_by':
+                if key == "threshold_exceeded_by":
                     metadata_items.append(f"Exceeded by: ${value:.2f}")
-                elif key == 'provider_breakdown':
-                    breakdown = ', '.join([f"{k}: ${v:.2f}" for k, v in value.items()])
+                elif key == "provider_breakdown":
+                    breakdown = ", ".join([f"{k}: ${v:.2f}" for k, v in value.items()])
                     metadata_items.append(f"Breakdown: {breakdown}")
 
             if metadata_items:
@@ -191,14 +207,12 @@ class TextAlertFormatter:
 
     def _format_markdown(self, alert: Alert) -> str:
         """Format alert as Markdown."""
-        level_emoji = {
-            AlertLevel.INFO: "ℹ️",
-            AlertLevel.WARNING: "⚠️",
-            AlertLevel.CRITICAL: "🚨"
-        }
+        level_emoji = {AlertLevel.INFO: "ℹ️", AlertLevel.WARNING: "⚠️", AlertLevel.CRITICAL: "🚨"}
 
         lines = []
-        lines.append(f"## {level_emoji.get(alert.alert_level, '')} {alert.alert_level.value.title()} Alert")
+        lines.append(
+            f"## {level_emoji.get(alert.alert_level, '')} {alert.alert_level.value.title()} Alert"
+        )
         lines.append("")
         lines.append(f"**Provider:** {alert.provider.upper()}")
         lines.append(f"**Message:** {alert.message}")
@@ -210,9 +224,9 @@ class TextAlertFormatter:
             lines.append("")
             lines.append("**Details:**")
             for key, value in alert.metadata.items():
-                if key == 'threshold_exceeded_by':
+                if key == "threshold_exceeded_by":
                     lines.append(f"- Exceeded by: ${value:.2f}")
-                elif key == 'provider_breakdown':
+                elif key == "provider_breakdown":
                     lines.append("- Provider breakdown:")
                     for provider, cost in value.items():
                         lines.append(f"  - {provider}: ${cost:.2f}")
@@ -225,9 +239,9 @@ class TextAlertFormatter:
 
     def format_alert_list(
         self,
-        alerts: List[Alert],
+        alerts: list[Alert],
         format_type: OutputFormat = OutputFormat.COLORED,
-        sort_by: str = "timestamp"
+        sort_by: str = "timestamp",
     ) -> str:
         """
         Format a list of alerts.
@@ -255,6 +269,7 @@ class TextAlertFormatter:
             return self._format_table(alerts)
         elif format_type == OutputFormat.JSON:
             import json
+
             return json.dumps([alert.to_dict() for alert in alerts], indent=2)
         else:
             formatted_alerts = []
@@ -262,12 +277,14 @@ class TextAlertFormatter:
                 formatted_alerts.append(self.format_alert(alert, format_type))
             return "\n".join(formatted_alerts)
 
-    def _format_table(self, alerts: List[Alert]) -> str:
+    def _format_table(self, alerts: list[Alert]) -> str:
         """Format alerts as a table."""
         lines = []
 
         # Header
-        header = f"{'TIME':<10} {'LEVEL':<8} {'PROVIDER':<10} {'CURRENT':<8} {'THRESHOLD':<8} MESSAGE"
+        header = (
+            f"{'TIME':<10} {'LEVEL':<8} {'PROVIDER':<10} {'CURRENT':<8} {'THRESHOLD':<8} MESSAGE"
+        )
         lines.append(header)
         lines.append("-" * len(header))
 
@@ -277,7 +294,7 @@ class TextAlertFormatter:
 
         return "\n".join(lines)
 
-    def format_summary(self, alerts: List[Alert]) -> str:
+    def format_summary(self, alerts: list[Alert]) -> str:
         """Format a summary of alerts."""
         if not alerts:
             return f"{Color.GREEN}✓ No active alerts{Color.END}"
@@ -305,19 +322,11 @@ class TextAlertFormatter:
 class TextAlertNotifier:
     """Handles text-based alert notifications."""
 
-    def __init__(
-        self,
-        output_stream: TextIO = None,
-        format_config: AlertFormatConfig = None
-    ):
+    def __init__(self, output_stream: TextIO = None, format_config: AlertFormatConfig = None):
         self.output_stream = output_stream or sys.stdout
         self.formatter = TextAlertFormatter(format_config)
 
-    def notify(
-        self,
-        alert: Alert,
-        format_type: OutputFormat = OutputFormat.COLORED
-    ):
+    def notify(self, alert: Alert, format_type: OutputFormat = OutputFormat.COLORED):
         """Send a text notification for an alert."""
         formatted_alert = self.formatter.format_alert(alert, format_type)
         self.output_stream.write(formatted_alert + "\n")
@@ -325,9 +334,9 @@ class TextAlertNotifier:
 
     def notify_multiple(
         self,
-        alerts: List[Alert],
+        alerts: list[Alert],
         format_type: OutputFormat = OutputFormat.COLORED,
-        include_summary: bool = True
+        include_summary: bool = True,
     ):
         """Send notifications for multiple alerts."""
         if not alerts:
@@ -346,9 +355,9 @@ class TextAlertNotifier:
 
     def display_cost_status(
         self,
-        provider_costs: Dict[str, float],
-        thresholds: Dict[str, Dict[str, float]],
-        currency: str = "USD"
+        provider_costs: dict[str, float],
+        thresholds: dict[str, dict[str, float]],
+        currency: str = "USD",
     ):
         """Display current cost status against thresholds."""
         lines = []
@@ -359,8 +368,8 @@ class TextAlertNotifier:
             provider_thresholds = thresholds.get(provider, {})
 
             # Determine status
-            critical_threshold = provider_thresholds.get('critical')
-            warning_threshold = provider_thresholds.get('warning')
+            critical_threshold = provider_thresholds.get("critical")
+            warning_threshold = provider_thresholds.get("warning")
 
             status_color = Color.GREEN
             status_text = "OK"
@@ -404,11 +413,7 @@ class TextAlertNotifier:
 class ConsoleAlertHandler:
     """Handles console-based alert display and interaction."""
 
-    def __init__(
-        self,
-        format_config: AlertFormatConfig = None,
-        auto_acknowledge: bool = False
-    ):
+    def __init__(self, format_config: AlertFormatConfig = None, auto_acknowledge: bool = False):
         self.notifier = TextAlertNotifier(format_config=format_config)
         self.auto_acknowledge = auto_acknowledge
 
@@ -422,14 +427,14 @@ class ConsoleAlertHandler:
             # Interactive acknowledgment (if running in interactive mode)
             if sys.stdin.isatty():
                 try:
-                    response = input(f"\nAcknowledge this alert? [y/N]: ").lower()
-                    if response in ['y', 'yes']:
+                    response = input("\nAcknowledge this alert? [y/N]: ").lower()
+                    if response in ["y", "yes"]:
                         alert.acknowledged = True
                         print(f"{Color.GREEN}Alert acknowledged{Color.END}")
                 except (KeyboardInterrupt, EOFError):
                     pass
 
-    def handle_alerts(self, alerts: List[Alert]):
+    def handle_alerts(self, alerts: list[Alert]):
         """Handle multiple alerts."""
         if not alerts:
             self.notifier.notify_multiple(alerts)
@@ -439,15 +444,15 @@ class ConsoleAlertHandler:
 
         if not self.auto_acknowledge and sys.stdin.isatty():
             try:
-                response = input(f"\nAcknowledge all alerts? [y/N]: ").lower()
-                if response in ['y', 'yes']:
+                response = input("\nAcknowledge all alerts? [y/N]: ").lower()
+                if response in ["y", "yes"]:
                     for alert in alerts:
                         alert.acknowledged = True
                     print(f"{Color.GREEN}All alerts acknowledged{Color.END}")
             except (KeyboardInterrupt, EOFError):
                 pass
 
-    def display_interactive_menu(self, alerts: List[Alert]):
+    def display_interactive_menu(self, alerts: list[Alert]):
         """Display an interactive menu for managing alerts."""
         while True:
             print(f"\n{Color.BOLD}Alert Management Menu{Color.END}")
@@ -460,20 +465,20 @@ class ConsoleAlertHandler:
             try:
                 choice = input("\nSelect option [1-5]: ").strip()
 
-                if choice == '1':
+                if choice == "1":
                     self.notifier.notify_multiple(alerts, OutputFormat.TABLE)
-                elif choice == '2':
+                elif choice == "2":
                     critical_alerts = [a for a in alerts if a.alert_level == AlertLevel.CRITICAL]
                     self.notifier.notify_multiple(critical_alerts, OutputFormat.TABLE)
-                elif choice == '3':
+                elif choice == "3":
                     for alert in alerts:
                         alert.acknowledged = True
                     print(f"{Color.GREEN}All alerts acknowledged{Color.END}")
-                elif choice == '4':
+                elif choice == "4":
                     resolved_count = len([a for a in alerts if a.resolved])
                     alerts[:] = [a for a in alerts if not a.resolved]  # Remove resolved alerts
                     print(f"{Color.GREEN}Cleared {resolved_count} resolved alerts{Color.END}")
-                elif choice == '5':
+                elif choice == "5":
                     break
                 else:
                     print(f"{Color.YELLOW}Invalid choice. Please select 1-5.{Color.END}")

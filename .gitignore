@@ -159,8 +159,8 @@ cython_debug/
 #  one user can have different project settings than another.
 .idea/
 
-# VSCode
-.vscode/
+# VSCode (team settings are committed, user-specific settings go in .vscode/*.local)
+.vscode/*.local
 
 # SECURITY: Never commit secrets or credentials
 config/.secrets.yaml
@@ -177,6 +177,9 @@ openshift/base/secrets/credentials.yaml
 !config/*.example.yaml
 !config/*.template*
 !openshift/base/secrets/*.template.yaml
+
+# Security scanning baselines (contain hashed patterns - keep local)
+.secrets.baseline
 
 # Cloud provider credentials
 .aws/credentials

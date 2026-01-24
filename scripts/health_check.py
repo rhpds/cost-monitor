@@ -2,12 +2,14 @@
 """Health check script for both data service and dashboard"""
 
 import argparse
-import sys
-import requests
 import os
-from typing import Dict, Any
+import sys
+from typing import Any
 
-def check_data_service() -> Dict[str, Any]:
+import requests
+
+
+def check_data_service() -> dict[str, Any]:
     """Health check for data service"""
     try:
         # Check API health endpoint
@@ -32,7 +34,8 @@ def check_data_service() -> Dict[str, Any]:
     except Exception as e:
         return {"status": "unhealthy", "reason": f"Unexpected error: {e}"}
 
-def check_dashboard() -> Dict[str, Any]:
+
+def check_dashboard() -> dict[str, Any]:
     """Health check for dashboard service"""
     try:
         # Check if Dash app is responding
@@ -41,12 +44,12 @@ def check_dashboard() -> Dict[str, Any]:
             return {"status": "unhealthy", "reason": f"Dashboard returned {response.status_code}"}
 
         # Check data service connectivity
-        data_service_url = os.getenv('DATA_SERVICE_URL', 'http://cost-data-service:8000')
+        data_service_url = os.getenv("DATA_SERVICE_URL", "http://cost-data-service:8000")
         try:
             data_response = requests.get(f"{data_service_url}/api/health/ready", timeout=3)
             if data_response.status_code != 200:
                 return {"status": "degraded", "reason": "Data service unreachable"}
-        except:
+        except Exception:
             return {"status": "degraded", "reason": "Cannot reach data service"}
 
         return {"status": "healthy", "reason": "Dashboard operational"}
@@ -56,10 +59,12 @@ def check_dashboard() -> Dict[str, Any]:
     except Exception as e:
         return {"status": "unhealthy", "reason": f"Unexpected error: {e}"}
 
+
 def main():
     parser = argparse.ArgumentParser(description="Health check for cost monitor services")
-    parser.add_argument("--service", required=True, choices=["data-service", "dashboard"],
-                       help="Service to check")
+    parser.add_argument(
+        "--service", required=True, choices=["data-service", "dashboard"], help="Service to check"
+    )
 
     args = parser.parse_args()
 
@@ -81,6 +86,7 @@ def main():
     else:
         print(f"Service unhealthy: {result['reason']}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

@@ -6,7 +6,7 @@ Uses dynaconf for flexible configuration with YAML files and environment overrid
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any
 
 from dynaconf import Dynaconf, Validator
 
@@ -18,10 +18,10 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 settings = Dynaconf(
     envvar_prefix="CLOUDCOST",
     settings_files=[
-        str(CONFIG_DIR / "config.yaml"),        # Base configuration
-        str(CONFIG_DIR / "development.yaml"),   # Development-specific settings (overrides base)
+        str(CONFIG_DIR / "config.yaml"),  # Base configuration
+        str(CONFIG_DIR / "development.yaml"),  # Development-specific settings (overrides base)
         str(CONFIG_DIR / "config.local.yaml"),  # Local overrides (git-ignored)
-        str(CONFIG_DIR / ".secrets.yaml"),     # Secrets file (git-ignored)
+        str(CONFIG_DIR / ".secrets.yaml"),  # Secrets file (git-ignored)
     ],
     environments=False,  # Use file-based configuration instead of environment sections
     load_dotenv=True,
@@ -31,14 +31,12 @@ settings = Dynaconf(
         # Dashboard validation (only validate core required settings)
         Validator("dashboard.port", gte=1024, lte=65535),
         Validator("dashboard.host", must_exist=True),
-
         # Threshold validation (only for monitoring)
         Validator("monitoring.thresholds.warning", gte=0),
         Validator("monitoring.thresholds.critical", gte=0),
-
         # Note: Cloud provider validation is handled at runtime during authentication
         # to avoid environment variable merging issues during dynaconf initialization
-    ]
+    ],
 )
 
 
@@ -53,22 +51,19 @@ class CloudConfig:
 
     def _load_environment_variables(self):
         """Manually load environment variables with CLOUDCOST prefix."""
-        import os
-        import logging
-        logger = logging.getLogger(__name__)
         # Map environment variables to configuration paths
         env_mappings = {
-            'CLOUDCOST__CLOUDS__AWS__ACCESS_KEY_ID': 'clouds.aws.access_key_id',
-            'CLOUDCOST__CLOUDS__AWS__SECRET_ACCESS_KEY': 'clouds.aws.secret_access_key',
-            'CLOUDCOST__CLOUDS__AWS__REGION': 'clouds.aws.region',
-            'CLOUDCOST__CLOUDS__AZURE__CLIENT_ID': 'clouds.azure.client_id',
-            'CLOUDCOST__CLOUDS__AZURE__CLIENT_SECRET': 'clouds.azure.client_secret',
-            'CLOUDCOST__CLOUDS__AZURE__TENANT_ID': 'clouds.azure.tenant_id',
-            'CLOUDCOST__CLOUDS__AZURE__SUBSCRIPTION_ID': 'clouds.azure.subscription_id',
-            'CLOUDCOST__CLOUDS__GCP__CREDENTIALS_PATH': 'clouds.gcp.credentials_path',
-            'CLOUDCOST__CLOUDS__GCP__PROJECT_ID': 'clouds.gcp.project_id',
-            'CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET': 'clouds.gcp.bigquery_billing_dataset',
-            'CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID': 'clouds.gcp.billing_account_id',
+            "CLOUDCOST__CLOUDS__AWS__ACCESS_KEY_ID": "clouds.aws.access_key_id",
+            "CLOUDCOST__CLOUDS__AWS__SECRET_ACCESS_KEY": "clouds.aws.secret_access_key",  # pragma: allowlist secret
+            "CLOUDCOST__CLOUDS__AWS__REGION": "clouds.aws.region",
+            "CLOUDCOST__CLOUDS__AZURE__CLIENT_ID": "clouds.azure.client_id",
+            "CLOUDCOST__CLOUDS__AZURE__CLIENT_SECRET": "clouds.azure.client_secret",  # pragma: allowlist secret
+            "CLOUDCOST__CLOUDS__AZURE__TENANT_ID": "clouds.azure.tenant_id",
+            "CLOUDCOST__CLOUDS__AZURE__SUBSCRIPTION_ID": "clouds.azure.subscription_id",
+            "CLOUDCOST__CLOUDS__GCP__CREDENTIALS_PATH": "clouds.gcp.credentials_path",
+            "CLOUDCOST__CLOUDS__GCP__PROJECT_ID": "clouds.gcp.project_id",
+            "CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET": "clouds.gcp.bigquery_billing_dataset",
+            "CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID": "clouds.gcp.billing_account_id",
         }
 
         # Set environment variables into dynaconf
@@ -85,18 +80,18 @@ class CloudConfig:
         except Exception as e:
             # During initial setup, be more lenient with validation
             import logging
+
             logging.warning(f"Configuration validation warning: {e}")
             logging.warning("Some providers may not be properly configured yet")
             # Don't raise error during initial setup
 
     def _load_gcp_environment_variables(self):
         """Load GCP-specific environment variables."""
-        import os
 
         # GCP-specific environment variable mappings
         gcp_env_mappings = {
-            'CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET': 'clouds.gcp.bigquery_billing_dataset',
-            'CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID': 'clouds.gcp.billing_account_id',
+            "CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET": "clouds.gcp.bigquery_billing_dataset",
+            "CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID": "clouds.gcp.billing_account_id",
         }
 
         # Set GCP environment variables into dynaconf
@@ -106,24 +101,24 @@ class CloudConfig:
                 self.settings.set(config_path, value)
 
     @property
-    def aws(self) -> Dict[str, Any]:
+    def aws(self) -> dict[str, Any]:
         """AWS configuration settings."""
         return self.settings.get("clouds.aws", {})
 
     @property
-    def azure(self) -> Dict[str, Any]:
+    def azure(self) -> dict[str, Any]:
         """Azure configuration settings."""
         return self.settings.get("clouds.azure", {})
 
     @property
-    def gcp(self) -> Dict[str, Any]:
+    def gcp(self) -> dict[str, Any]:
         """GCP configuration settings."""
         # Ensure environment variables are loaded for GCP
         self._load_gcp_environment_variables()
         return self.settings.get("clouds.gcp", {})
 
     @property
-    def enabled_providers(self) -> List[str]:
+    def enabled_providers(self) -> list[str]:
         """List of enabled cloud providers."""
         enabled = []
         if self.aws.get("enabled", False):
@@ -135,34 +130,30 @@ class CloudConfig:
         return enabled
 
     @property
-    def monitoring(self) -> Dict[str, Any]:
+    def monitoring(self) -> dict[str, Any]:
         """Monitoring and alerting configuration."""
         return self.settings.get("monitoring", {})
 
     @property
-    def dashboard(self) -> Dict[str, Any]:
+    def dashboard(self) -> dict[str, Any]:
         """Dashboard configuration."""
         return self.settings.get("dashboard", {})
 
     @property
-    def cache(self) -> Dict[str, Any]:
+    def cache(self) -> dict[str, Any]:
         """Cache configuration."""
         return self.settings.get("cache", {})
 
-    def get_provider_config(self, provider: str) -> Dict[str, Any]:
+    def get_provider_config(self, provider: str) -> dict[str, Any]:
         """Get configuration for a specific cloud provider."""
-        provider_configs = {
-            "aws": self.aws,
-            "azure": self.azure,
-            "gcp": self.gcp
-        }
+        provider_configs = {"aws": self.aws, "azure": self.azure, "gcp": self.gcp}
         return provider_configs.get(provider, {})
 
     def is_provider_enabled(self, provider: str) -> bool:
         """Check if a specific cloud provider is enabled."""
         return provider in self.enabled_providers
 
-    def get_threshold(self, threshold_type: str, provider: Optional[str] = None) -> Optional[float]:
+    def get_threshold(self, threshold_type: str, provider: str | None = None) -> float | None:
         """
         Get threshold value for monitoring.
 
@@ -188,7 +179,7 @@ class CloudConfig:
 
         return None
 
-    def get_icinga_config(self, provider: Optional[str] = None) -> Dict[str, Any]:
+    def get_icinga_config(self, provider: str | None = None) -> dict[str, Any]:
         """Get Icinga-specific configuration."""
         base_config = self.monitoring.get("icinga", {})
 
@@ -199,7 +190,7 @@ class CloudConfig:
 
         return base_config
 
-    def override_from_cli(self, cli_args: Dict[str, Any]):
+    def override_from_cli(self, cli_args: dict[str, Any]):
         """Override configuration with CLI arguments."""
         # Map CLI arguments to configuration paths
         cli_mapping = {

@@ -5,33 +5,117 @@ Provides functionality to export cost data as Prometheus metrics that can be
 scraped by Prometheus or pushed to Prometheus pushgateway for batch processing.
 """
 
-import asyncio
 import logging
 import time
-from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from io import StringIO
+from typing import Any
+
 import requests
+from pydantic import BaseModel, Field, field_validator
 
 from ..config.settings import get_config
-from ..providers.base import ProviderFactory
+from ..providers.base import ProviderFactory, TimeGranularity
 from ..utils.auth import MultiCloudAuthManager
 from ..utils.data_normalizer import CostDataNormalizer
-from ..providers.base import TimeGranularity
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class PrometheusConfig:
-    """Configuration for Prometheus export."""
-    pushgateway_url: Optional[str] = None
-    job_name: str = "cost_monitor"
-    instance: str = "cost_monitor"
-    metrics_prefix: str = "cloud_cost"
-    include_labels: bool = True
-    pushgateway_timeout: int = 30
+class PrometheusConfig(BaseModel):
+    """Configuration for Prometheus export with validation."""
+
+    pushgateway_url: str | None = Field(None, description="Pushgateway URL for pushing metrics")
+    job_name: str = Field(
+        "cost_monitor", min_length=1, max_length=100, description="Job name for metrics"
+    )
+    instance: str = Field(
+        "cost_monitor", min_length=1, max_length=100, description="Instance identifier"
+    )
+    metrics_prefix: str = Field(
+        "cloud_cost", min_length=1, max_length=50, description="Prefix for metric names"
+    )
+    include_labels: bool = Field(True, description="Whether to include additional labels")
+    pushgateway_timeout: int = Field(30, gt=0, le=300, description="Pushgateway timeout in seconds")
+
+    @field_validator("pushgateway_url")
+    @classmethod
+    def validate_pushgateway_url(cls, v: str | None) -> str | None:
+        """Validate pushgateway URL format."""
+        if v is None:
+            return v
+
+        url = v.strip()
+        if not url:
+            return None
+
+        # Basic URL validation
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("Pushgateway URL must start with http:// or https://")
+
+        # Check for common URL issues
+        if url.endswith("/"):
+            url = url.rstrip("/")
+
+        # Validate it's a reasonable URL format
+        import re
+
+        url_pattern = re.compile(
+            r"^https?://"  # http:// or https://
+            r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|"  # domain...
+            r"localhost|"  # localhost...
+            r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # ...or ip
+            r"(?::\d+)?"  # optional port
+            r"(?:/?|[/?]\S+)$",
+            re.IGNORECASE,
+        )
+
+        if not url_pattern.match(url):
+            raise ValueError(f"Invalid pushgateway URL format: {url}")
+
+        return url
+
+    @field_validator("job_name", "instance")
+    @classmethod
+    def validate_identifiers(cls, v: str) -> str:
+        """Validate job name and instance identifiers."""
+        if not v or not v.strip():
+            raise ValueError("Job name and instance cannot be empty")
+
+        cleaned = v.strip()
+
+        # Prometheus metric names should follow certain conventions
+        import re
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", cleaned):
+            raise ValueError(
+                f"Invalid identifier format: {v}. Must start with letter or underscore and contain only alphanumeric characters and underscores"
+            )
+
+        return cleaned
+
+    @field_validator("metrics_prefix")
+    @classmethod
+    def validate_metrics_prefix(cls, v: str) -> str:
+        """Validate metrics prefix."""
+        if not v or not v.strip():
+            raise ValueError("Metrics prefix cannot be empty")
+
+        cleaned = v.strip()
+
+        # Prometheus metric names must follow naming conventions
+        import re
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", cleaned):
+            raise ValueError(
+                f"Invalid metrics prefix: {v}. Must start with letter or underscore and contain only alphanumeric characters and underscores"
+            )
+
+        return cleaned
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return self.model_dump(by_alias=True, exclude_unset=True)
 
 
 class PrometheusMetricsGenerator:
@@ -40,11 +124,7 @@ class PrometheusMetricsGenerator:
     def __init__(self, config: PrometheusConfig = None):
         self.config = config or PrometheusConfig()
 
-    def generate_metrics(
-        self,
-        cost_data: Dict[str, Any],
-        timestamp: Optional[int] = None
-    ) -> str:
+    def generate_metrics(self, cost_data: dict[str, Any], timestamp: int | None = None) -> str:
         """
         Generate Prometheus metrics text format from cost data.
 
@@ -62,70 +142,86 @@ class PrometheusMetricsGenerator:
         prefix = self.config.metrics_prefix
 
         # Total cost metric
-        if 'total_cost' in cost_data:
+        if "total_cost" in cost_data:
             metrics.write(f"# HELP {prefix}_total Total cloud cost across all providers\n")
             metrics.write(f"# TYPE {prefix}_total gauge\n")
-            metrics.write(f'{prefix}_total{{currency="{cost_data.get("currency", "USD")}"}} {cost_data["total_cost"]} {timestamp}\n\n')
+            metrics.write(
+                f'{prefix}_total{{currency="{cost_data.get("currency", "USD")}"}} {cost_data["total_cost"]} {timestamp}\n\n'
+            )
 
         # Provider breakdown
-        if 'provider_breakdown' in cost_data:
+        if "provider_breakdown" in cost_data:
             metrics.write(f"# HELP {prefix}_provider_total Cost by cloud provider\n")
             metrics.write(f"# TYPE {prefix}_provider_total gauge\n")
-            for provider, cost in cost_data['provider_breakdown'].items():
-                currency = cost_data.get('currency', 'USD')
-                metrics.write(f'{prefix}_provider_total{{provider="{provider}",currency="{currency}"}} {cost} {timestamp}\n')
+            for provider, cost in cost_data["provider_breakdown"].items():
+                currency = cost_data.get("currency", "USD")
+                metrics.write(
+                    f'{prefix}_provider_total{{provider="{provider}",currency="{currency}"}} {cost} {timestamp}\n'
+                )
             metrics.write("\n")
 
         # Service breakdown
-        if 'combined_service_breakdown' in cost_data or 'service_breakdown' in cost_data:
-            service_data = cost_data.get('combined_service_breakdown', cost_data.get('service_breakdown', {}))
+        if "combined_service_breakdown" in cost_data or "service_breakdown" in cost_data:
+            service_data = cost_data.get(
+                "combined_service_breakdown", cost_data.get("service_breakdown", {})
+            )
             if service_data:
                 metrics.write(f"# HELP {prefix}_service_total Cost by service\n")
                 metrics.write(f"# TYPE {prefix}_service_total gauge\n")
                 for service, cost in service_data.items():
                     # Parse provider from service name if it's prefixed
-                    if ': ' in service:
-                        provider, service_name = service.split(': ', 1)
+                    if ": " in service:
+                        provider, service_name = service.split(": ", 1)
                         provider = provider.lower()
                     else:
-                        provider = cost_data.get('provider', 'unknown')
+                        provider = cost_data.get("provider", "unknown")
                         service_name = service
 
-                    currency = cost_data.get('currency', 'USD')
+                    currency = cost_data.get("currency", "USD")
                     # Sanitize service name for Prometheus
                     service_clean = self._sanitize_label_value(service_name)
-                    metrics.write(f'{prefix}_service_total{{provider="{provider}",service="{service_clean}",currency="{currency}"}} {cost} {timestamp}\n')
+                    metrics.write(
+                        f'{prefix}_service_total{{provider="{provider}",service="{service_clean}",currency="{currency}"}} {cost} {timestamp}\n'
+                    )
                 metrics.write("\n")
 
         # Regional breakdown
-        if 'combined_regional_breakdown' in cost_data or 'regional_breakdown' in cost_data:
-            regional_data = cost_data.get('combined_regional_breakdown', cost_data.get('regional_breakdown', {}))
+        if "combined_regional_breakdown" in cost_data or "regional_breakdown" in cost_data:
+            regional_data = cost_data.get(
+                "combined_regional_breakdown", cost_data.get("regional_breakdown", {})
+            )
             if regional_data:
                 metrics.write(f"# HELP {prefix}_region_total Cost by region\n")
                 metrics.write(f"# TYPE {prefix}_region_total gauge\n")
                 for region, cost in regional_data.items():
-                    currency = cost_data.get('currency', 'USD')
+                    currency = cost_data.get("currency", "USD")
                     region_clean = self._sanitize_label_value(region)
-                    metrics.write(f'{prefix}_region_total{{region="{region_clean}",currency="{currency}"}} {cost} {timestamp}\n')
+                    metrics.write(
+                        f'{prefix}_region_total{{region="{region_clean}",currency="{currency}"}} {cost} {timestamp}\n'
+                    )
                 metrics.write("\n")
 
         # Account breakdown
-        if 'combined_account_breakdown' in cost_data:
+        if "combined_account_breakdown" in cost_data:
             metrics.write(f"# HELP {prefix}_account_total Cost by account/subscription/project\n")
             metrics.write(f"# TYPE {prefix}_account_total gauge\n")
-            for account_key, account_data in cost_data['combined_account_breakdown'].items():
-                provider = account_data.get('provider', 'unknown')
-                account_id = account_data.get('account_id', account_key)
-                account_name = self._sanitize_label_value(account_data.get('account_name', account_id))
-                cost = account_data.get('total_cost', 0)
-                currency = account_data.get('currency', 'USD')
+            for account_key, account_data in cost_data["combined_account_breakdown"].items():
+                provider = account_data.get("provider", "unknown")
+                account_id = account_data.get("account_id", account_key)
+                account_name = self._sanitize_label_value(
+                    account_data.get("account_name", account_id)
+                )
+                cost = account_data.get("total_cost", 0)
+                currency = account_data.get("currency", "USD")
 
-                metrics.write(f'{prefix}_account_total{{provider="{provider}",account_id="{account_id}",account_name="{account_name}",currency="{currency}"}} {cost} {timestamp}\n')
+                metrics.write(
+                    f'{prefix}_account_total{{provider="{provider}",account_id="{account_id}",account_name="{account_name}",currency="{currency}"}} {cost} {timestamp}\n'
+                )
             metrics.write("\n")
 
         # Daily cost trend metrics (for the last 7 days)
-        if 'combined_daily_costs' in cost_data:
-            daily_costs = cost_data['combined_daily_costs']
+        if "combined_daily_costs" in cost_data:
+            daily_costs = cost_data["combined_daily_costs"]
             if daily_costs:
                 metrics.write(f"# HELP {prefix}_daily_total Daily cost totals\n")
                 metrics.write(f"# TYPE {prefix}_daily_total gauge\n")
@@ -134,39 +230,45 @@ class PrometheusMetricsGenerator:
                 recent_days = daily_costs[-7:] if len(daily_costs) > 7 else daily_costs
 
                 for daily_data in recent_days:
-                    date_str = daily_data.get('date', '')
-                    total_cost = daily_data.get('total_cost', 0)
-                    currency = daily_data.get('currency', 'USD')
+                    date_str = daily_data.get("date", "")
+                    total_cost = daily_data.get("total_cost", 0)
+                    currency = daily_data.get("currency", "USD")
 
                     # Convert date to timestamp
                     try:
-                        day_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                        day_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
                         day_timestamp = int(day_date.timestamp())
                     except (ValueError, AttributeError):
                         day_timestamp = timestamp
 
-                    metrics.write(f'{prefix}_daily_total{{date="{date_str}",currency="{currency}"}} {total_cost} {day_timestamp}\n')
+                    metrics.write(
+                        f'{prefix}_daily_total{{date="{date_str}",currency="{currency}"}} {total_cost} {day_timestamp}\n'
+                    )
 
                     # Provider breakdown for daily costs
-                    provider_costs = daily_data.get('provider_breakdown', {})
+                    provider_costs = daily_data.get("provider_breakdown", {})
                     for provider, provider_cost in provider_costs.items():
-                        metrics.write(f'{prefix}_daily_provider_total{{date="{date_str}",provider="{provider}",currency="{currency}"}} {provider_cost} {day_timestamp}\n')
+                        metrics.write(
+                            f'{prefix}_daily_provider_total{{date="{date_str}",provider="{provider}",currency="{currency}"}} {provider_cost} {day_timestamp}\n'
+                        )
 
                 metrics.write("\n")
 
         # Meta metrics
         metrics.write(f"# HELP {prefix}_last_update_timestamp Timestamp of last cost data update\n")
         metrics.write(f"# TYPE {prefix}_last_update_timestamp gauge\n")
-        metrics.write(f'{prefix}_last_update_timestamp {timestamp} {timestamp}\n\n')
+        metrics.write(f"{prefix}_last_update_timestamp {timestamp} {timestamp}\n\n")
 
-        if 'start_date' in cost_data and 'end_date' in cost_data:
-            metrics.write(f"# HELP {prefix}_data_range_days Number of days covered by the cost data\n")
+        if "start_date" in cost_data and "end_date" in cost_data:
+            metrics.write(
+                f"# HELP {prefix}_data_range_days Number of days covered by the cost data\n"
+            )
             metrics.write(f"# TYPE {prefix}_data_range_days gauge\n")
             try:
-                start = datetime.fromisoformat(cost_data['start_date'].replace('Z', '+00:00'))
-                end = datetime.fromisoformat(cost_data['end_date'].replace('Z', '+00:00'))
+                start = datetime.fromisoformat(cost_data["start_date"].replace("Z", "+00:00"))
+                end = datetime.fromisoformat(cost_data["end_date"].replace("Z", "+00:00"))
                 days = (end - start).days + 1
-                metrics.write(f'{prefix}_data_range_days {days} {timestamp}\n\n')
+                metrics.write(f"{prefix}_data_range_days {days} {timestamp}\n\n")
             except (ValueError, AttributeError):
                 pass
 
@@ -178,7 +280,7 @@ class PrometheusMetricsGenerator:
             return "unknown"
 
         # Replace problematic characters
-        sanitized = value.replace('"', '\\"').replace('\n', ' ').replace('\r', ' ')
+        sanitized = value.replace('"', '\\"').replace("\n", " ").replace("\r", " ")
         # Truncate if too long
         return sanitized[:100] if len(sanitized) > 100 else sanitized
 
@@ -191,10 +293,7 @@ class PrometheusExporter:
         self.metrics_generator = PrometheusMetricsGenerator(self.config)
 
     async def export_current_costs(
-        self,
-        providers: Optional[List[str]] = None,
-        days_back: int = 7,
-        currency: str = 'USD'
+        self, providers: list[str] | None = None, days_back: int = 7, currency: str = "USD"
     ) -> str:
         """
         Export current cost data as Prometheus metrics.
@@ -231,7 +330,9 @@ class PrometheusExporter:
             provider_config = config.get_provider_config(provider_name)
             try:
                 provider_instance = ProviderFactory.create_provider(provider_name, provider_config)
-                auth_result = await auth_manager.authenticate_provider(provider_name, provider_config)
+                auth_result = await auth_manager.authenticate_provider(
+                    provider_name, provider_config
+                )
 
                 if auth_result.success:
                     authenticated_providers[provider_name] = provider_instance
@@ -239,9 +340,13 @@ class PrometheusExporter:
                         start_date, end_date, TimeGranularity.DAILY
                     )
                     cost_summaries.append(cost_summary)
-                    logger.info(f"Collected cost data for {provider_name}: ${cost_summary.total_cost:.2f}")
+                    logger.info(
+                        f"Collected cost data for {provider_name}: ${cost_summary.total_cost:.2f}"
+                    )
                 else:
-                    logger.error(f"Failed to authenticate {provider_name}: {auth_result.error_message}")
+                    logger.error(
+                        f"Failed to authenticate {provider_name}: {auth_result.error_message}"
+                    )
 
             except Exception as e:
                 logger.error(f"Error collecting data for {provider_name}: {e}")
@@ -263,15 +368,15 @@ class PrometheusExporter:
         # Generate Prometheus metrics
         metrics_text = self.metrics_generator.generate_metrics(cost_data)
 
-        logger.info(f"Generated Prometheus metrics for {len(cost_summaries)} providers, "
-                   f"total cost: ${cost_data['total_cost']:.2f} {currency}")
+        logger.info(
+            f"Generated Prometheus metrics for {len(cost_summaries)} providers, "
+            f"total cost: ${cost_data['total_cost']:.2f} {currency}"
+        )
 
         return metrics_text
 
     async def push_to_pushgateway(
-        self,
-        metrics_text: str,
-        pushgateway_url: Optional[str] = None
+        self, metrics_text: str, pushgateway_url: str | None = None
     ) -> bool:
         """
         Push metrics to Prometheus Pushgateway.
@@ -294,8 +399,8 @@ class PrometheusExporter:
             response = requests.post(
                 push_url,
                 data=metrics_text,
-                headers={'Content-Type': 'text/plain; version=0.0.4'},
-                timeout=self.config.pushgateway_timeout
+                headers={"Content-Type": "text/plain; version=0.0.4"},
+                timeout=self.config.pushgateway_timeout,
             )
             response.raise_for_status()
 
@@ -318,7 +423,7 @@ class PrometheusExporter:
             True if save was successful
         """
         try:
-            with open(filename, 'w') as f:
+            with open(filename, "w") as f:
                 f.write(metrics_text)
 
             logger.info(f"Metrics saved to file: {filename}")
@@ -330,13 +435,13 @@ class PrometheusExporter:
 
 
 async def export_prometheus_metrics(
-    output_file: Optional[str] = None,
-    pushgateway_url: Optional[str] = None,
-    providers: Optional[List[str]] = None,
+    output_file: str | None = None,
+    pushgateway_url: str | None = None,
+    providers: list[str] | None = None,
     days_back: int = 7,
-    currency: str = 'USD',
-    job_name: str = 'cost_monitor',
-    instance: str = 'cost_monitor'
+    currency: str = "USD",
+    job_name: str = "cost_monitor",
+    instance: str = "cost_monitor",
 ) -> bool:
     """
     Export cost data as Prometheus metrics.
@@ -356,17 +461,13 @@ async def export_prometheus_metrics(
     try:
         # Set up exporter
         prometheus_config = PrometheusConfig(
-            pushgateway_url=pushgateway_url,
-            job_name=job_name,
-            instance=instance
+            pushgateway_url=pushgateway_url, job_name=job_name, instance=instance
         )
         exporter = PrometheusExporter(prometheus_config)
 
         # Export metrics
         metrics_text = await exporter.export_current_costs(
-            providers=providers,
-            days_back=days_back,
-            currency=currency
+            providers=providers, days_back=days_back, currency=currency
         )
 
         success = True

@@ -10,15 +10,14 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import time
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 try:
     import diskcache as dc
+
     DISKCACHE_AVAILABLE = True
 except ImportError:
     DISKCACHE_AVAILABLE = False
@@ -30,12 +29,12 @@ class CacheBackend(ABC):
     """Abstract base class for cache backends."""
 
     @abstractmethod
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Get a value from the cache."""
         pass
 
     @abstractmethod
-    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+    def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Set a value in the cache with optional TTL."""
         pass
 
@@ -73,7 +72,7 @@ class MemoryCache(CacheBackend):
         """
         self.max_size = max_size
         self.default_ttl = default_ttl
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
         self._access_order = []  # Track access order for better LRU eviction
 
     def _cleanup_expired(self):
@@ -82,7 +81,7 @@ class MemoryCache(CacheBackend):
         expired_keys = []
 
         for key, entry in self._cache.items():
-            if current_time > entry['expires_at']:
+            if current_time > entry["expires_at"]:
                 expired_keys.append(key)
 
         for key in expired_keys:
@@ -104,21 +103,21 @@ class MemoryCache(CacheBackend):
                     del self._cache[key]
                 self._access_order.remove(key)
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Get a value from the cache."""
         self._cleanup_expired()
 
         if key in self._cache:
             entry = self._cache[key]
-            if time.time() <= entry['expires_at']:
-                entry['accessed_at'] = time.time()
+            if time.time() <= entry["expires_at"]:
+                entry["accessed_at"] = time.time()
 
                 # Update access order for LRU
                 if key in self._access_order:
                     self._access_order.remove(key)
                 self._access_order.append(key)
 
-                return entry['value']
+                return entry["value"]
             else:
                 del self._cache[key]
                 if key in self._access_order:
@@ -126,7 +125,7 @@ class MemoryCache(CacheBackend):
 
         return None
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+    def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Set a value in the cache with optional TTL."""
         try:
             self._cleanup_expired()
@@ -136,11 +135,11 @@ class MemoryCache(CacheBackend):
             current_time = time.time()
 
             self._cache[key] = {
-                'value': value,
-                'created_at': current_time,
-                'accessed_at': current_time,
-                'expires_at': current_time + ttl,
-                'ttl': ttl
+                "value": value,
+                "created_at": current_time,
+                "accessed_at": current_time,
+                "expires_at": current_time + ttl,
+                "ttl": ttl,
             }
 
             # Update access order for LRU
@@ -175,22 +174,25 @@ class MemoryCache(CacheBackend):
         self._cleanup_expired()
         return list(self._cache.keys())
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         self._cleanup_expired()
         return {
-            'entries': len(self._cache),
-            'max_size': self.max_size,
-            'default_ttl': self.default_ttl
+            "entries": len(self._cache),
+            "max_size": self.max_size,
+            "default_ttl": self.default_ttl,
         }
 
 
 class DiskCache(CacheBackend):
     """Disk-based cache backend using diskcache."""
 
-    def __init__(self, directory: str = "/tmp/cost-monitor-cache",
-                 max_size: int = 100_000_000,  # 100MB
-                 default_ttl: int = 3600):
+    def __init__(
+        self,
+        directory: str = "/tmp/cost-monitor-cache",
+        max_size: int = 100_000_000,  # 100MB
+        default_ttl: int = 3600,
+    ):
         """
         Initialize disk cache.
 
@@ -200,7 +202,9 @@ class DiskCache(CacheBackend):
             default_ttl: Default TTL in seconds
         """
         if not DISKCACHE_AVAILABLE:
-            raise ImportError("diskcache is required for disk caching. Install with: pip install diskcache")
+            raise ImportError(
+                "diskcache is required for disk caching. Install with: pip install diskcache"
+            )
 
         self.directory = directory
         self.max_size = max_size
@@ -210,12 +214,9 @@ class DiskCache(CacheBackend):
         Path(directory).mkdir(parents=True, exist_ok=True)
 
         # Initialize diskcache
-        self._cache = dc.Cache(
-            directory,
-            size_limit=max_size
-        )
+        self._cache = dc.Cache(directory, size_limit=max_size)
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Get a value from the cache."""
         try:
             return self._cache.get(key)
@@ -223,7 +224,7 @@ class DiskCache(CacheBackend):
             logger.error(f"Failed to get cache entry {key}: {e}")
             return None
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+    def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Set a value in the cache with optional TTL."""
         try:
             ttl = ttl or self.default_ttl
@@ -265,15 +266,15 @@ class DiskCache(CacheBackend):
             logger.error(f"Failed to get cache keys: {e}")
             return []
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         try:
             return {
-                'entries': len(self._cache),
-                'volume': self._cache.volume(),
-                'max_size': self.max_size,
-                'directory': self.directory,
-                'default_ttl': self.default_ttl
+                "entries": len(self._cache),
+                "volume": self._cache.volume(),
+                "max_size": self.max_size,
+                "directory": self.directory,
+                "default_ttl": self.default_ttl,
             }
         except Exception as e:
             logger.error(f"Failed to get cache stats: {e}")
@@ -283,8 +284,9 @@ class DiskCache(CacheBackend):
 class RedisCache(CacheBackend):
     """Redis-based cache backend with TTL support."""
 
-    def __init__(self, redis_url: str = None,
-                 default_ttl: int = 1800, prefix: str = "cost-monitor:"):
+    def __init__(
+        self, redis_url: str = None, default_ttl: int = 1800, prefix: str = "cost-monitor:"
+    ):
         """
         Initialize Redis cache.
 
@@ -294,7 +296,7 @@ class RedisCache(CacheBackend):
             prefix: Key prefix to namespace cache entries
         """
         if redis_url is None:
-            redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
         self.redis_url = redis_url
         self.default_ttl = default_ttl
@@ -303,13 +305,16 @@ class RedisCache(CacheBackend):
 
         try:
             import redis
+
             self.redis = redis
             self._client = redis.from_url(redis_url, decode_responses=True)
             # Test connection
             self._client.ping()
             logger.info(f"Redis cache initialized: {redis_url} with prefix '{prefix}'")
         except ImportError:
-            raise ImportError("redis is required for Redis caching. Install with: pip install redis")
+            raise ImportError(
+                "redis is required for Redis caching. Install with: pip install redis"
+            )
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {e}")
             raise
@@ -318,7 +323,7 @@ class RedisCache(CacheBackend):
         """Get prefixed cache key."""
         return f"{self.prefix}{key}"
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Get a value from the cache."""
         try:
             prefixed_key = self._get_key(key)
@@ -330,7 +335,7 @@ class RedisCache(CacheBackend):
             logger.warning(f"Redis get failed for key '{key}': {e}")
             return None
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+    def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Set a value in the cache with optional TTL."""
         try:
             prefixed_key = self._get_key(key)
@@ -388,37 +393,37 @@ class RedisCache(CacheBackend):
             pattern = f"{self.prefix}*"
             prefixed_keys = self._client.keys(pattern)
             # Remove prefix from keys for consistent interface
-            return [key[len(self.prefix):] for key in prefixed_keys]
+            return [key[len(self.prefix) :] for key in prefixed_keys]
         except Exception as e:
             logger.warning(f"Redis keys listing failed: {e}")
             return []
 
-    def info(self) -> Dict[str, Any]:
+    def info(self) -> dict[str, Any]:
         """Get cache backend information."""
         try:
-            redis_info = self._client.info('memory')
+            redis_info = self._client.info("memory")
             return {
-                'type': 'redis',
-                'redis_url': self.redis_url,
-                'prefix': self.prefix,
-                'default_ttl': self.default_ttl,
-                'memory_usage': redis_info.get('used_memory_human', 'unknown'),
-                'keys_count': self.size(),
-                'connected': True
+                "type": "redis",
+                "redis_url": self.redis_url,
+                "prefix": self.prefix,
+                "default_ttl": self.default_ttl,
+                "memory_usage": redis_info.get("used_memory_human", "unknown"),
+                "keys_count": self.size(),
+                "connected": True,
             }
         except Exception as e:
             return {
-                'type': 'redis',
-                'redis_url': self.redis_url,
-                'connected': False,
-                'error': str(e)
+                "type": "redis",
+                "redis_url": self.redis_url,
+                "connected": False,
+                "error": str(e),
             }
 
 
 class CacheManager:
     """High-level cache manager with multiple backends and strategies."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize cache manager from configuration.
 
@@ -426,47 +431,38 @@ class CacheManager:
             config: Cache configuration dictionary
         """
         self.config = config
-        self.enabled = config.get('enabled', True)
+        self.enabled = config.get("enabled", True)
 
         if not self.enabled:
             self._backend = None
             return
 
         # Determine cache backend
-        cache_type = config.get('type', 'memory').lower()
-        default_ttl = config.get('ttl', 3600)
+        cache_type = config.get("type", "memory").lower()
+        default_ttl = config.get("ttl", 3600)
 
-        if cache_type == 'disk':
-            cache_dir = config.get('directory', '/tmp/cost-monitor-cache')
-            max_size_str = config.get('max_size', '100MB')
+        if cache_type == "disk":
+            cache_dir = config.get("directory", "/tmp/cost-monitor-cache")
+            max_size_str = config.get("max_size", "100MB")
             max_size = self._parse_size(max_size_str)
 
             self._backend = DiskCache(
-                directory=cache_dir,
-                max_size=max_size,
-                default_ttl=default_ttl
+                directory=cache_dir, max_size=max_size, default_ttl=default_ttl
             )
-        elif cache_type == 'redis':
-            redis_url = config.get('redis_url')  # Use None if not specified, will use env var
-            prefix = config.get('prefix', 'cost-monitor:cache:')
+        elif cache_type == "redis":
+            redis_url = config.get("redis_url")  # Use None if not specified, will use env var
+            prefix = config.get("prefix", "cost-monitor:cache:")
 
-            self._backend = RedisCache(
-                redis_url=redis_url,
-                default_ttl=default_ttl,
-                prefix=prefix
-            )
+            self._backend = RedisCache(redis_url=redis_url, default_ttl=default_ttl, prefix=prefix)
         else:
-            max_entries = config.get('max_entries', 1000)
-            self._backend = MemoryCache(
-                max_size=max_entries,
-                default_ttl=default_ttl
-            )
+            max_entries = config.get("max_entries", 1000)
+            self._backend = MemoryCache(max_size=max_entries, default_ttl=default_ttl)
 
         # Provider-specific TTL settings
         self.provider_ttls = {
-            'aws': config.get('aws', {}).get('ttl', default_ttl),
-            'azure': config.get('azure', {}).get('ttl', default_ttl),
-            'gcp': config.get('gcp', {}).get('ttl', default_ttl)
+            "aws": config.get("aws", {}).get("ttl", default_ttl),
+            "azure": config.get("azure", {}).get("ttl", default_ttl),
+            "gcp": config.get("gcp", {}).get("ttl", default_ttl),
         }
 
         logger.info(f"Cache initialized: {cache_type} backend, TTL: {default_ttl}s")
@@ -474,28 +470,19 @@ class CacheManager:
     def _parse_size(self, size_str: str) -> int:
         """Parse size string like '100MB' to bytes."""
         size_str = size_str.upper()
-        if size_str.endswith('KB'):
+        if size_str.endswith("KB"):
             return int(size_str[:-2]) * 1024
-        elif size_str.endswith('MB'):
+        elif size_str.endswith("MB"):
             return int(size_str[:-2]) * 1024 * 1024
-        elif size_str.endswith('GB'):
+        elif size_str.endswith("GB"):
             return int(size_str[:-2]) * 1024 * 1024 * 1024
         else:
             return int(size_str)
 
-    def _generate_cache_key(
-        self,
-        provider: str,
-        operation: str,
-        params: Dict[str, Any]
-    ) -> str:
+    def _generate_cache_key(self, provider: str, operation: str, params: dict[str, Any]) -> str:
         """Generate a cache key for the given parameters."""
         # Create a deterministic key from parameters
-        key_data = {
-            'provider': provider,
-            'operation': operation,
-            'params': params
-        }
+        key_data = {"provider": provider, "operation": operation, "params": params}
 
         # Sort and serialize to ensure consistent keys
         key_str = json.dumps(key_data, sort_keys=True, default=str)
@@ -503,7 +490,7 @@ class CacheManager:
         # Hash to create shorter, fixed-length key
         return hashlib.sha256(key_str.encode()).hexdigest()[:32]
 
-    def get(self, provider: str, operation: str, params: Dict[str, Any]) -> Optional[Any]:
+    def get(self, provider: str, operation: str, params: dict[str, Any]) -> Any | None:
         """Get cached data."""
         if not self.enabled or not self._backend:
             return None
@@ -519,9 +506,9 @@ class CacheManager:
         self,
         provider: str,
         operation: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         value: Any,
-        ttl: Optional[int] = None
+        ttl: int | None = None,
     ) -> bool:
         """Set cached data."""
         if not self.enabled or not self._backend:
@@ -539,7 +526,7 @@ class CacheManager:
             logger.error(f"Cache set failed: {e}")
             return False
 
-    def delete(self, provider: str, operation: str, params: Dict[str, Any]) -> bool:
+    def delete(self, provider: str, operation: str, params: dict[str, Any]) -> bool:
         """Delete cached data."""
         if not self.enabled or not self._backend:
             return False
@@ -558,7 +545,7 @@ class CacheManager:
 
         try:
             keys_to_delete = []
-            for key in self._backend.keys():
+            for key in self._backend:
                 # This is a simplified approach - in practice, you might want to
                 # store provider info in the key more explicitly
                 if provider in key:
@@ -583,25 +570,25 @@ class CacheManager:
             logger.error(f"Clear cache failed: {e}")
             return False
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         if not self.enabled or not self._backend:
-            return {'enabled': False}
+            return {"enabled": False}
 
         try:
             stats = self._backend.stats()
-            stats['enabled'] = True
-            stats['provider_ttls'] = self.provider_ttls
+            stats["enabled"] = True
+            stats["provider_ttls"] = self.provider_ttls
             return stats
         except Exception as e:
             logger.error(f"Cache stats failed: {e}")
-            return {'enabled': True, 'error': str(e)}
+            return {"enabled": True, "error": str(e)}
 
 
 class CacheDecorator:
     """Decorator for caching function results."""
 
-    def __init__(self, cache_manager: CacheManager, provider: str, ttl: Optional[int] = None):
+    def __init__(self, cache_manager: CacheManager, provider: str, ttl: int | None = None):
         """
         Initialize cache decorator.
 
@@ -616,20 +603,13 @@ class CacheDecorator:
 
     def __call__(self, func):
         """Decorator implementation."""
+
         def wrapper(*args, **kwargs):
             # Generate cache parameters from function arguments
-            params = {
-                'args': args,
-                'kwargs': kwargs,
-                'function': func.__name__
-            }
+            params = {"args": args, "kwargs": kwargs, "function": func.__name__}
 
             # Try to get from cache first
-            cached_result = self.cache_manager.get(
-                self.provider,
-                func.__name__,
-                params
-            )
+            cached_result = self.cache_manager.get(self.provider, func.__name__, params)
 
             if cached_result is not None:
                 logger.debug(f"Cache hit for {self.provider}:{func.__name__}")
@@ -640,20 +620,14 @@ class CacheDecorator:
             result = func(*args, **kwargs)
 
             # Cache the result
-            self.cache_manager.set(
-                self.provider,
-                func.__name__,
-                params,
-                result,
-                self.ttl
-            )
+            self.cache_manager.set(self.provider, func.__name__, params, result, self.ttl)
 
             return result
 
         return wrapper
 
 
-def cache_cost_data(cache_manager: CacheManager, provider: str, ttl: Optional[int] = None):
+def cache_cost_data(cache_manager: CacheManager, provider: str, ttl: int | None = None):
     """Decorator for caching cost data operations."""
     return CacheDecorator(cache_manager, provider, ttl)
 
@@ -665,11 +639,7 @@ class SmartCacheStrategy:
         self.cache_manager = cache_manager
 
     def calculate_ttl(
-        self,
-        provider: str,
-        data_type: str,
-        time_range_days: int,
-        data_age_hours: int = 0
+        self, provider: str, data_type: str, time_range_days: int, data_age_hours: int = 0
     ) -> int:
         """
         Calculate optimal TTL based on data characteristics.
@@ -687,7 +657,9 @@ class SmartCacheStrategy:
         # PERMANENT CACHING: Historical data (>48 hours old) should never expire
         if data_age_hours >= 48:
             # Set to 10 years (effectively permanent for cost data)
-            logger.info(f"💾 {provider.upper()}: Setting permanent cache for {data_age_hours}h old data")
+            logger.info(
+                f"💾 {provider.upper()}: Setting permanent cache for {data_age_hours}h old data"
+            )
             return 315360000  # 10 years in seconds
 
         # Recent data (24-48 hours) gets extended cache but still expires
@@ -698,13 +670,13 @@ class SmartCacheStrategy:
         base_ttl = self.cache_manager.provider_ttls.get(provider, 3600)
 
         # For very recent data (< 24 hours), use dynamic TTL
-        if data_type == 'daily_costs':
+        if data_type == "daily_costs":
             # Recent daily costs update several times per day
             ttl_factor = 0.5 if data_age_hours < 12 else 1.0
-        elif data_type == 'monthly_costs':
+        elif data_type == "monthly_costs":
             # Monthly aggregations are more stable
             ttl_factor = 2.0
-        elif data_type == 'service_costs':
+        elif data_type == "service_costs":
             # Service breakdowns are fairly stable
             ttl_factor = 1.5
         else:
@@ -720,15 +692,17 @@ class SmartCacheStrategy:
 
         # Provider-specific adjustments
         provider_factors = {
-            'aws': 1.0,      # AWS updates 3-4 times daily
-            'azure': 1.2,    # Azure updates hourly
-            'gcp': 1.1       # GCP updates hourly
+            "aws": 1.0,  # AWS updates 3-4 times daily
+            "azure": 1.2,  # Azure updates hourly
+            "gcp": 1.1,  # GCP updates hourly
         }
 
         ttl_factor *= provider_factors.get(provider, 1.0)
 
         calculated_ttl = int(base_ttl * ttl_factor)
-        logger.debug(f"💾 {provider.upper()}: Recent data TTL={calculated_ttl}s for {data_age_hours}h old data")
+        logger.debug(
+            f"💾 {provider.upper()}: Recent data TTL={calculated_ttl}s for {data_age_hours}h old data"
+        )
         return calculated_ttl
 
 
@@ -736,7 +710,7 @@ class SmartCacheStrategy:
 _global_cache_manager = None
 
 
-def get_cache_manager(config: Optional[Dict[str, Any]] = None) -> CacheManager:
+def get_cache_manager(config: dict[str, Any] | None = None) -> CacheManager:
     """Get global cache manager instance."""
     global _global_cache_manager
 
@@ -746,7 +720,7 @@ def get_cache_manager(config: Optional[Dict[str, Any]] = None) -> CacheManager:
     return _global_cache_manager
 
 
-def initialize_cache(config: Dict[str, Any]) -> CacheManager:
+def initialize_cache(config: dict[str, Any]) -> CacheManager:
     """Initialize global cache manager."""
     global _global_cache_manager
     _global_cache_manager = CacheManager(config)

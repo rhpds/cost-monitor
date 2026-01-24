@@ -5,19 +5,19 @@ Provides a unified interface for handling authentication across different cloud 
 with support for various authentication methods and credential management.
 """
 
-import os
 import json
 import logging
-from typing import Dict, Any, Optional, Union
-from pathlib import Path
-from dataclasses import dataclass
+import os
 from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
 
 # AWS imports
 try:
     import boto3
-    from botocore.exceptions import ClientError, NoCredentialsError, ProfileNotFound
-    from botocore.config import Config
+
     AWS_AVAILABLE = True
 except ImportError:
     AWS_AVAILABLE = False
@@ -25,22 +25,24 @@ except ImportError:
 # Azure imports
 try:
     from azure.identity import (
-        DefaultAzureCredential,
-        ClientSecretCredential,
         AzureCliCredential,
+        ClientSecretCredential,
+        DefaultAzureCredential,
         EnvironmentCredential,
-        ManagedIdentityCredential
+        ManagedIdentityCredential,
     )
+
     AZURE_AVAILABLE = True
 except ImportError:
     AZURE_AVAILABLE = False
 
 # GCP imports
 try:
-    from google.cloud import billing_v1
     from google.auth import default as gcp_default
     from google.auth.exceptions import DefaultCredentialsError
+    from google.cloud import billing_v1
     from google.oauth2 import service_account
+
     GCP_AVAILABLE = True
 except ImportError:
     GCP_AVAILABLE = False
@@ -48,20 +50,84 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class AuthenticationResult:
-    """Result of an authentication attempt."""
-    success: bool
-    provider: str
-    method: str
-    error_message: Optional[str] = None
-    credentials: Optional[Any] = None
+class AuthenticationResult(BaseModel):
+    """Result of an authentication attempt with validation."""
+
+    success: bool = Field(..., description="Whether authentication was successful")
+    provider: str = Field(..., min_length=1, max_length=50, description="Cloud provider name")
+    method: str = Field(..., min_length=1, max_length=100, description="Authentication method used")
+    error_message: str | None = Field(
+        None, max_length=1000, description="Error message if authentication failed"
+    )
+    credentials: Any | None = Field(None, description="Authenticated credentials object")
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Validate and normalize provider name."""
+        normalized = v.lower().strip()
+        valid_providers = {"aws", "azure", "gcp"}
+
+        if normalized not in valid_providers:
+            # Allow other providers but warn
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Unknown provider in authentication result: {v}")
+            return v.strip()
+
+        return normalized
+
+    @field_validator("method")
+    @classmethod
+    def validate_method(cls, v: str) -> str:
+        """Validate and normalize authentication method."""
+        if not v or not v.strip():
+            raise ValueError("Authentication method cannot be empty")
+
+        # Common authentication methods
+        normalized = v.lower().strip().replace("-", "_").replace(" ", "_")
+
+        known_methods = {
+            "access_key",
+            "instance_profile",
+            "session_token",
+            "profile",
+            "service_principal",
+            "managed_identity",
+            "device_code",
+            "service_account",
+            "gcloud_auth",
+            "api_key",
+            "oauth2",
+        }
+
+        if normalized not in known_methods:
+            # Allow custom methods but warn
+            logger = logging.getLogger(__name__)
+            logger.info(f"Custom authentication method: {v}")
+
+        return normalized
+
+    @field_validator("error_message")
+    @classmethod
+    def validate_error_message(cls, v: str | None) -> str | None:
+        """Validate error message."""
+        if v is not None:
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization (excluding credentials for security)."""
+        result = self.model_dump(by_alias=True, exclude_unset=True)
+        # Don't include credentials in serialized output for security
+        result.pop("credentials", None)
+        return result
 
 
 class CloudAuthenticator(ABC):
     """Abstract base class for cloud authenticators."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         self.provider_name = self._get_provider_name()
 
@@ -94,7 +160,7 @@ class AWSAuthenticator(CloudAuthenticator):
                 success=False,
                 provider=self.provider_name,
                 method="none",
-                error_message="AWS SDK (boto3) not available"
+                error_message="AWS SDK (boto3) not available",
             )
 
         # If access keys are provided in config, use ONLY those (highest precedence)
@@ -102,10 +168,10 @@ class AWSAuthenticator(CloudAuthenticator):
         secret_key = self.config.get("secret_access_key")
 
         if access_key and secret_key:
-            logger.info(f"🔵 AWS: Using access keys from secrets config (highest precedence)")
+            logger.info("🔵 AWS: Using access keys from secrets config (highest precedence)")
             result = await self._authenticate_with_access_keys()
             if result.success:
-                logger.info(f"🔵 AWS: Authentication successful using secrets access keys")
+                logger.info("🔵 AWS: Authentication successful using secrets access keys")
                 return result
             else:
                 logger.error(f"🔵 AWS: Secrets access keys failed: {result.error_message}")
@@ -113,28 +179,29 @@ class AWSAuthenticator(CloudAuthenticator):
                 return result
 
         # No access keys in config - this is now an error since we're using only dynaconf
-        logger.error(f"🔵 AWS: No access keys found in dynaconf configuration")
+        logger.error("🔵 AWS: No access keys found in dynaconf configuration")
         return AuthenticationResult(
             success=False,
             provider=self.provider_name,
             method="none",
-            error_message="No AWS credentials found in dynaconf configuration - environment variables and other fallbacks have been disabled"
+            error_message="No AWS credentials found in dynaconf configuration - environment variables and other fallbacks have been disabled",
         )
-
 
     async def _authenticate_with_access_keys(self) -> AuthenticationResult:
         """Authenticate using access keys from config."""
         access_key = self.config.get("access_key_id")
         secret_key = self.config.get("secret_access_key")
 
-        logger.debug(f"🔵 AWS: _authenticate_with_access_keys - access_key: {bool(access_key)}, secret_key: {bool(secret_key)}")
+        logger.debug(
+            f"🔵 AWS: _authenticate_with_access_keys - access_key: {bool(access_key)}, secret_key: {bool(secret_key)}"
+        )
 
         if not access_key or not secret_key:
             return AuthenticationResult(
                 success=False,
                 provider=self.provider_name,
                 method="access_keys",
-                error_message="Access key or secret key not provided in config"
+                error_message="Access key or secret key not provided in config",
             )
 
         try:
@@ -142,7 +209,7 @@ class AWSAuthenticator(CloudAuthenticator):
                 aws_access_key_id=access_key,
                 aws_secret_access_key=secret_key,
                 aws_session_token=self.config.get("session_token"),
-                region_name=self.config.get("region")
+                region_name=self.config.get("region"),
             )
 
             if self.test_credentials(session):
@@ -150,7 +217,7 @@ class AWSAuthenticator(CloudAuthenticator):
                     success=True,
                     provider=self.provider_name,
                     method="access_keys",
-                    credentials=session
+                    credentials=session,
                 )
         except Exception as e:
             logger.debug(f"AWS access key authentication failed: {e}")
@@ -159,13 +226,13 @@ class AWSAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="access_keys",
-            error_message="Invalid access keys"
+            error_message="Invalid access keys",
         )
 
     def test_credentials(self, session: boto3.Session) -> bool:
         """Test AWS credentials by making a simple API call."""
         try:
-            sts_client = session.client('sts')
+            sts_client = session.client("sts")
             sts_client.get_caller_identity()
             return True
         except Exception as e:
@@ -186,7 +253,7 @@ class AzureAuthenticator(CloudAuthenticator):
                 success=False,
                 provider=self.provider_name,
                 method="none",
-                error_message="Azure SDK not available"
+                error_message="Azure SDK not available",
             )
 
         # Try authentication methods in order of preference
@@ -212,7 +279,7 @@ class AzureAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="none",
-            error_message="All Azure authentication methods failed"
+            error_message="All Azure authentication methods failed",
         )
 
     async def _authenticate_with_service_principal(self) -> AuthenticationResult:
@@ -226,14 +293,12 @@ class AzureAuthenticator(CloudAuthenticator):
                 success=False,
                 provider=self.provider_name,
                 method="service_principal",
-                error_message="Missing tenant_id, client_id, or client_secret"
+                error_message="Missing tenant_id, client_id, or client_secret",
             )
 
         try:
             credential = ClientSecretCredential(
-                tenant_id=tenant_id,
-                client_id=client_id,
-                client_secret=client_secret
+                tenant_id=tenant_id, client_id=client_id, client_secret=client_secret
             )
 
             if self.test_credentials(credential):
@@ -241,7 +306,7 @@ class AzureAuthenticator(CloudAuthenticator):
                     success=True,
                     provider=self.provider_name,
                     method="service_principal",
-                    credentials=credential
+                    credentials=credential,
                 )
         except Exception as e:
             logger.debug(f"Azure service principal authentication failed: {e}")
@@ -250,7 +315,7 @@ class AzureAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="service_principal",
-            error_message="Invalid service principal credentials"
+            error_message="Invalid service principal credentials",
         )
 
     async def _authenticate_with_environment(self) -> AuthenticationResult:
@@ -263,7 +328,7 @@ class AzureAuthenticator(CloudAuthenticator):
                     success=True,
                     provider=self.provider_name,
                     method="environment",
-                    credentials=credential
+                    credentials=credential,
                 )
         except Exception as e:
             logger.debug(f"Azure environment authentication failed: {e}")
@@ -272,7 +337,7 @@ class AzureAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="environment",
-            error_message="Environment credentials not available"
+            error_message="Environment credentials not available",
         )
 
     async def _authenticate_with_azure_cli(self) -> AuthenticationResult:
@@ -285,7 +350,7 @@ class AzureAuthenticator(CloudAuthenticator):
                     success=True,
                     provider=self.provider_name,
                     method="azure_cli",
-                    credentials=credential
+                    credentials=credential,
                 )
         except Exception as e:
             logger.debug(f"Azure CLI authentication failed: {e}")
@@ -294,7 +359,7 @@ class AzureAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="azure_cli",
-            error_message="Azure CLI not authenticated"
+            error_message="Azure CLI not authenticated",
         )
 
     async def _authenticate_with_managed_identity(self) -> AuthenticationResult:
@@ -307,7 +372,7 @@ class AzureAuthenticator(CloudAuthenticator):
                     success=True,
                     provider=self.provider_name,
                     method="managed_identity",
-                    credentials=credential
+                    credentials=credential,
                 )
         except Exception as e:
             logger.debug(f"Azure managed identity authentication failed: {e}")
@@ -316,7 +381,7 @@ class AzureAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="managed_identity",
-            error_message="Managed identity not available"
+            error_message="Managed identity not available",
         )
 
     async def _authenticate_with_default_credential(self) -> AuthenticationResult:
@@ -329,7 +394,7 @@ class AzureAuthenticator(CloudAuthenticator):
                     success=True,
                     provider=self.provider_name,
                     method="default_credential",
-                    credentials=credential
+                    credentials=credential,
                 )
         except Exception as e:
             logger.debug(f"Azure default credential authentication failed: {e}")
@@ -338,7 +403,7 @@ class AzureAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="default_credential",
-            error_message="Default credential chain failed"
+            error_message="Default credential chain failed",
         )
 
     def test_credentials(self, credential) -> bool:
@@ -364,7 +429,7 @@ class GCPAuthenticator(CloudAuthenticator):
                 success=False,
                 provider=self.provider_name,
                 method="none",
-                error_message="GCP SDK not available"
+                error_message="GCP SDK not available",
             )
 
         # Try authentication methods in order of preference
@@ -388,7 +453,7 @@ class GCPAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="none",
-            error_message="All GCP authentication methods failed"
+            error_message="All GCP authentication methods failed",
         )
 
     async def _authenticate_with_service_account(self) -> AuthenticationResult:
@@ -400,7 +465,7 @@ class GCPAuthenticator(CloudAuthenticator):
                 success=False,
                 provider=self.provider_name,
                 method="service_account",
-                error_message="No service account credentials path provided"
+                error_message="No service account credentials path provided",
             )
 
         if not Path(credentials_path).exists():
@@ -408,20 +473,18 @@ class GCPAuthenticator(CloudAuthenticator):
                 success=False,
                 provider=self.provider_name,
                 method="service_account",
-                error_message=f"Service account file not found: {credentials_path}"
+                error_message=f"Service account file not found: {credentials_path}",
             )
 
         try:
-            credentials = service_account.Credentials.from_service_account_file(
-                credentials_path
-            )
+            credentials = service_account.Credentials.from_service_account_file(credentials_path)
 
             if self.test_credentials(credentials):
                 return AuthenticationResult(
                     success=True,
                     provider=self.provider_name,
                     method="service_account",
-                    credentials=credentials
+                    credentials=credentials,
                 )
         except Exception as e:
             logger.debug(f"GCP service account authentication failed: {e}")
@@ -430,7 +493,7 @@ class GCPAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="service_account",
-            error_message="Invalid service account credentials"
+            error_message="Invalid service account credentials",
         )
 
     async def _authenticate_with_default_credentials(self) -> AuthenticationResult:
@@ -443,7 +506,7 @@ class GCPAuthenticator(CloudAuthenticator):
                     success=True,
                     provider=self.provider_name,
                     method="default_credentials",
-                    credentials=credentials
+                    credentials=credentials,
                 )
         except DefaultCredentialsError as e:
             logger.debug(f"GCP default credentials failed: {e}")
@@ -452,7 +515,7 @@ class GCPAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="default_credentials",
-            error_message="Default credentials not available"
+            error_message="Default credentials not available",
         )
 
     async def _authenticate_with_environment(self) -> AuthenticationResult:
@@ -464,7 +527,7 @@ class GCPAuthenticator(CloudAuthenticator):
                 success=False,
                 provider=self.provider_name,
                 method="environment",
-                error_message="No credentials JSON in environment"
+                error_message="No credentials JSON in environment",
             )
 
         try:
@@ -476,7 +539,7 @@ class GCPAuthenticator(CloudAuthenticator):
                     success=True,
                     provider=self.provider_name,
                     method="environment_json",
-                    credentials=credentials
+                    credentials=credentials,
                 )
         except Exception as e:
             logger.debug(f"GCP environment JSON authentication failed: {e}")
@@ -485,7 +548,7 @@ class GCPAuthenticator(CloudAuthenticator):
             success=False,
             provider=self.provider_name,
             method="environment",
-            error_message="Invalid credentials JSON in environment"
+            error_message="Invalid credentials JSON in environment",
         )
 
     def test_credentials(self, credentials) -> bool:
@@ -512,7 +575,9 @@ class MultiCloudAuthManager:
         }
         self.authenticated_providers = {}
 
-    async def authenticate_provider(self, provider: str, config: Dict[str, Any]) -> AuthenticationResult:
+    async def authenticate_provider(
+        self, provider: str, config: dict[str, Any]
+    ) -> AuthenticationResult:
         """
         Authenticate a specific provider.
 
@@ -530,7 +595,7 @@ class MultiCloudAuthManager:
                 success=False,
                 provider=provider,
                 method="none",
-                error_message=f"Unknown provider: {provider}"
+                error_message=f"Unknown provider: {provider}",
             )
 
         authenticator = self.authenticators[provider](config)
@@ -540,12 +605,14 @@ class MultiCloudAuthManager:
             self.authenticated_providers[provider] = {
                 "credentials": result.credentials,
                 "method": result.method,
-                "authenticator": authenticator
+                "authenticator": authenticator,
             }
 
         return result
 
-    async def authenticate_all(self, configs: Dict[str, Dict[str, Any]]) -> Dict[str, AuthenticationResult]:
+    async def authenticate_all(
+        self, configs: dict[str, dict[str, Any]]
+    ) -> dict[str, AuthenticationResult]:
         """
         Authenticate all configured providers.
 
@@ -564,7 +631,7 @@ class MultiCloudAuthManager:
 
         return results
 
-    def get_credentials(self, provider: str) -> Optional[Any]:
+    def get_credentials(self, provider: str) -> Any | None:
         """Get authenticated credentials for a provider."""
         auth_info = self.authenticated_providers.get(provider.lower())
         return auth_info["credentials"] if auth_info else None
@@ -573,7 +640,7 @@ class MultiCloudAuthManager:
         """Check if a provider is authenticated."""
         return provider.lower() in self.authenticated_providers
 
-    def get_authentication_summary(self) -> Dict[str, Dict[str, Any]]:
+    def get_authentication_summary(self) -> dict[str, dict[str, Any]]:
         """Get summary of authentication status for all providers."""
         summary = {}
 
@@ -581,16 +648,12 @@ class MultiCloudAuthManager:
             summary[provider] = {
                 "authenticated": True,
                 "method": auth_info["method"],
-                "provider": provider
+                "provider": provider,
             }
 
         # Add unauthenticated providers
-        for provider in self.authenticators.keys():
+        for provider in self.authenticators:
             if provider not in summary:
-                summary[provider] = {
-                    "authenticated": False,
-                    "method": None,
-                    "provider": provider
-                }
+                summary[provider] = {"authenticated": False, "method": None, "provider": provider}
 
         return summary

@@ -9,12 +9,12 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import datetime, date, timedelta
-from typing import Dict, Any, List, Optional, Tuple
+from datetime import date, datetime, timedelta
 from enum import Enum
+from typing import Any
 
-from ..config.settings import get_config, CloudConfig
-from ..providers.base import ProviderFactory, CloudCostProvider
+from ..config.settings import CloudConfig, get_config
+from ..providers.base import CloudCostProvider, ProviderFactory
 from ..utils.auth import MultiCloudAuthManager
 from ..utils.data_normalizer import CostDataNormalizer
 
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 class IcingaExitCode(Enum):
     """Standard Icinga/Nagios exit codes."""
+
     OK = 0
     WARNING = 1
     CRITICAL = 2
@@ -36,8 +37,8 @@ class IcingaCheckResult:
         self,
         exit_code: IcingaExitCode,
         message: str,
-        performance_data: Optional[Dict[str, Any]] = None,
-        long_output: Optional[List[str]] = None
+        performance_data: dict[str, Any] | None = None,
+        long_output: list[str] | None = None,
     ):
         self.exit_code = exit_code
         self.message = message
@@ -67,28 +68,28 @@ class IcingaCheckResult:
 
         return result
 
-    def _format_perfdata_item(self, key: str, data: Dict[str, Any]) -> str:
+    def _format_perfdata_item(self, key: str, data: dict[str, Any]) -> str:
         """Format a single performance data item."""
-        value = data.get('value', 0)
-        unit = data.get('unit', '')
-        warn = data.get('warning')
-        crit = data.get('critical')
-        min_val = data.get('min', 0)
-        max_val = data.get('max', '')
+        value = data.get("value", 0)
+        unit = data.get("unit", "")
+        warn = data.get("warning")
+        crit = data.get("critical")
+        min_val = data.get("min", 0)
+        max_val = data.get("max", "")
 
         # Format: label=value[UOM];[warn];[crit];[min];[max]
         perfdata = f"'{key}'={value}{unit}"
 
         # Add thresholds
         threshold_parts = []
-        threshold_parts.append(str(warn) if warn is not None else '')
-        threshold_parts.append(str(crit) if crit is not None else '')
+        threshold_parts.append(str(warn) if warn is not None else "")
+        threshold_parts.append(str(crit) if crit is not None else "")
         threshold_parts.append(str(min_val))
         threshold_parts.append(str(max_val))
 
         # Only add thresholds if any are specified
         if any(part for part in threshold_parts):
-            perfdata += ';' + ';'.join(threshold_parts)
+            perfdata += ";" + ";".join(threshold_parts)
 
         return perfdata
 
@@ -101,7 +102,7 @@ class CloudCostCheckPlugin:
         self.auth_manager = MultiCloudAuthManager()
         self.normalizer = CostDataNormalizer()
 
-    async def authenticate_providers(self, providers: List[str]) -> Dict[str, CloudCostProvider]:
+    async def authenticate_providers(self, providers: list[str]) -> dict[str, CloudCostProvider]:
         """Authenticate specified cloud providers."""
         authenticated_providers = {}
 
@@ -113,22 +114,26 @@ class CloudCostCheckPlugin:
 
             try:
                 provider = ProviderFactory.create_provider(provider_name, provider_config)
-                auth_result = await self.auth_manager.authenticate_provider(provider_name, provider_config)
+                auth_result = await self.auth_manager.authenticate_provider(
+                    provider_name, provider_config
+                )
 
                 if auth_result.success:
                     authenticated_providers[provider_name] = provider
                 else:
-                    logger.warning(f"Failed to authenticate {provider_name}: {auth_result.error_message}")
+                    logger.warning(
+                        f"Failed to authenticate {provider_name}: {auth_result.error_message}"
+                    )
 
             except Exception as e:
                 logger.error(f"Error setting up {provider_name} provider: {e}")
 
         return authenticated_providers
 
-    def get_thresholds(self, provider: Optional[str] = None) -> Tuple[Optional[float], Optional[float]]:
+    def get_thresholds(self, provider: str | None = None) -> tuple[float | None, float | None]:
         """Get warning and critical thresholds for a provider."""
-        warning = self.config.get_threshold('warning', provider)
-        critical = self.config.get_threshold('critical', provider)
+        warning = self.config.get_threshold("warning", provider)
+        critical = self.config.get_threshold("critical", provider)
         return warning, critical
 
 
@@ -137,10 +142,10 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
 
     async def check(
         self,
-        provider: Optional[str] = None,
-        warning_threshold: Optional[float] = None,
-        critical_threshold: Optional[float] = None,
-        check_date: Optional[date] = None
+        provider: str | None = None,
+        warning_threshold: float | None = None,
+        critical_threshold: float | None = None,
+        check_date: date | None = None,
     ) -> IcingaCheckResult:
         """
         Check daily costs against thresholds.
@@ -166,8 +171,7 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
 
             if not authenticated_providers:
                 return IcingaCheckResult(
-                    IcingaExitCode.UNKNOWN,
-                    "UNKNOWN - No authenticated providers available"
+                    IcingaExitCode.UNKNOWN, "UNKNOWN - No authenticated providers available"
                 )
 
             # Get cost data
@@ -178,9 +182,7 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
 
             for provider_name, provider_instance in authenticated_providers.items():
                 try:
-                    cost_summary = await provider_instance.get_cost_data(
-                        check_date, check_date
-                    )
+                    cost_summary = await provider_instance.get_cost_data(check_date, check_date)
 
                     provider_cost = cost_summary.total_cost
                     total_cost += provider_cost
@@ -197,11 +199,11 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
 
                     # Add performance data
                     performance_data[f"{provider_name}_cost"] = {
-                        'value': round(provider_cost, 2),
-                        'unit': 'USD',
-                        'warning': warn_threshold,
-                        'critical': crit_threshold,
-                        'min': 0
+                        "value": round(provider_cost, 2),
+                        "unit": "USD",
+                        "warning": warn_threshold,
+                        "critical": crit_threshold,
+                        "min": 0,
                     }
 
                     # Add detailed output
@@ -211,9 +213,7 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
                     elif warn_threshold and provider_cost >= warn_threshold:
                         status = "WARNING"
 
-                    long_output.append(
-                        f"{provider_name.upper()}: ${provider_cost:.2f} [{status}]"
-                    )
+                    long_output.append(f"{provider_name.upper()}: ${provider_cost:.2f} [{status}]")
 
                 except Exception as e:
                     logger.error(f"Failed to get cost data for {provider_name}: {e}")
@@ -226,12 +226,12 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
             if critical_threshold is not None:
                 global_crit = critical_threshold
 
-            performance_data['total_cost'] = {
-                'value': round(total_cost, 2),
-                'unit': 'USD',
-                'warning': global_warn,
-                'critical': global_crit,
-                'min': 0
+            performance_data["total_cost"] = {
+                "value": round(total_cost, 2),
+                "unit": "USD",
+                "warning": global_warn,
+                "critical": global_crit,
+                "min": 0,
             }
 
             # Determine overall status
@@ -249,23 +249,19 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
             if provider:
                 message = f"{status_text} - {provider.upper()} daily cost: ${total_cost:.2f}"
             else:
-                provider_breakdown = ", ".join([
-                    f"{p}: ${c:.2f}" for p, c in provider_costs.items()
-                ])
-                message = f"{status_text} - Total daily cost: ${total_cost:.2f} ({provider_breakdown})"
+                provider_breakdown = ", ".join(
+                    [f"{p}: ${c:.2f}" for p, c in provider_costs.items()]
+                )
+                message = (
+                    f"{status_text} - Total daily cost: ${total_cost:.2f} ({provider_breakdown})"
+                )
 
-            return IcingaCheckResult(
-                exit_code,
-                message,
-                performance_data,
-                long_output
-            )
+            return IcingaCheckResult(exit_code, message, performance_data, long_output)
 
         except Exception as e:
             logger.error(f"Daily cost check failed: {e}")
             return IcingaCheckResult(
-                IcingaExitCode.UNKNOWN,
-                f"UNKNOWN - Check execution failed: {str(e)}"
+                IcingaExitCode.UNKNOWN, f"UNKNOWN - Check execution failed: {str(e)}"
             )
 
 
@@ -274,10 +270,10 @@ class MonthlyCostCheckPlugin(CloudCostCheckPlugin):
 
     async def check(
         self,
-        provider: Optional[str] = None,
-        budget_threshold: Optional[float] = None,
+        provider: str | None = None,
+        budget_threshold: float | None = None,
         warning_percentage: float = 75.0,
-        critical_percentage: float = 90.0
+        critical_percentage: float = 90.0,
     ) -> IcingaCheckResult:
         """
         Check monthly costs against budget.
@@ -305,8 +301,7 @@ class MonthlyCostCheckPlugin(CloudCostCheckPlugin):
 
             if not authenticated_providers:
                 return IcingaCheckResult(
-                    IcingaExitCode.UNKNOWN,
-                    "UNKNOWN - No authenticated providers available"
+                    IcingaExitCode.UNKNOWN, "UNKNOWN - No authenticated providers available"
                 )
 
             # Get cost data
@@ -339,22 +334,22 @@ class MonthlyCostCheckPlugin(CloudCostCheckPlugin):
                 remaining_budget = budget_threshold - total_cost
 
                 # Add performance data
-                performance_data['monthly_cost'] = {
-                    'value': round(total_cost, 2),
-                    'unit': 'USD',
-                    'warning': round(budget_threshold * warning_percentage / 100, 2),
-                    'critical': round(budget_threshold * critical_percentage / 100, 2),
-                    'min': 0,
-                    'max': budget_threshold
+                performance_data["monthly_cost"] = {
+                    "value": round(total_cost, 2),
+                    "unit": "USD",
+                    "warning": round(budget_threshold * warning_percentage / 100, 2),
+                    "critical": round(budget_threshold * critical_percentage / 100, 2),
+                    "min": 0,
+                    "max": budget_threshold,
                 }
 
-                performance_data['budget_used_percentage'] = {
-                    'value': round(budget_used_percentage, 1),
-                    'unit': '%',
-                    'warning': warning_percentage,
-                    'critical': critical_percentage,
-                    'min': 0,
-                    'max': 100
+                performance_data["budget_used_percentage"] = {
+                    "value": round(budget_used_percentage, 1),
+                    "unit": "%",
+                    "warning": warning_percentage,
+                    "critical": critical_percentage,
+                    "min": 0,
+                    "max": 100,
                 }
 
                 # Determine status
@@ -377,27 +372,21 @@ class MonthlyCostCheckPlugin(CloudCostCheckPlugin):
 
             else:
                 # No budget set, just report current cost
-                performance_data['monthly_cost'] = {
-                    'value': round(total_cost, 2),
-                    'unit': 'USD',
-                    'min': 0
+                performance_data["monthly_cost"] = {
+                    "value": round(total_cost, 2),
+                    "unit": "USD",
+                    "min": 0,
                 }
 
                 message = f"OK - Monthly cost: ${total_cost:.2f} (no budget threshold set)"
                 exit_code = IcingaExitCode.OK
 
-            return IcingaCheckResult(
-                exit_code,
-                message,
-                performance_data,
-                long_output
-            )
+            return IcingaCheckResult(exit_code, message, performance_data, long_output)
 
         except Exception as e:
             logger.error(f"Monthly cost check failed: {e}")
             return IcingaCheckResult(
-                IcingaExitCode.UNKNOWN,
-                f"UNKNOWN - Check execution failed: {str(e)}"
+                IcingaExitCode.UNKNOWN, f"UNKNOWN - Check execution failed: {str(e)}"
             )
 
 
@@ -408,9 +397,9 @@ class ServiceCostCheckPlugin(CloudCostCheckPlugin):
         self,
         provider: str,
         service_name: str,
-        warning_threshold: Optional[float] = None,
-        critical_threshold: Optional[float] = None,
-        time_period: int = 1  # days
+        warning_threshold: float | None = None,
+        critical_threshold: float | None = None,
+        time_period: int = 1,  # days
     ) -> IcingaCheckResult:
         """
         Check service-specific costs.
@@ -431,8 +420,7 @@ class ServiceCostCheckPlugin(CloudCostCheckPlugin):
 
             if provider not in authenticated_providers:
                 return IcingaCheckResult(
-                    IcingaExitCode.UNKNOWN,
-                    f"UNKNOWN - Could not authenticate {provider} provider"
+                    IcingaExitCode.UNKNOWN, f"UNKNOWN - Could not authenticate {provider} provider"
                 )
 
             # Get date range
@@ -441,9 +429,7 @@ class ServiceCostCheckPlugin(CloudCostCheckPlugin):
 
             # Get service costs
             provider_instance = authenticated_providers[provider]
-            service_costs = await provider_instance.get_service_costs(
-                start_date, end_date
-            )
+            service_costs = await provider_instance.get_service_costs(start_date, end_date)
 
             # Find the specific service
             service_cost = service_costs.get(service_name, 0.0)
@@ -457,11 +443,11 @@ class ServiceCostCheckPlugin(CloudCostCheckPlugin):
             # Add performance data
             performance_data = {
                 f"{service_name.lower().replace(' ', '_')}_cost": {
-                    'value': round(service_cost, 2),
-                    'unit': 'USD',
-                    'warning': warning_threshold,
-                    'critical': critical_threshold,
-                    'min': 0
+                    "value": round(service_cost, 2),
+                    "unit": "USD",
+                    "warning": warning_threshold,
+                    "critical": critical_threshold,
+                    "min": 0,
                 }
             }
 
@@ -489,78 +475,40 @@ class ServiceCostCheckPlugin(CloudCostCheckPlugin):
             for svc, cost in sorted_services[:5]:
                 long_output.append(f"  {svc}: ${cost:.2f}")
 
-            return IcingaCheckResult(
-                exit_code,
-                message,
-                performance_data,
-                long_output
-            )
+            return IcingaCheckResult(exit_code, message, performance_data, long_output)
 
         except Exception as e:
             logger.error(f"Service cost check failed: {e}")
             return IcingaCheckResult(
-                IcingaExitCode.UNKNOWN,
-                f"UNKNOWN - Check execution failed: {str(e)}"
+                IcingaExitCode.UNKNOWN, f"UNKNOWN - Check execution failed: {str(e)}"
             )
 
 
 async def main():
     """Main entry point for Icinga check plugins."""
-    parser = argparse.ArgumentParser(
-        description="Multi-cloud cost monitoring Icinga check plugin"
-    )
+    parser = argparse.ArgumentParser(description="Multi-cloud cost monitoring Icinga check plugin")
 
     parser.add_argument(
-        'check_type',
-        choices=['daily', 'monthly', 'service'],
-        help='Type of cost check to perform'
+        "check_type", choices=["daily", "monthly", "service"], help="Type of cost check to perform"
     )
 
-    parser.add_argument(
-        '--provider',
-        help='Cloud provider to check (aws, azure, gcp)'
-    )
+    parser.add_argument("--provider", help="Cloud provider to check (aws, azure, gcp)")
+
+    parser.add_argument("--warning", "-w", type=float, help="Warning threshold")
+
+    parser.add_argument("--critical", "-c", type=float, help="Critical threshold")
+
+    parser.add_argument("--service", help="Service name for service-level checks")
+
+    parser.add_argument("--budget", type=float, help="Monthly budget threshold")
+
+    parser.add_argument("--period", type=int, default=1, help="Time period in days (default: 1)")
 
     parser.add_argument(
-        '--warning', '-w',
-        type=float,
-        help='Warning threshold'
+        "--no-perfdata", action="store_true", help="Disable performance data output"
     )
 
-    parser.add_argument(
-        '--critical', '-c',
-        type=float,
-        help='Critical threshold'
-    )
-
-    parser.add_argument(
-        '--service',
-        help='Service name for service-level checks'
-    )
-
-    parser.add_argument(
-        '--budget',
-        type=float,
-        help='Monthly budget threshold'
-    )
-
-    parser.add_argument(
-        '--period',
-        type=int,
-        default=1,
-        help='Time period in days (default: 1)'
-    )
-
-    parser.add_argument(
-        '--no-perfdata',
-        action='store_true',
-        help='Disable performance data output'
-    )
-
-    parser.add_argument(
-        '--config',
-        help='Path to configuration file'
-    )
+    parser.add_argument("--config", help="Path to configuration file")
 
     args = parser.parse_args()
 
@@ -575,41 +523,38 @@ async def main():
 
     except Exception as e:
         result = IcingaCheckResult(
-            IcingaExitCode.UNKNOWN,
-            f"UNKNOWN - Configuration error: {str(e)}"
+            IcingaExitCode.UNKNOWN, f"UNKNOWN - Configuration error: {str(e)}"
         )
         print(result.format_output(False))
         sys.exit(result.exit_code.value)
 
     # Execute the appropriate check
     try:
-        if args.check_type == 'daily':
+        if args.check_type == "daily":
             plugin = DailyCostCheckPlugin(config)
             result = await plugin.check(
                 provider=args.provider,
                 warning_threshold=args.warning,
-                critical_threshold=args.critical
+                critical_threshold=args.critical,
             )
 
-        elif args.check_type == 'monthly':
+        elif args.check_type == "monthly":
             plugin = MonthlyCostCheckPlugin(config)
             result = await plugin.check(
                 provider=args.provider,
                 budget_threshold=args.budget,
                 warning_percentage=75.0,  # Could be made configurable
-                critical_percentage=90.0
+                critical_percentage=90.0,
             )
 
-        elif args.check_type == 'service':
+        elif args.check_type == "service":
             if not args.service:
                 result = IcingaCheckResult(
-                    IcingaExitCode.UNKNOWN,
-                    "UNKNOWN - Service name required for service checks"
+                    IcingaExitCode.UNKNOWN, "UNKNOWN - Service name required for service checks"
                 )
             elif not args.provider:
                 result = IcingaCheckResult(
-                    IcingaExitCode.UNKNOWN,
-                    "UNKNOWN - Provider required for service checks"
+                    IcingaExitCode.UNKNOWN, "UNKNOWN - Provider required for service checks"
                 )
             else:
                 plugin = ServiceCostCheckPlugin(config)
@@ -618,13 +563,12 @@ async def main():
                     service_name=args.service,
                     warning_threshold=args.warning,
                     critical_threshold=args.critical,
-                    time_period=args.period
+                    time_period=args.period,
                 )
 
     except Exception as e:
         result = IcingaCheckResult(
-            IcingaExitCode.UNKNOWN,
-            f"UNKNOWN - Check execution failed: {str(e)}"
+            IcingaExitCode.UNKNOWN, f"UNKNOWN - Check execution failed: {str(e)}"
         )
 
     # Output result and exit
@@ -632,5 +576,5 @@ async def main():
     sys.exit(result.exit_code.value)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())

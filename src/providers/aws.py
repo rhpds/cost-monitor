@@ -4,35 +4,35 @@ AWS Cost Explorer provider implementation.
 Provides AWS-specific cost monitoring functionality using the AWS Cost Explorer API.
 """
 
+import asyncio
+import hashlib
 import logging
 import os
 import pickle
-import hashlib
-import asyncio
 import random
-from datetime import datetime, date, timedelta
-from typing import List, Dict, Any, Optional, Union
+from datetime import date, datetime, timedelta
+from typing import Any
 
 try:
-    import boto3
-    from botocore.exceptions import ClientError, NoCredentialsError
     from botocore.config import Config
+    from botocore.exceptions import ClientError
+
     AWS_AVAILABLE = True
 except ImportError:
     AWS_AVAILABLE = False
 
+from ..utils.auth import AWSAuthenticator
 from .base import (
+    APIError,
+    AuthenticationError,
     CloudCostProvider,
+    ConfigurationError,
     CostDataPoint,
     CostSummary,
-    TimeGranularity,
-    AuthenticationError,
-    APIError,
+    ProviderFactory,
     RateLimitError,
-    ConfigurationError,
-    ProviderFactory
+    TimeGranularity,
 )
-from ..utils.auth import AWSAuthenticator
 
 logger = logging.getLogger(__name__)
 
@@ -40,29 +40,31 @@ logger = logging.getLogger(__name__)
 class AWSCostProvider(CloudCostProvider):
     """AWS Cost Explorer provider implementation."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.session = None
         self.cost_explorer_client = None
         self.organizations_client = None
 
         # Convert DynaBox to regular dict to ensure proper access in authenticator
-        if hasattr(config, 'get') and hasattr(config, 'keys'):
+        if hasattr(config, "get") and hasattr(config, "keys"):
             # Convert Box/DynaBox to regular dict
             auth_config = {}
-            for key in config.keys():
+            for key in config:
                 auth_config[key] = config.get(key)
         else:
             auth_config = config
 
-        logger.debug(f"🔵 AWS: Auth config - has access_key_id: {bool(auth_config.get('access_key_id'))}")
+        logger.debug(
+            f"🔵 AWS: Auth config - has access_key_id: {bool(auth_config.get('access_key_id'))}"
+        )
         self.authenticator = AWSAuthenticator(auth_config)
 
         # AWS-specific configuration
         self.region = config.get("region", "us-east-1")
         self.granularity_mapping = {
             TimeGranularity.DAILY: "DAILY",
-            TimeGranularity.MONTHLY: "MONTHLY"
+            TimeGranularity.MONTHLY: "MONTHLY",
         }
 
         # Initialize persistent cache (must be done before loading account names cache)
@@ -87,9 +89,7 @@ class AWSCostProvider(CloudCostProvider):
         return "aws"
 
     def validate_date_range(
-        self,
-        start_date: Union[datetime, date],
-        end_date: Union[datetime, date]
+        self, start_date: datetime | date, end_date: datetime | date
     ) -> tuple[datetime, datetime]:
         """
         AWS-specific date validation that excludes current day due to 24-hour data lag.
@@ -111,7 +111,9 @@ class AWSCostProvider(CloudCostProvider):
         # If end_date includes today, cap it at yesterday
         if end_date.date() >= today:
             end_date = datetime.combine(yesterday, datetime.max.time())
-            logger.info(f"🔵 AWS: Capped end_date to {yesterday} due to 24-hour data lag (was: {end_date.date()})")
+            logger.info(
+                f"🔵 AWS: Capped end_date to {yesterday} due to 24-hour data lag (was: {end_date.date()})"
+            )
 
         # Handle single-day queries - AWS requires start < end
         if start_date.date() == end_date.date():
@@ -128,26 +130,34 @@ class AWSCostProvider(CloudCostProvider):
         # Validate range after initial adjustments, but before final date overrides
         if start_date >= end_date:
             # Handle edge case where adjustments result in invalid range
-            logger.info(f"🔵 AWS: Date range conflict after adjustment, using single-day range for {yesterday}")
+            logger.info(
+                f"🔵 AWS: Date range conflict after adjustment, using single-day range for {yesterday}"
+            )
             start_date = datetime.combine(yesterday, datetime.min.time())
             end_date = datetime.combine(yesterday, datetime.max.time())
 
         # Check if dates are too far in the future (should be yesterday or earlier now)
-        start_date_for_comparison = start_date.date() if isinstance(start_date, datetime) else start_date
+        start_date_for_comparison = (
+            start_date.date() if isinstance(start_date, datetime) else start_date
+        )
         if start_date_for_comparison > yesterday:
             # Override start date to latest available data instead of failing
-            logger.info(f"🔵 AWS: Requested start date {start_date_for_comparison} adjusted to {yesterday} (latest available due to 24-hour lag)")
+            logger.info(
+                f"🔵 AWS: Requested start date {start_date_for_comparison} adjusted to {yesterday} (latest available due to 24-hour lag)"
+            )
             start_date = datetime.combine(yesterday, datetime.min.time())
 
         # Also ensure end date is not beyond yesterday
         end_date_for_comparison = end_date.date() if isinstance(end_date, datetime) else end_date
         if end_date_for_comparison > yesterday:
-            logger.info(f"🔵 AWS: Requested end date {end_date_for_comparison} adjusted to {yesterday} (latest available due to 24-hour lag)")
+            logger.info(
+                f"🔵 AWS: Requested end date {end_date_for_comparison} adjusted to {yesterday} (latest available due to 24-hour lag)"
+            )
             end_date = datetime.combine(yesterday, datetime.max.time())
 
         # Final validation after all adjustments
         if start_date >= end_date:
-            logger.info(f"🔵 AWS: Final range validation failed, using yesterday as single-day range")
+            logger.info("🔵 AWS: Final range validation failed, using yesterday as single-day range")
             start_date = datetime.combine(yesterday, datetime.min.time())
             end_date = datetime.combine(yesterday, datetime.max.time())
 
@@ -157,15 +167,18 @@ class AWSCostProvider(CloudCostProvider):
         """Initialize persistent cache for AWS cost data."""
         # Get cache directory from config, with fallback to default
         from ..config.settings import get_config
+
         config = get_config()
-        base_cache_dir = config.cache.get('directory', '~/.cache/cost-monitor')
-        self.cache_dir = os.path.join(os.path.expanduser(base_cache_dir), 'aws')
+        base_cache_dir = config.cache.get("directory", "~/.cache/cost-monitor")
+        self.cache_dir = os.path.join(os.path.expanduser(base_cache_dir), "aws")
         os.makedirs(self.cache_dir, exist_ok=True)
         # Cache files for 24 hours (Cost Explorer data updates 3-4 times daily)
         self.cache_max_age_hours = 24
         logger.debug(f"AWS cache initialized at: {self.cache_dir}")
 
-    def _get_cache_key_for_date(self, target_date: date, granularity: str, metrics: List[str], group_by: List[str]) -> str:
+    def _get_cache_key_for_date(
+        self, target_date: date, granularity: str, metrics: list[str], group_by: list[str]
+    ) -> str:
         """Generate a unique cache key for a single date's cost data."""
         key_data = f"{target_date.isoformat()}:{granularity}:{':'.join(sorted(metrics))}:{':'.join(sorted(group_by))}"
         cache_key = hashlib.md5(key_data.encode()).hexdigest()
@@ -176,22 +189,22 @@ class AWSCostProvider(CloudCostProvider):
         """Get the full path for a cache file."""
         return os.path.join(self.cache_dir, f"{cache_key}.pkl")
 
-    def _get_cache_data_date(self, cache_file_path: str) -> Optional[date]:
+    def _get_cache_data_date(self, cache_file_path: str) -> date | None:
         """Extract the data date from cached cost data."""
         try:
-            with open(cache_file_path, 'rb') as f:
+            with open(cache_file_path, "rb") as f:
                 cached_data = pickle.load(f)
 
             # If cached data contains cost data points, extract the first date
             if cached_data and len(cached_data) > 0:
                 first_point = cached_data[0]
-                if hasattr(first_point, 'date') and isinstance(first_point.date, date):
+                if hasattr(first_point, "date") and isinstance(first_point.date, date):
                     return first_point.date
-                elif isinstance(first_point, dict) and 'date' in first_point:
-                    if isinstance(first_point['date'], date):
-                        return first_point['date']
-                    elif isinstance(first_point['date'], str):
-                        return datetime.strptime(first_point['date'], '%Y-%m-%d').date()
+                elif isinstance(first_point, dict) and "date" in first_point:
+                    if isinstance(first_point["date"], date):
+                        return first_point["date"]
+                    elif isinstance(first_point["date"], str):
+                        return datetime.strptime(first_point["date"], "%Y-%m-%d").date()
             return None
         except (FileNotFoundError, pickle.PickleError, ValueError, AttributeError) as e:
             logger.debug(f"💾 AWS: Could not extract date from cache file {cache_file_path}: {e}")
@@ -203,7 +216,6 @@ class AWSCostProvider(CloudCostProvider):
             return False
 
         # Extract date from cache file to determine data age
-        cache_key = os.path.basename(cache_file_path).replace('.pkl', '')
         data_date = self._get_cache_data_date(cache_file_path)
 
         if data_date:
@@ -223,10 +235,19 @@ class AWSCostProvider(CloudCostProvider):
         # For recent data (<24 hours) or if we can't extract date, use original logic
         file_age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(cache_file_path))
         is_valid = file_age.total_seconds() < (self.cache_max_age_hours * 3600)
-        logger.debug(f"💾 AWS: Recent data cache valid: {is_valid} (age: {file_age.total_seconds()/3600:.1f}h)")
+        logger.debug(
+            f"💾 AWS: Recent data cache valid: {is_valid} (age: {file_age.total_seconds()/3600:.1f}h)"
+        )
         return is_valid
 
-    def _save_daily_cache(self, target_date: date, granularity: str, metrics: List[str], group_by: List[str], data: List[CostDataPoint]) -> None:
+    def _save_daily_cache(
+        self,
+        target_date: date,
+        granularity: str,
+        metrics: list[str],
+        group_by: list[str],
+        data: list[CostDataPoint],
+    ) -> None:
         """Save daily cost data to cache."""
         try:
             # Ensure cache directory exists before saving
@@ -239,59 +260,66 @@ class AWSCostProvider(CloudCostProvider):
             # Convert to serializable format
             serializable_data = [
                 {
-                    'date': point.date.isoformat(),
-                    'amount': point.amount,
-                    'currency': point.currency,
-                    'service_name': point.service_name,
-                    'account_id': point.account_id,
-                    'resource_id': point.resource_id,
-                    'region': point.region,
-                    'tags': point.tags or {}
+                    "date": point.date.isoformat(),
+                    "amount": point.amount,
+                    "currency": point.currency,
+                    "service_name": point.service_name,
+                    "account_id": point.account_id,
+                    "resource_id": point.resource_id,
+                    "region": point.region,
+                    "tags": point.tags or {},
                 }
                 for point in data
             ]
-            with open(cache_file_path, 'wb') as f:
+            with open(cache_file_path, "wb") as f:
                 pickle.dump(serializable_data, f)
-            logger.debug(f"✅ AWS: Saved {len(data)} cost data points for {target_date}: {cache_key}")
+            logger.debug(
+                f"✅ AWS: Saved {len(data)} cost data points for {target_date}: {cache_key}"
+            )
         except Exception as e:
             logger.error(f"❌ AWS: Failed to save daily cache for {target_date}: {e}")
 
-    def _load_daily_cache(self, target_date: date, granularity: str, metrics: List[str], group_by: List[str]) -> Optional[List[CostDataPoint]]:
+    def _load_daily_cache(
+        self, target_date: date, granularity: str, metrics: list[str], group_by: list[str]
+    ) -> list[CostDataPoint] | None:
         """Load daily cost data from cache."""
         try:
             cache_key = self._get_cache_key_for_date(target_date, granularity, metrics, group_by)
             cache_file_path = self._get_cache_file_path(cache_key)
             if self._is_cache_valid(cache_file_path):
-                with open(cache_file_path, 'rb') as f:
+                with open(cache_file_path, "rb") as f:
                     serializable_data = pickle.load(f)
 
                 # Convert back to CostDataPoint objects
                 data_points = []
                 for item in serializable_data:
-                    data_points.append(CostDataPoint(
-                        date=datetime.fromisoformat(item['date']).date(),
-                        amount=item['amount'],
-                        currency=item['currency'],
-                        service_name=item.get('service_name'),
-                        account_id=item.get('account_id'),
-                        resource_id=item.get('resource_id'),
-                        region=item.get('region'),
-                        tags=item.get('tags', {})
-                    ))
+                    data_points.append(
+                        CostDataPoint(
+                            date=datetime.fromisoformat(item["date"]).date(),
+                            amount=item["amount"],
+                            currency=item["currency"],
+                            service_name=item.get("service_name"),
+                            account_id=item.get("account_id"),
+                            resource_id=item.get("resource_id"),
+                            region=item.get("region"),
+                            tags=item.get("tags", {}),
+                        )
+                    )
 
-                logger.debug(f"📖 AWS: Loaded {len(data_points)} cached data points for {target_date}")
+                logger.debug(
+                    f"📖 AWS: Loaded {len(data_points)} cached data points for {target_date}"
+                )
                 return data_points
         except Exception as e:
             logger.debug(f"❌ AWS: Failed to load daily cache for {target_date}: {e}")
         return None
-
 
     def _cleanup_old_cache_files(self):
         """Clean up cache files older than max age, but preserve historical data."""
         try:
             now = datetime.now()
             for filename in os.listdir(self.cache_dir):
-                if filename.endswith('.pkl') and filename != "account_names_cache.pkl":
+                if filename.endswith(".pkl") and filename != "account_names_cache.pkl":
                     file_path = os.path.join(self.cache_dir, filename)
 
                     # Check if this is historical data that should be preserved
@@ -301,7 +329,9 @@ class AWSCostProvider(CloudCostProvider):
 
                         # Never delete historical data (>48 hours old)
                         if data_age_hours >= 48:
-                            logger.debug(f"💾 AWS: Preserving permanent cache for {data_date} ({filename})")
+                            logger.debug(
+                                f"💾 AWS: Preserving permanent cache for {data_date} ({filename})"
+                            )
                             continue
 
                     # For recent data or files we can't parse, use original cleanup logic
@@ -322,14 +352,20 @@ class AWSCostProvider(CloudCostProvider):
         try:
             if os.path.exists(cache_file_path):
                 # Check if cache file is not too old (30 days max for account names)
-                file_age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(cache_file_path))
+                file_age = datetime.now() - datetime.fromtimestamp(
+                    os.path.getmtime(cache_file_path)
+                )
                 if file_age.days < 30:
-                    with open(cache_file_path, 'rb') as f:
+                    with open(cache_file_path, "rb") as f:
                         cached_names = pickle.load(f)
                         self.account_names_cache.update(cached_names)
-                        logger.info(f"🔵 AWS: Loaded {len(cached_names)} account names from persistent cache")
+                        logger.info(
+                            f"🔵 AWS: Loaded {len(cached_names)} account names from persistent cache"
+                        )
                 else:
-                    logger.info(f"🔵 AWS: Account names cache file is {file_age.days} days old, skipping")
+                    logger.info(
+                        f"🔵 AWS: Account names cache file is {file_age.days} days old, skipping"
+                    )
                     # Remove old cache file
                     os.remove(cache_file_path)
         except Exception as e:
@@ -347,9 +383,11 @@ class AWSCostProvider(CloudCostProvider):
             }
 
             if names_to_save:
-                with open(cache_file_path, 'wb') as f:
+                with open(cache_file_path, "wb") as f:
                     pickle.dump(names_to_save, f)
-                    logger.debug(f"🔵 AWS: Saved {len(names_to_save)} account names to persistent cache")
+                    logger.debug(
+                        f"🔵 AWS: Saved {len(names_to_save)} account names to persistent cache"
+                    )
             else:
                 logger.debug("🔵 AWS: No resolved account names to save to cache")
         except Exception as e:
@@ -384,20 +422,14 @@ class AWSCostProvider(CloudCostProvider):
             raise ConfigurationError("No authenticated AWS session available")
 
         # Cost Explorer is only available in us-east-1
-        config = Config(
-            region_name="us-east-1",
-            retries={
-                'max_attempts': 3,
-                'mode': 'adaptive'
-            }
-        )
+        config = Config(region_name="us-east-1", retries={"max_attempts": 3, "mode": "adaptive"})
 
-        self.cost_explorer_client = self.session.client('ce', config=config)
+        self.cost_explorer_client = self.session.client("ce", config=config)
 
         # Create Organizations client for account name resolution
         # Organizations is also only available in us-east-1
         try:
-            self.organizations_client = self.session.client('organizations', config=config)
+            self.organizations_client = self.session.client("organizations", config=config)
         except Exception as e:
             # Organizations access might not be available (not in org or no permissions)
             logger.debug(f"Could not create Organizations client: {e}")
@@ -414,17 +446,17 @@ class AWSCostProvider(CloudCostProvider):
 
             self.cost_explorer_client.get_cost_and_usage(
                 TimePeriod={
-                    'Start': start_date.strftime('%Y-%m-%d'),
-                    'End': end_date.strftime('%Y-%m-%d')
+                    "Start": start_date.strftime("%Y-%m-%d"),
+                    "End": end_date.strftime("%Y-%m-%d"),
                 },
-                Granularity='DAILY',
-                Metrics=['BlendedCost']
+                Granularity="DAILY",
+                Metrics=["BlendedCost"],
             )
             return True
 
         except ClientError as e:
-            error_code = e.response['Error']['Code']
-            if error_code == 'Throttling':
+            error_code = e.response["Error"]["Code"]
+            if error_code == "Throttling":
                 logger.warning("AWS Cost Explorer API throttled")
                 return True  # Connection is working, just rate limited
             else:
@@ -436,11 +468,11 @@ class AWSCostProvider(CloudCostProvider):
 
     async def get_cost_data(
         self,
-        start_date: Union[datetime, date],
-        end_date: Union[datetime, date],
+        start_date: datetime | date,
+        end_date: datetime | date,
         granularity: TimeGranularity = TimeGranularity.DAILY,
-        group_by: Optional[List[str]] = None,
-        filter_by: Optional[Dict[str, Any]] = None
+        group_by: list[str] | None = None,
+        filter_by: dict[str, Any] | None = None,
     ) -> CostSummary:
         """Retrieve cost data from AWS Cost Explorer."""
         await self.ensure_authenticated()
@@ -450,27 +482,27 @@ class AWSCostProvider(CloudCostProvider):
 
         # Prepare request parameters
         request_params = {
-            'TimePeriod': {
-                'Start': start_date.strftime('%Y-%m-%d'),
-                'End': end_date.strftime('%Y-%m-%d')
+            "TimePeriod": {
+                "Start": start_date.strftime("%Y-%m-%d"),
+                "End": end_date.strftime("%Y-%m-%d"),
             },
-            'Granularity': self.granularity_mapping.get(granularity, 'DAILY'),
-            'Metrics': self.default_metrics
+            "Granularity": self.granularity_mapping.get(granularity, "DAILY"),
+            "Metrics": self.default_metrics,
         }
 
         # Add group by dimensions
         if group_by or self.default_group_by:
             group_dimensions = group_by or self.default_group_by
-            request_params['GroupBy'] = [
-                {'Type': 'DIMENSION', 'Key': dim} for dim in group_dimensions
+            request_params["GroupBy"] = [
+                {"Type": "DIMENSION", "Key": dim} for dim in group_dimensions
             ]
 
         # Add filters if specified
         if filter_by:
-            request_params['Filter'] = self._build_filter(filter_by)
+            request_params["Filter"] = self._build_filter(filter_by)
 
         # Try to load daily cached data first
-        granularity_str = self.granularity_mapping.get(granularity, 'DAILY')
+        granularity_str = self.granularity_mapping.get(granularity, "DAILY")
         group_dimensions = group_by or self.default_group_by
 
         # Generate list of dates in the range
@@ -487,7 +519,9 @@ class AWSCostProvider(CloudCostProvider):
         missing_dates = []
 
         for target_date in date_list:
-            cached_data_for_date = self._load_daily_cache(target_date, granularity_str, self.default_metrics, group_dimensions)
+            cached_data_for_date = self._load_daily_cache(
+                target_date, granularity_str, self.default_metrics, group_dimensions
+            )
             if cached_data_for_date:
                 all_cached_data.extend(cached_data_for_date)
                 logger.debug(f"🔵 AWS: Cache HIT for {target_date}")
@@ -497,12 +531,20 @@ class AWSCostProvider(CloudCostProvider):
 
         # If we have complete cached data for all dates, return it
         if not missing_dates:
-            logger.info(f"🔵 AWS: Using fully cached data for {start_date.date()} to {end_date.date()}")
+            logger.info(
+                f"🔵 AWS: Using fully cached data for {start_date.date()} to {end_date.date()}"
+            )
 
             # Resolve account names for uncached accounts only (fast operation)
-            unique_account_ids = {point.account_id for point in all_cached_data if point.account_id and point.account_id not in self.account_names_cache}
+            unique_account_ids = {
+                point.account_id
+                for point in all_cached_data
+                if point.account_id and point.account_id not in self.account_names_cache
+            }
             if unique_account_ids:
-                logger.info(f"🔵 AWS: Resolving {len(unique_account_ids)} uncached account names (cached data)")
+                logger.info(
+                    f"🔵 AWS: Resolving {len(unique_account_ids)} uncached account names (cached data)"
+                )
                 await self._resolve_selective_account_names(unique_account_ids)
 
             return CostSummary(
@@ -513,11 +555,13 @@ class AWSCostProvider(CloudCostProvider):
                 total_cost=sum(point.amount for point in all_cached_data),
                 currency="USD",
                 data_points=all_cached_data,
-                last_updated=datetime.now()
+                last_updated=datetime.now(),
             )
 
         # If we're missing some dates, we need to fetch fresh data
-        logger.info(f"🔵 AWS: Cache PARTIAL - missing {len(missing_dates)} dates, fetching fresh data")
+        logger.info(
+            f"🔵 AWS: Cache PARTIAL - missing {len(missing_dates)} dates, fetching fresh data"
+        )
 
         try:
             # Check if we need chunking to avoid 5000 record limit
@@ -525,7 +569,9 @@ class AWSCostProvider(CloudCostProvider):
                 start_date, end_date, granularity, group_dimensions, filter_by
             )
 
-            logger.info(f"🔵 AWS: Parsed {len(cost_summary.data_points)} data points, total cost: ${cost_summary.total_cost}")
+            logger.info(
+                f"🔵 AWS: Parsed {len(cost_summary.data_points)} data points, total cost: ${cost_summary.total_cost}"
+            )
 
             # Save daily cache - group data points by date and save separately
             daily_data = {}
@@ -537,7 +583,13 @@ class AWSCostProvider(CloudCostProvider):
 
             # Save each day's data to its own cache file
             for day_date, day_data_points in daily_data.items():
-                self._save_daily_cache(day_date, granularity_str, self.default_metrics, group_dimensions, day_data_points)
+                self._save_daily_cache(
+                    day_date,
+                    granularity_str,
+                    self.default_metrics,
+                    group_dimensions,
+                    day_data_points,
+                )
 
             logger.info(f"🔵 AWS: Saved daily cache for {len(daily_data)} dates")
             return cost_summary
@@ -548,7 +600,7 @@ class AWSCostProvider(CloudCostProvider):
             logger.error(f"AWS cost data retrieval failed: {e}")
             raise APIError(f"AWS cost data retrieval failed: {e}", provider=self.provider_name)
 
-    async def _make_cost_explorer_request(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _make_cost_explorer_request(self, params: dict[str, Any]) -> dict[str, Any]:
         """Make a request to the Cost Explorer API with retry logic."""
         max_retries = 3
         retry_delay = 1
@@ -558,25 +610,28 @@ class AWSCostProvider(CloudCostProvider):
                 return self.cost_explorer_client.get_cost_and_usage(**params)
 
             except ClientError as e:
-                error_code = e.response['Error']['Code']
+                error_code = e.response["Error"]["Code"]
 
-                if error_code == 'Throttling' and attempt < max_retries - 1:
+                if error_code == "Throttling" and attempt < max_retries - 1:
                     # Implement exponential backoff for throttling
                     import asyncio
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
+
+                    await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                 else:
                     raise e
 
-        raise APIError("Max retries exceeded for AWS Cost Explorer API", provider=self.provider_name)
+        raise APIError(
+            "Max retries exceeded for AWS Cost Explorer API", provider=self.provider_name
+        )
 
     async def _get_cost_data_with_chunking(
         self,
         start_date: datetime,
         end_date: datetime,
         granularity: TimeGranularity,
-        group_dimensions: List[str],
-        filter_by: Optional[Dict[str, Any]] = None
+        group_dimensions: list[str],
+        filter_by: dict[str, Any] | None = None,
     ) -> CostSummary:
         """
         Get cost data with intelligent chunking to avoid AWS Cost Explorer's 5000 record limit.
@@ -585,7 +640,9 @@ class AWSCostProvider(CloudCostProvider):
         SERVICE + LINKED_ACCOUNT. This method uses date-based chunking to ensure we get
         complete data.
         """
-        logger.info(f"🔵 AWS: Starting chunked data retrieval for {start_date.date()} to {end_date.date()}")
+        logger.info(
+            f"🔵 AWS: Starting chunked data retrieval for {start_date.date()} to {end_date.date()}"
+        )
 
         # Calculate total date range
         total_days = (end_date.date() - start_date.date()).days + 1
@@ -598,7 +655,7 @@ class AWSCostProvider(CloudCostProvider):
         if group_dimensions and len(group_dimensions) >= 2:
             # Very conservative chunking for dual grouping - 1 day at a time
             chunk_days = 1
-            logger.info(f"🔵 AWS: Using 1-day chunks for dual grouping to avoid 5000 record limit")
+            logger.info("🔵 AWS: Using 1-day chunks for dual grouping to avoid 5000 record limit")
         else:
             # More aggressive chunking for single grouping
             chunk_days = min(7, total_days)
@@ -611,32 +668,33 @@ class AWSCostProvider(CloudCostProvider):
         while current_start.date() <= end_date.date():
             chunk_count += 1
             # Calculate chunk end date
-            chunk_end = min(
-                current_start + timedelta(days=chunk_days - 1),
-                end_date
-            )
+            chunk_end = min(current_start + timedelta(days=chunk_days - 1), end_date)
 
-            logger.info(f"🔵 AWS: Processing chunk {chunk_count}: {current_start.date()} to {chunk_end.date()}")
+            logger.info(
+                f"🔵 AWS: Processing chunk {chunk_count}: {current_start.date()} to {chunk_end.date()}"
+            )
 
             # Prepare request parameters for this chunk
             chunk_params = {
-                'TimePeriod': {
-                    'Start': current_start.strftime('%Y-%m-%d'),
-                    'End': (chunk_end + timedelta(days=1)).strftime('%Y-%m-%d')  # AWS API requires end > start
+                "TimePeriod": {
+                    "Start": current_start.strftime("%Y-%m-%d"),
+                    "End": (chunk_end + timedelta(days=1)).strftime(
+                        "%Y-%m-%d"
+                    ),  # AWS API requires end > start
                 },
-                'Granularity': self.granularity_mapping.get(granularity, 'DAILY'),
-                'Metrics': self.default_metrics
+                "Granularity": self.granularity_mapping.get(granularity, "DAILY"),
+                "Metrics": self.default_metrics,
             }
 
             # Add group by dimensions
             if group_dimensions:
-                chunk_params['GroupBy'] = [
-                    {'Type': 'DIMENSION', 'Key': dim} for dim in group_dimensions
+                chunk_params["GroupBy"] = [
+                    {"Type": "DIMENSION", "Key": dim} for dim in group_dimensions
                 ]
 
             # Add filters if specified
             if filter_by:
-                chunk_params['Filter'] = self._build_filter(filter_by)
+                chunk_params["Filter"] = self._build_filter(filter_by)
 
             try:
                 # Make API request for this chunk
@@ -644,11 +702,13 @@ class AWSCostProvider(CloudCostProvider):
 
                 # Check if we hit the limit
                 result_count = 0
-                for result in response.get('ResultsByTime', []):
-                    result_count += len(result.get('Groups', []))
+                for result in response.get("ResultsByTime", []):
+                    result_count += len(result.get("Groups", []))
 
                 if result_count >= 4900:  # Close to the 5000 limit
-                    logger.warning(f"🔵 AWS: Chunk {chunk_count} has {result_count} records - approaching 5000 limit!")
+                    logger.warning(
+                        f"🔵 AWS: Chunk {chunk_count} has {result_count} records - approaching 5000 limit!"
+                    )
 
                 # Parse response for this chunk
                 chunk_summary = await self._parse_cost_response(
@@ -656,17 +716,22 @@ class AWSCostProvider(CloudCostProvider):
                 )
 
                 all_data_points.extend(chunk_summary.data_points)
-                logger.info(f"🔵 AWS: Chunk {chunk_count} added {len(chunk_summary.data_points)} data points")
+                logger.info(
+                    f"🔵 AWS: Chunk {chunk_count} added {len(chunk_summary.data_points)} data points"
+                )
 
                 # Move to next chunk
                 current_start = chunk_end + timedelta(days=1)
 
                 # Small delay to be API-friendly
                 import asyncio
+
                 await asyncio.sleep(0.1)
 
             except Exception as e:
-                logger.error(f"🔵 AWS: Failed to fetch chunk {chunk_count} ({current_start.date()} to {chunk_end.date()}): {e}")
+                logger.error(
+                    f"🔵 AWS: Failed to fetch chunk {chunk_count} ({current_start.date()} to {chunk_end.date()}): {e}"
+                )
                 # Move to next chunk even if this one failed
                 current_start = chunk_end + timedelta(days=1)
                 continue
@@ -674,12 +739,20 @@ class AWSCostProvider(CloudCostProvider):
         # Calculate total cost
         total_cost = sum(point.amount for point in all_data_points)
 
-        logger.info(f"🔵 AWS: Chunked retrieval completed - {len(all_data_points)} total data points, ${total_cost}")
+        logger.info(
+            f"🔵 AWS: Chunked retrieval completed - {len(all_data_points)} total data points, ${total_cost}"
+        )
 
         # Resolve account names for uncached accounts only (fast operation)
-        unique_account_ids = {point.account_id for point in all_data_points if point.account_id and point.account_id not in self.account_names_cache}
+        unique_account_ids = {
+            point.account_id
+            for point in all_data_points
+            if point.account_id and point.account_id not in self.account_names_cache
+        }
         if unique_account_ids:
-            logger.info(f"🔵 AWS: Resolving {len(unique_account_ids)} uncached account names (fresh data)")
+            logger.info(
+                f"🔵 AWS: Resolving {len(unique_account_ids)} uncached account names (fresh data)"
+            )
             await self._resolve_selective_account_names(unique_account_ids)
 
         enriched_data_points = all_data_points
@@ -689,19 +762,19 @@ class AWSCostProvider(CloudCostProvider):
             start_date=start_date.date(),
             end_date=end_date.date(),
             total_cost=total_cost,
-            currency='USD',
+            currency="USD",
             data_points=enriched_data_points,
             granularity=granularity,
-            last_updated=datetime.now()
+            last_updated=datetime.now(),
         )
 
     async def _parse_cost_response(
         self,
-        response: Dict[str, Any],
+        response: dict[str, Any],
         start_date: datetime,
         end_date: datetime,
         granularity: TimeGranularity,
-        group_dimensions: List[str] = None
+        group_dimensions: list[str] = None,
     ) -> CostSummary:
         """Parse AWS Cost Explorer response into our standard format."""
         data_points = []
@@ -711,15 +784,15 @@ class AWSCostProvider(CloudCostProvider):
         # Key: (date, service_name, account_id), Value: total_amount
         aggregated_costs = {}
 
-        for result in response.get('ResultsByTime', []):
-            period_start = datetime.strptime(result['TimePeriod']['Start'], '%Y-%m-%d')
+        for result in response.get("ResultsByTime", []):
+            period_start = datetime.strptime(result["TimePeriod"]["Start"], "%Y-%m-%d")
 
             # Skip total costs to avoid duplication - Groups data contains the same information
             # with more granular breakdown. Processing both Total and Groups would double-count costs.
 
             # Handle grouped costs
-            for group in result.get('Groups', []):
-                keys = group.get('Keys', [])
+            for group in result.get("Groups", []):
+                keys = group.get("Keys", [])
 
                 # Extract service name and account ID from the group keys based on grouping dimensions
                 # We need to dynamically determine what each key represents
@@ -733,14 +806,16 @@ class AWSCostProvider(CloudCostProvider):
                 # ["SERVICE", "LINKED_ACCOUNT"] -> keys = [service_name, account_id]
                 # ["LINKED_ACCOUNT", "SERVICE"] -> keys = [account_id, service_name]
 
-                logger.debug(f"🔵 AWS: Processing group with keys: {keys}, dimensions: {group_dimensions}")
+                logger.debug(
+                    f"🔵 AWS: Processing group with keys: {keys}, dimensions: {group_dimensions}"
+                )
 
                 if len(keys) == 1:
                     # Single dimension grouping
-                    if group_dimensions and 'LINKED_ACCOUNT' in group_dimensions:
+                    if group_dimensions and "LINKED_ACCOUNT" in group_dimensions:
                         account_id = keys[0]
                         logger.debug(f"🔵 AWS: Single dimension LINKED_ACCOUNT: {account_id}")
-                    elif group_dimensions and 'SERVICE' in group_dimensions:
+                    elif group_dimensions and "SERVICE" in group_dimensions:
                         service_name = keys[0]
                         logger.debug(f"🔵 AWS: Single dimension SERVICE: {service_name}")
                     else:
@@ -750,9 +825,15 @@ class AWSCostProvider(CloudCostProvider):
                 elif len(keys) == 2:
                     # Two dimension grouping - check the order
                     if group_dimensions and len(group_dimensions) >= 2:
-                        if group_dimensions[0] == 'SERVICE' and group_dimensions[1] == 'LINKED_ACCOUNT':
+                        if (
+                            group_dimensions[0] == "SERVICE"
+                            and group_dimensions[1] == "LINKED_ACCOUNT"
+                        ):
                             service_name, account_id = keys[0], keys[1]
-                        elif group_dimensions[0] == 'LINKED_ACCOUNT' and group_dimensions[1] == 'SERVICE':
+                        elif (
+                            group_dimensions[0] == "LINKED_ACCOUNT"
+                            and group_dimensions[1] == "SERVICE"
+                        ):
                             account_id, service_name = keys[0], keys[1]
                         else:
                             # Default fallback
@@ -760,34 +841,35 @@ class AWSCostProvider(CloudCostProvider):
                     else:
                         # Default fallback for two keys
                         service_name, account_id = keys[0], keys[1]
-                    logger.debug(f"🔵 AWS: Dual dimension - service: {service_name}, account: {account_id}")
+                    logger.debug(
+                        f"🔵 AWS: Dual dimension - service: {service_name}, account: {account_id}"
+                    )
 
                 # Set defaults for None values
                 if service_name is None:
-                    service_name = 'Unknown'
-
+                    service_name = "Unknown"
 
                 # Process only UNBLENDED_COST to match AWS Console behavior
                 # Prefer UNBLENDED_COST over BLENDED_COST for accuracy
-                metrics_data = group.get('Metrics', {})
+                metrics_data = group.get("Metrics", {})
                 amount = 0.0
-                currency = 'USD'
+                currency = "USD"
 
                 # Look for UNBLENDED_COST first, then fallback to any other metric
-                if 'UnblendedCost' in metrics_data:
-                    metric_data = metrics_data['UnblendedCost']
-                    amount = float(metric_data.get('Amount', 0))
-                    currency = metric_data.get('Unit', 'USD')
-                elif 'UNBLENDED_COST' in metrics_data:
-                    metric_data = metrics_data['UNBLENDED_COST']
-                    amount = float(metric_data.get('Amount', 0))
-                    currency = metric_data.get('Unit', 'USD')
+                if "UnblendedCost" in metrics_data:
+                    metric_data = metrics_data["UnblendedCost"]
+                    amount = float(metric_data.get("Amount", 0))
+                    currency = metric_data.get("Unit", "USD")
+                elif "UNBLENDED_COST" in metrics_data:
+                    metric_data = metrics_data["UNBLENDED_COST"]
+                    amount = float(metric_data.get("Amount", 0))
+                    currency = metric_data.get("Unit", "USD")
                 elif metrics_data:
                     # Fallback to first available metric
                     first_metric = list(metrics_data.items())[0]
                     metric_data = first_metric[1]
-                    amount = float(metric_data.get('Amount', 0))
-                    currency = metric_data.get('Unit', 'USD')
+                    amount = float(metric_data.get("Amount", 0))
+                    currency = metric_data.get("Unit", "USD")
 
                 # Aggregate costs by (date, service, account) to prevent duplication
                 if amount > 0:  # Only process non-zero amounts
@@ -795,18 +877,19 @@ class AWSCostProvider(CloudCostProvider):
                     agg_key = (period_start.date(), normalized_service, account_id)
 
                     if agg_key not in aggregated_costs:
-                        aggregated_costs[agg_key] = {
-                            'amount': 0.0,
-                            'currency': currency
-                        }
-                    aggregated_costs[agg_key]['amount'] += amount
+                        aggregated_costs[agg_key] = {"amount": 0.0, "currency": currency}
+                    aggregated_costs[agg_key]["amount"] += amount
 
         # Create data points from aggregated costs to eliminate duplicates
         for (date_val, service_name, account_id), cost_data in aggregated_costs.items():
-            amount = cost_data['amount']
+            amount = cost_data["amount"]
             if amount > 0:  # Only include non-zero costs
                 # Get account name from cache and format as "Name (Account ID)"
-                raw_account_name = self.account_names_cache.get(account_id, account_id) if account_id else account_id
+                raw_account_name = (
+                    self.account_names_cache.get(account_id, account_id)
+                    if account_id
+                    else account_id
+                )
                 if raw_account_name and raw_account_name != account_id:
                     # We have a proper account name, format as "Name (Account ID)"
                     account_name = f"{raw_account_name} ({account_id})"
@@ -814,30 +897,34 @@ class AWSCostProvider(CloudCostProvider):
                     # Fallback to generic format
                     account_name = f"AWS Account ({account_id})"
 
-                data_points.append(CostDataPoint(
-                    date=date_val,
-                    amount=amount,
-                    currency=cost_data['currency'],
-                    service_name=service_name,
-                    account_id=account_id,
-                    account_name=account_name,
-                    region=None
-                ))
+                data_points.append(
+                    CostDataPoint(
+                        date=date_val,
+                        amount=amount,
+                        currency=cost_data["currency"],
+                        service_name=service_name,
+                        account_id=account_id,
+                        account_name=account_name,
+                        region=None,
+                    )
+                )
                 total_cost += amount
 
         # Skip account name enrichment for now to avoid the group_by error
         # Return data immediately with account IDs only
-        logger.debug(f"🔵 AWS: Returning cost data with {len(data_points)} points (account IDs only)")
+        logger.debug(
+            f"🔵 AWS: Returning cost data with {len(data_points)} points (account IDs only)"
+        )
 
         return CostSummary(
             provider=self.provider_name,
             start_date=start_date.date(),
             end_date=end_date.date(),
             total_cost=total_cost,
-            currency='USD',
+            currency="USD",
             data_points=data_points,
             granularity=granularity,
-            last_updated=datetime.now()
+            last_updated=datetime.now(),
         )
 
     async def get_current_month_cost(self) -> float:
@@ -850,15 +937,11 @@ class AWSCostProvider(CloudCostProvider):
         return cost_summary.total_cost
 
     async def get_daily_costs(
-        self,
-        start_date: Union[datetime, date],
-        end_date: Union[datetime, date]
-    ) -> List[CostDataPoint]:
+        self, start_date: datetime | date, end_date: datetime | date
+    ) -> list[CostDataPoint]:
         """Get daily cost breakdown for the specified period."""
         cost_summary = await self.get_cost_data(
-            start_date,
-            end_date,
-            granularity=TimeGranularity.DAILY
+            start_date, end_date, granularity=TimeGranularity.DAILY
         )
 
         # Group by date and sum costs
@@ -870,27 +953,15 @@ class AWSCostProvider(CloudCostProvider):
             daily_costs[date_key] += point.amount
 
         return [
-            CostDataPoint(
-                date=date_key,
-                amount=amount,
-                currency='USD',
-                service_name=None
-            )
+            CostDataPoint(date=date_key, amount=amount, currency="USD", service_name=None)
             for date_key, amount in daily_costs.items()
         ]
 
     async def get_service_costs(
-        self,
-        start_date: Union[datetime, date],
-        end_date: Union[datetime, date],
-        top_n: int = 10
-    ) -> Dict[str, float]:
+        self, start_date: datetime | date, end_date: datetime | date, top_n: int = 10
+    ) -> dict[str, float]:
         """Get cost breakdown by service for the specified period."""
-        cost_summary = await self.get_cost_data(
-            start_date,
-            end_date,
-            group_by=['SERVICE']
-        )
+        cost_summary = await self.get_cost_data(start_date, end_date, group_by=["SERVICE"])
 
         # Aggregate costs by service
         service_costs = {}
@@ -900,81 +971,97 @@ class AWSCostProvider(CloudCostProvider):
                 service_costs[service_name] = service_costs.get(service_name, 0.0) + point.amount
 
         # Sort by cost and return top N
-        sorted_services = sorted(
-            service_costs.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
+        sorted_services = sorted(service_costs.items(), key=lambda x: x[1], reverse=True)
 
         return dict(sorted_services[:top_n])
 
-    def get_supported_regions(self) -> List[str]:
+    def get_supported_regions(self) -> list[str]:
         """Get list of supported AWS regions."""
         return [
-            'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
-            'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1',
-            'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1', 'ap-northeast-2',
-            'ap-south-1', 'ca-central-1', 'sa-east-1'
+            "us-east-1",
+            "us-east-2",
+            "us-west-1",
+            "us-west-2",
+            "eu-west-1",
+            "eu-west-2",
+            "eu-west-3",
+            "eu-central-1",
+            "ap-southeast-1",
+            "ap-southeast-2",
+            "ap-northeast-1",
+            "ap-northeast-2",
+            "ap-south-1",
+            "ca-central-1",
+            "sa-east-1",
         ]
 
-    def get_supported_services(self) -> List[str]:
+    def get_supported_services(self) -> list[str]:
         """Get list of supported AWS services for cost monitoring."""
         return [
-            'Amazon EC2-Instance', 'Amazon S3', 'Amazon RDS', 'Amazon CloudFront',
-            'Amazon Lambda', 'Amazon EBS', 'Amazon VPC', 'Amazon Route 53',
-            'Amazon CloudWatch', 'Amazon DynamoDB', 'Amazon ElastiCache',
-            'Amazon Elasticsearch Service', 'Amazon EKS', 'Amazon ECS',
-            'Amazon SQS', 'Amazon SNS', 'Amazon API Gateway', 'AWS Data Transfer'
+            "Amazon EC2-Instance",
+            "Amazon S3",
+            "Amazon RDS",
+            "Amazon CloudFront",
+            "Amazon Lambda",
+            "Amazon EBS",
+            "Amazon VPC",
+            "Amazon Route 53",
+            "Amazon CloudWatch",
+            "Amazon DynamoDB",
+            "Amazon ElastiCache",
+            "Amazon Elasticsearch Service",
+            "Amazon EKS",
+            "Amazon ECS",
+            "Amazon SQS",
+            "Amazon SNS",
+            "Amazon API Gateway",
+            "AWS Data Transfer",
         ]
 
     def normalize_service_name(self, service_name: str) -> str:
         """Normalize AWS service names to a consistent format."""
         # AWS-specific service name normalization
         service_mapping = {
-            'Amazon Elastic Compute Cloud - Compute': 'EC2',
-            'Amazon EC2-Instance': 'EC2',
-            'Amazon Simple Storage Service': 'S3',
-            'Amazon Relational Database Service': 'RDS',
-            'Amazon CloudFront': 'CloudFront',
-            'AWS Lambda': 'Lambda',
-            'Amazon Elastic Block Store': 'EBS',
-            'Amazon Virtual Private Cloud': 'VPC'
+            "Amazon Elastic Compute Cloud - Compute": "EC2",
+            "Amazon EC2-Instance": "EC2",
+            "Amazon Simple Storage Service": "S3",
+            "Amazon Relational Database Service": "RDS",
+            "Amazon CloudFront": "CloudFront",
+            "AWS Lambda": "Lambda",
+            "Amazon Elastic Block Store": "EBS",
+            "Amazon Virtual Private Cloud": "VPC",
         }
 
         return service_mapping.get(service_name, service_name)
 
-    def _build_filter(self, filter_by: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_filter(self, filter_by: dict[str, Any]) -> dict[str, Any]:
         """Build AWS Cost Explorer filter from our generic filter format."""
         # Example filter building - can be expanded based on needs
         aws_filter = {}
 
-        if 'services' in filter_by:
-            aws_filter = {
-                'Dimensions': {
-                    'Key': 'SERVICE',
-                    'Values': filter_by['services']
-                }
-            }
+        if "services" in filter_by:
+            aws_filter = {"Dimensions": {"Key": "SERVICE", "Values": filter_by["services"]}}
 
-        if 'regions' in filter_by:
-            if 'And' not in aws_filter:
-                aws_filter = {'And': [aws_filter] if aws_filter else []}
+        if "regions" in filter_by:
+            if "And" not in aws_filter:
+                aws_filter = {"And": [aws_filter] if aws_filter else []}
 
-            aws_filter['And'].append({
-                'Dimensions': {
-                    'Key': 'REGION',
-                    'Values': filter_by['regions']
-                }
-            })
+            aws_filter["And"].append(
+                {"Dimensions": {"Key": "REGION", "Values": filter_by["regions"]}}
+            )
 
         return aws_filter
 
-    async def _enrich_with_account_names(self, data_points: List[CostDataPoint]) -> List[CostDataPoint]:
+    async def _enrich_with_account_names(
+        self, data_points: list[CostDataPoint]
+    ) -> list[CostDataPoint]:
         """Enrich data points with AWS account names from Organizations API with rate limiting."""
         # Get unique account IDs to minimize API calls
         unique_account_ids = {point.account_id for point in data_points if point.account_id}
 
-        logger.info(f"🔵 AWS: Resolving account names for {len(unique_account_ids)} unique accounts with rate limiting")
+        logger.info(
+            f"🔵 AWS: Resolving account names for {len(unique_account_ids)} unique accounts with rate limiting"
+        )
 
         # Resolve account names with throttling between requests
         for i, account_id in enumerate(unique_account_ids):
@@ -998,7 +1085,7 @@ class AWSCostProvider(CloudCostProvider):
 
                 # Add account name to tags
                 tags = point.tags or {}
-                tags['account_name'] = display_name
+                tags["account_name"] = display_name
 
                 # Create new data point with enriched tags
                 enriched_point = CostDataPoint(
@@ -1009,7 +1096,7 @@ class AWSCostProvider(CloudCostProvider):
                     account_id=point.account_id,
                     resource_id=point.resource_id,
                     region=point.region,
-                    tags=tags
+                    tags=tags,
                 )
                 enriched_points.append(enriched_point)
             else:
@@ -1034,11 +1121,13 @@ class AWSCostProvider(CloudCostProvider):
                 # Cache the failure to avoid repeated attempts
                 self.account_names_cache[account_id] = account_id
 
-        logger.info(f"🔵 AWS: Selective account name resolution completed for {len(account_ids)} accounts")
+        logger.info(
+            f"🔵 AWS: Selective account name resolution completed for {len(account_ids)} accounts"
+        )
         # Save updated cache to persistent storage
         self._save_account_names_cache()
 
-    async def resolve_account_names_for_ids(self, account_ids: List[str]) -> Dict[str, str]:
+    async def resolve_account_names_for_ids(self, account_ids: list[str]) -> dict[str, str]:
         """Resolve account names for specific account IDs and return a mapping.
 
         Args:
@@ -1054,7 +1143,9 @@ class AWSCostProvider(CloudCostProvider):
         uncached_ids = {aid for aid in account_ids if aid and aid not in self.account_names_cache}
 
         if uncached_ids:
-            logger.info(f"🔵 AWS: Resolving names for {len(uncached_ids)} uncached accounts (on-demand)")
+            logger.info(
+                f"🔵 AWS: Resolving names for {len(uncached_ids)} uncached accounts (on-demand)"
+            )
             await self._resolve_selective_account_names(uncached_ids)
             # Save updated cache to persistent storage
             self._save_account_names_cache()
@@ -1062,16 +1153,17 @@ class AWSCostProvider(CloudCostProvider):
         # Return mapping for all requested IDs
         result = {}
         for account_id in account_ids:
-            if account_id in self.account_names_cache:
-                result[account_id] = self.account_names_cache[account_id]
-            else:
-                result[account_id] = account_id  # Fallback to account ID
+            result[account_id] = self.account_names_cache.get(account_id, account_id)
 
         return result
 
-    async def resolve_account_names_background(self, data_points: List[CostDataPoint]) -> None:
+    async def resolve_account_names_background(self, data_points: list[CostDataPoint]) -> None:
         """Background task to resolve account names without blocking main data fetch."""
-        unique_account_ids = {point.account_id for point in data_points if point.account_id and point.account_id not in self.account_names_cache}
+        unique_account_ids = {
+            point.account_id
+            for point in data_points
+            if point.account_id and point.account_id not in self.account_names_cache
+        }
 
         if not unique_account_ids:
             return
@@ -1084,7 +1176,9 @@ class AWSCostProvider(CloudCostProvider):
                 # Generous delay to avoid rate limiting
                 await asyncio.sleep(0.5)
             except Exception as e:
-                logger.debug(f"🔵 AWS: Background account name resolution failed for {account_id}: {e}")
+                logger.debug(
+                    f"🔵 AWS: Background account name resolution failed for {account_id}: {e}"
+                )
                 continue
 
     async def get_account_name(self, account_id: str) -> str:
@@ -1119,12 +1213,14 @@ class AWSCostProvider(CloudCostProvider):
                 try:
                     # Try to get the account details
                     response = self.organizations_client.describe_account(AccountId=account_id)
-                    account_name = response['Account']['Name']
+                    account_name = response["Account"]["Name"]
 
                     # Check if this is the management account (cache the org info to avoid repeated calls)
-                    if not hasattr(self, '_management_account_id'):
+                    if not hasattr(self, "_management_account_id"):
                         org_response = self.organizations_client.describe_organization()
-                        self._management_account_id = org_response['Organization']['MasterAccountId']
+                        self._management_account_id = org_response["Organization"][
+                            "MasterAccountId"
+                        ]
 
                     if account_id == self._management_account_id:
                         account_name = f"{account_name} (Management Account)"
@@ -1132,12 +1228,14 @@ class AWSCostProvider(CloudCostProvider):
                     return account_name
 
                 except ClientError as e:
-                    error_code = e.response.get('Error', {}).get('Code', '')
+                    error_code = e.response.get("Error", {}).get("Code", "")
 
-                    if error_code == 'TooManyRequestsException' and attempt < max_retries - 1:
+                    if error_code == "TooManyRequestsException" and attempt < max_retries - 1:
                         # Exponential backoff with jitter
-                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                        logger.warning(f"🔵 AWS Organizations rate limited, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})")
+                        delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                        logger.warning(
+                            f"🔵 AWS Organizations rate limited, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})"
+                        )
                         await asyncio.sleep(delay)
                         continue
                     else:
@@ -1145,18 +1243,22 @@ class AWSCostProvider(CloudCostProvider):
                         raise e
 
         except ClientError as e:
-            error_code = e.response.get('Error', {}).get('Code', '')
+            error_code = e.response.get("Error", {}).get("Code", "")
 
-            if error_code in ['AccountNotFoundException']:
+            if error_code in ["AccountNotFoundException"]:
                 # Account not in organization - this is expected for accounts outside the org
                 logger.debug(f"Account {account_id} not found in organization")
                 return account_id
-            elif error_code in ['AccessDenied', 'AccessDeniedException']:
+            elif error_code in ["AccessDenied", "AccessDeniedException"]:
                 # Missing permissions - log warning and return formatted account ID instead of failing
-                logger.warning(f"⚠️ AWS Organizations access denied for account {account_id}. Using account ID instead of name. Required permissions: organizations:DescribeAccount, organizations:DescribeOrganization")
+                logger.warning(
+                    f"⚠️ AWS Organizations access denied for account {account_id}. Using account ID instead of name. Required permissions: organizations:DescribeAccount, organizations:DescribeOrganization"
+                )
                 return account_id
             else:
-                logger.error(f"Unexpected AWS Organizations API error for account {account_id}: {e}")
+                logger.error(
+                    f"Unexpected AWS Organizations API error for account {account_id}: {e}"
+                )
                 raise APIError(f"AWS Organizations API error: {e}", provider=self.provider_name)
         except Exception as e:
             logger.error(f"Error resolving account name for {account_id}: {e}")
@@ -1175,23 +1277,23 @@ class AWSCostProvider(CloudCostProvider):
 
     def _handle_client_error(self, error: ClientError):
         """Handle AWS client errors appropriately."""
-        error_code = error.response['Error']['Code']
-        error_message = error.response['Error']['Message']
+        error_code = error.response["Error"]["Code"]
+        error_message = error.response["Error"]["Message"]
 
-        if error_code == 'Throttling':
+        if error_code == "Throttling":
             raise RateLimitError(
                 f"AWS Cost Explorer API rate limit exceeded: {error_message}",
-                provider=self.provider_name
+                provider=self.provider_name,
             )
-        elif error_code == 'UnauthorizedOperation':
+        elif error_code == "UnauthorizedOperation":
             raise AuthenticationError(f"AWS unauthorized: {error_message}")
-        elif error_code == 'InvalidParameterValue':
+        elif error_code == "InvalidParameterValue":
             raise ConfigurationError(f"AWS invalid parameter: {error_message}")
         else:
             raise APIError(
                 f"AWS Cost Explorer API error ({error_code}): {error_message}",
-                status_code=error.response.get('ResponseMetadata', {}).get('HTTPStatusCode'),
-                provider=self.provider_name
+                status_code=error.response.get("ResponseMetadata", {}).get("HTTPStatusCode"),
+                provider=self.provider_name,
             )
 
 

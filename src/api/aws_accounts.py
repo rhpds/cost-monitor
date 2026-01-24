@@ -5,17 +5,16 @@ This module provides functions for managing AWS account ID to name mappings
 in the database, replacing the pickle-based caching approach.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
-import asyncio
 
 import asyncpg
 
 logger = logging.getLogger(__name__)
 
 
-async def get_aws_account_names(db_pool: asyncpg.Pool, account_ids: List[str]) -> Dict[str, str]:
+async def get_aws_account_names(db_pool: asyncpg.Pool, account_ids: list[str]) -> dict[str, str]:
     """
     Get AWS account names from database for given account IDs.
 
@@ -40,13 +39,16 @@ async def get_aws_account_names(db_pool: asyncpg.Pool, account_ids: List[str]) -
         # Return mapping, fallback to account_id for missing entries
         result = {aid: aid for aid in account_ids}  # Default fallback
         for row in rows:
-            result[row['account_id']] = row['account_name']
+            result[row["account_id"]] = row["account_name"]
 
         return result
 
 
-async def store_aws_account_names(db_pool: asyncpg.Pool, account_mapping: Dict[str, str],
-                                 management_account_id: Optional[str] = None) -> int:
+async def store_aws_account_names(
+    db_pool: asyncpg.Pool,
+    account_mapping: dict[str, str],
+    management_account_id: str | None = None,
+) -> int:
     """
     Store AWS account ID to name mappings in database.
 
@@ -65,7 +67,9 @@ async def store_aws_account_names(db_pool: asyncpg.Pool, account_mapping: Dict[s
         # Prepare data for bulk upsert
         records = []
         for account_id, account_name in account_mapping.items():
-            is_management = (account_id == management_account_id) if management_account_id else False
+            is_management = (
+                (account_id == management_account_id) if management_account_id else False
+            )
             records.append((account_id, account_name, is_management))
 
         # Use ON CONFLICT to update existing records
@@ -86,8 +90,9 @@ async def store_aws_account_names(db_pool: asyncpg.Pool, account_mapping: Dict[s
         return len(records)
 
 
-async def get_uncached_account_ids(db_pool: asyncpg.Pool, account_ids: Set[str],
-                                   max_age_hours: int = 24) -> Set[str]:
+async def get_uncached_account_ids(
+    db_pool: asyncpg.Pool, account_ids: set[str], max_age_hours: int = 24
+) -> set[str]:
     """
     Get list of account IDs that are not cached or are stale.
 
@@ -112,19 +117,22 @@ async def get_uncached_account_ids(db_pool: asyncpg.Pool, account_ids: Set[str],
             AND last_updated > $2
         """
         rows = await conn.fetch(query, list(account_ids), cutoff_time)
-        cached_ids = {row['account_id'] for row in rows}
+        cached_ids = {row["account_id"] for row in rows}
 
         # Return the difference - IDs that are not cached or stale
         uncached_ids = account_ids - cached_ids
 
         if uncached_ids:
-            logger.info(f"🔵 AWS: Found {len(uncached_ids)} uncached/stale account IDs (out of {len(account_ids)} total)")
+            logger.info(
+                f"🔵 AWS: Found {len(uncached_ids)} uncached/stale account IDs (out of {len(account_ids)} total)"
+            )
 
         return uncached_ids
 
 
-async def resolve_aws_accounts_background(db_pool: asyncpg.Pool, auth_manager,
-                                        account_ids: Set[str]) -> bool:
+async def resolve_aws_accounts_background(
+    db_pool: asyncpg.Pool, auth_manager, account_ids: set[str]
+) -> bool:
     """
     Background task to resolve AWS account names using Organizations API.
 
@@ -141,8 +149,8 @@ async def resolve_aws_accounts_background(db_pool: asyncpg.Pool, auth_manager,
 
     try:
         # Get AWS provider for account resolution
-        aws_config = auth_manager.config.get('clouds', {}).get('aws', {})
-        if not aws_config.get('enabled', False):
+        aws_config = auth_manager.config.get("clouds", {}).get("aws", {})
+        if not aws_config.get("enabled", False):
             logger.info("🔵 AWS: AWS provider not enabled, skipping background account resolution")
             return False
 
@@ -166,14 +174,16 @@ async def resolve_aws_accounts_background(db_pool: asyncpg.Pool, auth_manager,
         if aws_provider.organizations_client:
             try:
                 org_response = aws_provider.organizations_client.describe_organization()
-                management_account_id = org_response['Organization']['MasterAccountId']
+                management_account_id = org_response["Organization"]["MasterAccountId"]
             except Exception as e:
                 logger.debug(f"🔵 AWS: Could not get management account ID: {e}")
 
         # Resolve each account with rate limiting
         for i, account_id in enumerate(account_ids):
             try:
-                account_name = await aws_provider._resolve_account_name_from_organizations(account_id)
+                account_name = await aws_provider._resolve_account_name_from_organizations(
+                    account_id
+                )
                 account_mapping[account_id] = account_name
 
                 # Rate limiting: 100ms between requests
@@ -186,9 +196,13 @@ async def resolve_aws_accounts_background(db_pool: asyncpg.Pool, auth_manager,
                 account_mapping[account_id] = account_id
 
         # Store resolved names in database
-        stored_count = await store_aws_account_names(db_pool, account_mapping, management_account_id)
+        stored_count = await store_aws_account_names(
+            db_pool, account_mapping, management_account_id
+        )
 
-        logger.info(f"🔵 AWS: Background account resolution completed. Stored {stored_count} account names")
+        logger.info(
+            f"🔵 AWS: Background account resolution completed. Stored {stored_count} account names"
+        )
         return True
 
     except Exception as e:
@@ -211,15 +225,14 @@ async def cleanup_old_aws_accounts(db_pool: asyncpg.Pool, max_age_days: int = 90
 
     async with db_pool.acquire() as conn:
         # Delete old records
-        result = await conn.execute(
-            "DELETE FROM aws_accounts WHERE last_updated < $1",
-            cutoff_time
-        )
+        result = await conn.execute("DELETE FROM aws_accounts WHERE last_updated < $1", cutoff_time)
 
         # Parse result to get affected rows
         affected_rows = int(result.split()[-1]) if result.startswith("DELETE") else 0
 
         if affected_rows > 0:
-            logger.info(f"🔵 AWS: Cleaned up {affected_rows} old account records (older than {max_age_days} days)")
+            logger.info(
+                f"🔵 AWS: Cleaned up {affected_rows} old account records (older than {max_age_days} days)"
+            )
 
         return affected_rows
