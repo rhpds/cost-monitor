@@ -140,6 +140,104 @@ class CloudCostCheckPlugin:
 class DailyCostCheckPlugin(CloudCostCheckPlugin):
     """Check plugin for daily cost monitoring."""
 
+    async def _collect_provider_costs(self, authenticated_providers, check_date):
+        """Collect cost data from authenticated providers."""
+        total_cost = 0.0
+        provider_costs = {}
+        long_output = []
+
+        for provider_name, provider_instance in authenticated_providers.items():
+            try:
+                cost_summary = await provider_instance.get_cost_data(check_date, check_date)
+                provider_cost = cost_summary.total_cost
+                total_cost += provider_cost
+                provider_costs[provider_name] = provider_cost
+
+                # Determine status for this provider
+                warn_threshold, crit_threshold = self.get_thresholds(provider_name)
+                status = "OK"
+                if crit_threshold and provider_cost >= crit_threshold:
+                    status = "CRITICAL"
+                elif warn_threshold and provider_cost >= warn_threshold:
+                    status = "WARNING"
+
+                long_output.append(f"{provider_name.upper()}: ${provider_cost:.2f} [{status}]")
+
+            except Exception as e:
+                logger.error(f"Failed to get cost data for {provider_name}: {e}")
+                long_output.append(f"{provider_name.upper()}: ERROR - {str(e)}")
+
+        return total_cost, provider_costs, long_output
+
+    def _generate_performance_data(
+        self, provider_costs, total_cost, warning_threshold, critical_threshold
+    ):
+        """Generate performance data for Icinga."""
+        performance_data = {}
+
+        # Add per-provider performance data
+        for provider_name, provider_cost in provider_costs.items():
+            warn_threshold, crit_threshold = self.get_thresholds(provider_name)
+
+            # Override with command-line thresholds if provided
+            if warning_threshold is not None:
+                warn_threshold = warning_threshold
+            if critical_threshold is not None:
+                crit_threshold = critical_threshold
+
+            performance_data[f"{provider_name}_cost"] = {
+                "value": round(provider_cost, 2),
+                "unit": "USD",
+                "warning": warn_threshold,
+                "critical": crit_threshold,
+                "min": 0,
+            }
+
+        # Add total cost performance data
+        global_warn, global_crit = self.get_thresholds()
+        if warning_threshold is not None:
+            global_warn = warning_threshold
+        if critical_threshold is not None:
+            global_crit = critical_threshold
+
+        performance_data["total_cost"] = {
+            "value": round(total_cost, 2),
+            "unit": "USD",
+            "warning": global_warn,
+            "critical": global_crit,
+            "min": 0,
+        }
+
+        return performance_data
+
+    def _determine_status(self, total_cost, warning_threshold, critical_threshold):
+        """Determine overall check status."""
+        global_warn, global_crit = self.get_thresholds()
+        if warning_threshold is not None:
+            global_warn = warning_threshold
+        if critical_threshold is not None:
+            global_crit = critical_threshold
+
+        exit_code = IcingaExitCode.OK
+        status_text = "OK"
+
+        if global_crit and total_cost >= global_crit:
+            exit_code = IcingaExitCode.CRITICAL
+            status_text = "CRITICAL"
+        elif global_warn and total_cost >= global_warn:
+            exit_code = IcingaExitCode.WARNING
+            status_text = "WARNING"
+
+        return exit_code, status_text
+
+    def _format_check_message(self, status_text, provider, total_cost, provider_costs):
+        """Format the check result message."""
+        if provider:
+            return f"{status_text} - {provider.upper()} daily cost: ${total_cost:.2f}"
+
+        provider_breakdown = ", ".join([f"{p}: ${c:.2f}" for p, c in provider_costs.items()])
+        return f"{status_text} - Total daily cost: ${total_cost:.2f} ({provider_breakdown})"
+
     async def check(
         self,
         provider: str | None = None,
@@ -163,10 +261,8 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
             check_date = date.today()
 
         try:
-            # Determine which providers to check
+            # Determine and authenticate providers
             providers_to_check = [provider] if provider else self.config.enabled_providers
-
-            # Authenticate providers
             authenticated_providers = await self.authenticate_providers(providers_to_check)
 
             if not authenticated_providers:
@@ -174,87 +270,21 @@ class DailyCostCheckPlugin(CloudCostCheckPlugin):
                     IcingaExitCode.UNKNOWN, "UNKNOWN - No authenticated providers available"
                 )
 
-            # Get cost data
-            total_cost = 0.0
-            provider_costs = {}
-            performance_data = {}
-            long_output = []
+            # Collect cost data
+            total_cost, provider_costs, long_output = await self._collect_provider_costs(
+                authenticated_providers, check_date
+            )
 
-            for provider_name, provider_instance in authenticated_providers.items():
-                try:
-                    cost_summary = await provider_instance.get_cost_data(check_date, check_date)
+            # Generate performance data and determine status
+            performance_data = self._generate_performance_data(
+                provider_costs, total_cost, warning_threshold, critical_threshold
+            )
+            exit_code, status_text = self._determine_status(
+                total_cost, warning_threshold, critical_threshold
+            )
 
-                    provider_cost = cost_summary.total_cost
-                    total_cost += provider_cost
-                    provider_costs[provider_name] = provider_cost
-
-                    # Get provider-specific thresholds
-                    warn_threshold, crit_threshold = self.get_thresholds(provider_name)
-
-                    # Override with command-line thresholds if provided
-                    if warning_threshold is not None:
-                        warn_threshold = warning_threshold
-                    if critical_threshold is not None:
-                        crit_threshold = critical_threshold
-
-                    # Add performance data
-                    performance_data[f"{provider_name}_cost"] = {
-                        "value": round(provider_cost, 2),
-                        "unit": "USD",
-                        "warning": warn_threshold,
-                        "critical": crit_threshold,
-                        "min": 0,
-                    }
-
-                    # Add detailed output
-                    status = "OK"
-                    if crit_threshold and provider_cost >= crit_threshold:
-                        status = "CRITICAL"
-                    elif warn_threshold and provider_cost >= warn_threshold:
-                        status = "WARNING"
-
-                    long_output.append(f"{provider_name.upper()}: ${provider_cost:.2f} [{status}]")
-
-                except Exception as e:
-                    logger.error(f"Failed to get cost data for {provider_name}: {e}")
-                    long_output.append(f"{provider_name.upper()}: ERROR - {str(e)}")
-
-            # Add total cost performance data
-            global_warn, global_crit = self.get_thresholds()
-            if warning_threshold is not None:
-                global_warn = warning_threshold
-            if critical_threshold is not None:
-                global_crit = critical_threshold
-
-            performance_data["total_cost"] = {
-                "value": round(total_cost, 2),
-                "unit": "USD",
-                "warning": global_warn,
-                "critical": global_crit,
-                "min": 0,
-            }
-
-            # Determine overall status
-            exit_code = IcingaExitCode.OK
-            status_text = "OK"
-
-            if global_crit and total_cost >= global_crit:
-                exit_code = IcingaExitCode.CRITICAL
-                status_text = "CRITICAL"
-            elif global_warn and total_cost >= global_warn:
-                exit_code = IcingaExitCode.WARNING
-                status_text = "WARNING"
-
-            # Format message
-            if provider:
-                message = f"{status_text} - {provider.upper()} daily cost: ${total_cost:.2f}"
-            else:
-                provider_breakdown = ", ".join(
-                    [f"{p}: ${c:.2f}" for p, c in provider_costs.items()]
-                )
-                message = (
-                    f"{status_text} - Total daily cost: ${total_cost:.2f} ({provider_breakdown})"
-                )
+            # Format final message
+            message = self._format_check_message(status_text, provider, total_cost, provider_costs)
 
             return IcingaCheckResult(exit_code, message, performance_data, long_output)
 

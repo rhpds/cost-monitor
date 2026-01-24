@@ -71,7 +71,7 @@ class AWSCostProvider(CloudCostProvider):
         self._init_cache()
 
         # Cache for account names to avoid repeated API calls
-        self.account_names_cache = {}
+        self.account_names_cache: dict[str, str] = {}
 
         # Load persistent account name cache (after cache directory is initialized)
         self._load_account_names_cache()
@@ -173,7 +173,7 @@ class AWSCostProvider(CloudCostProvider):
         self.cache_dir = os.path.join(os.path.expanduser(base_cache_dir), "aws")
         os.makedirs(self.cache_dir, exist_ok=True)
         # Cache files for 24 hours (Cost Explorer data updates 3-4 times daily)
-        self.cache_max_age_hours = 24
+        self.cache_max_age_hours: int = 24
         logger.debug(f"AWS cache initialized at: {self.cache_dir}")
 
     def _get_cache_key_for_date(
@@ -444,7 +444,9 @@ class AWSCostProvider(CloudCostProvider):
             end_date = datetime.now().date()
             start_date = end_date - timedelta(days=1)
 
-            self.cost_explorer_client.get_cost_and_usage(
+            if not self.cost_explorer_client:
+                raise ValueError("AWS Cost Explorer client not initialized")
+            self.cost_explorer_client.get_cost_and_usage(  # type: ignore[unreachable]
                 TimePeriod={
                     "Start": start_date.strftime("%Y-%m-%d"),
                     "End": end_date.strftime("%Y-%m-%d"),
@@ -466,6 +468,162 @@ class AWSCostProvider(CloudCostProvider):
             logger.error(f"AWS connection test error: {e}")
             return False
 
+    def _prepare_cost_request_params(
+        self,
+        start_date: datetime | date,
+        end_date: datetime | date,
+        granularity: TimeGranularity,
+        group_by: list[str] | None,
+        filter_by: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Prepare request parameters for Cost Explorer API."""
+        request_params = {
+            "TimePeriod": {
+                "Start": start_date.strftime("%Y-%m-%d"),
+                "End": end_date.strftime("%Y-%m-%d"),
+            },
+            "Granularity": self.granularity_mapping.get(granularity, "DAILY"),
+            "Metrics": self.default_metrics,
+        }
+
+        # Add group by dimensions
+        if group_by or self.default_group_by:
+            group_dimensions = group_by or self.default_group_by
+            request_params["GroupBy"] = [
+                {"Type": "DIMENSION", "Key": dim} for dim in group_dimensions  # type: ignore[misc]
+            ]
+
+        # Add filters if specified
+        if filter_by:
+            request_params["Filter"] = self._build_filter(filter_by)
+
+        return request_params
+
+    def _generate_date_list(
+        self, start_date: datetime | date, end_date: datetime | date
+    ) -> list[date]:
+        """Generate list of dates in the range."""
+        date_list = []
+        current_date = start_date.date() if isinstance(start_date, datetime) else start_date
+        end_date_obj = end_date.date() if isinstance(end_date, datetime) else end_date
+
+        while current_date <= end_date_obj:
+            date_list.append(current_date)
+            current_date += timedelta(days=1)
+
+        return date_list
+
+    def _check_cache_for_dates(
+        self, date_list: list[date], granularity_str: str, group_dimensions: list[str] | None
+    ) -> tuple[list[CostDataPoint], list[date]]:
+        """Check cache for each date and return cached data and missing dates."""
+        all_cached_data = []
+        missing_dates = []
+
+        for target_date in date_list:
+            cached_data_for_date = self._load_daily_cache(
+                target_date, granularity_str, self.default_metrics, group_dimensions or []
+            )
+            if cached_data_for_date:
+                all_cached_data.extend(cached_data_for_date)
+                logger.debug(f"🔵 AWS: Cache HIT for {target_date}")
+            else:
+                missing_dates.append(target_date)
+                logger.debug(f"🔵 AWS: Cache MISS for {target_date}")
+
+        return all_cached_data, missing_dates
+
+    async def _handle_fully_cached_data(
+        self,
+        all_cached_data: list[CostDataPoint],
+        start_date: datetime | date,
+        end_date: datetime | date,
+        granularity: TimeGranularity,
+    ) -> CostSummary:
+        """Handle scenario where all data is available from cache."""
+        start_date_obj = start_date.date() if isinstance(start_date, datetime) else start_date
+        end_date_obj = end_date.date() if isinstance(end_date, datetime) else end_date
+        logger.info(f"🔵 AWS: Using fully cached data for {start_date_obj} to {end_date_obj}")
+
+        # Resolve account names for uncached accounts only
+        unique_account_ids = {
+            point.account_id
+            for point in all_cached_data
+            if point.account_id and point.account_id not in self.account_names_cache
+        }
+        if unique_account_ids:
+            logger.info(
+                f"🔵 AWS: Resolving {len(unique_account_ids)} uncached account names (cached data)"
+            )
+            await self._resolve_selective_account_names(unique_account_ids)
+
+        return CostSummary(
+            provider=self._get_provider_name(),
+            start_date=start_date,
+            end_date=end_date,
+            granularity=granularity,
+            total_cost=sum(point.amount for point in all_cached_data),
+            currency="USD",
+            data_points=all_cached_data,
+            last_updated=datetime.now(),
+        )
+
+    async def _fetch_and_cache_fresh_data(
+        self,
+        start_date: datetime | date,
+        end_date: datetime | date,
+        granularity: TimeGranularity,
+        group_dimensions: list[str] | None,
+        filter_by: dict[str, Any] | None,
+        missing_dates_count: int,
+    ) -> CostSummary:
+        """Fetch fresh data from API and cache it."""
+        logger.info(
+            f"🔵 AWS: Cache PARTIAL - missing {missing_dates_count} dates, fetching fresh data"
+        )
+
+        # Get fresh data from API
+        # Convert date objects to datetime if needed
+        start_datetime = (
+            datetime.combine(start_date, datetime.min.time())
+            if isinstance(start_date, date)
+            else start_date
+        )
+        end_datetime = (
+            datetime.combine(end_date, datetime.min.time())
+            if isinstance(end_date, date)
+            else end_date
+        )
+        cost_summary = await self._get_cost_data_with_chunking(
+            start_datetime, end_datetime, granularity, group_dimensions or [], filter_by
+        )
+
+        logger.info(
+            f"🔵 AWS: Parsed {len(cost_summary.data_points)} data points, total cost: ${cost_summary.total_cost}"
+        )
+
+        # Save daily cache - group data points by date
+        granularity_str = self.granularity_mapping.get(granularity, "DAILY")
+        daily_data: dict[date, list[CostDataPoint]] = {}
+        for point in cost_summary.data_points:
+            point_date = point.date
+            if point_date not in daily_data:
+                daily_data[point_date] = []
+            daily_data[point_date].append(point)
+
+        # Save each day's data to its own cache file
+        for day_date, day_data_points in daily_data.items():
+            self._save_daily_cache(
+                day_date,
+                granularity_str,
+                self.default_metrics,
+                group_dimensions or [],
+                day_data_points,
+            )
+
+        logger.info(f"🔵 AWS: Saved daily cache for {len(daily_data)} dates")
+        return cost_summary
+
     async def get_cost_data(
         self,
         start_date: datetime | date,
@@ -480,122 +638,31 @@ class AWSCostProvider(CloudCostProvider):
         # Validate and normalize dates
         start_date, end_date = self.validate_date_range(start_date, end_date)
 
-        # Prepare request parameters
-        request_params = {
-            "TimePeriod": {
-                "Start": start_date.strftime("%Y-%m-%d"),
-                "End": end_date.strftime("%Y-%m-%d"),
-            },
-            "Granularity": self.granularity_mapping.get(granularity, "DAILY"),
-            "Metrics": self.default_metrics,
-        }
+        # Prepare request parameters (for potential API call)
+        self._prepare_cost_request_params(start_date, end_date, granularity, group_by, filter_by)
 
-        # Add group by dimensions
-        if group_by or self.default_group_by:
-            group_dimensions = group_by or self.default_group_by
-            request_params["GroupBy"] = [
-                {"Type": "DIMENSION", "Key": dim} for dim in group_dimensions
-            ]
-
-        # Add filters if specified
-        if filter_by:
-            request_params["Filter"] = self._build_filter(filter_by)
-
-        # Try to load daily cached data first
+        # Check cache first
         granularity_str = self.granularity_mapping.get(granularity, "DAILY")
         group_dimensions = group_by or self.default_group_by
-
-        # Generate list of dates in the range
-        date_list = []
-        current_date = start_date.date()
-        end_date_obj = end_date.date()
-
-        while current_date <= end_date_obj:
-            date_list.append(current_date)
-            current_date += timedelta(days=1)
-
-        # Try to load cached data for each day
-        all_cached_data = []
-        missing_dates = []
-
-        for target_date in date_list:
-            cached_data_for_date = self._load_daily_cache(
-                target_date, granularity_str, self.default_metrics, group_dimensions
-            )
-            if cached_data_for_date:
-                all_cached_data.extend(cached_data_for_date)
-                logger.debug(f"🔵 AWS: Cache HIT for {target_date}")
-            else:
-                missing_dates.append(target_date)
-                logger.debug(f"🔵 AWS: Cache MISS for {target_date}")
-
-        # If we have complete cached data for all dates, return it
-        if not missing_dates:
-            logger.info(
-                f"🔵 AWS: Using fully cached data for {start_date.date()} to {end_date.date()}"
-            )
-
-            # Resolve account names for uncached accounts only (fast operation)
-            unique_account_ids = {
-                point.account_id
-                for point in all_cached_data
-                if point.account_id and point.account_id not in self.account_names_cache
-            }
-            if unique_account_ids:
-                logger.info(
-                    f"🔵 AWS: Resolving {len(unique_account_ids)} uncached account names (cached data)"
-                )
-                await self._resolve_selective_account_names(unique_account_ids)
-
-            return CostSummary(
-                provider=self._get_provider_name(),
-                start_date=start_date,
-                end_date=end_date,
-                granularity=granularity,
-                total_cost=sum(point.amount for point in all_cached_data),
-                currency="USD",
-                data_points=all_cached_data,
-                last_updated=datetime.now(),
-            )
-
-        # If we're missing some dates, we need to fetch fresh data
-        logger.info(
-            f"🔵 AWS: Cache PARTIAL - missing {len(missing_dates)} dates, fetching fresh data"
+        date_list = self._generate_date_list(start_date, end_date)
+        all_cached_data, missing_dates = self._check_cache_for_dates(
+            date_list, granularity_str, group_dimensions
         )
 
+        # Return cached data if complete
+        if not missing_dates:
+            return await self._handle_fully_cached_data(
+                all_cached_data, start_date, end_date, granularity
+            )
+
+        # Fetch fresh data if cache incomplete
         try:
-            # Check if we need chunking to avoid 5000 record limit
-            cost_summary = await self._get_cost_data_with_chunking(
-                start_date, end_date, granularity, group_dimensions, filter_by
+            return await self._fetch_and_cache_fresh_data(
+                start_date, end_date, granularity, group_dimensions, filter_by, len(missing_dates)
             )
-
-            logger.info(
-                f"🔵 AWS: Parsed {len(cost_summary.data_points)} data points, total cost: ${cost_summary.total_cost}"
-            )
-
-            # Save daily cache - group data points by date and save separately
-            daily_data = {}
-            for point in cost_summary.data_points:
-                point_date = point.date
-                if point_date not in daily_data:
-                    daily_data[point_date] = []
-                daily_data[point_date].append(point)
-
-            # Save each day's data to its own cache file
-            for day_date, day_data_points in daily_data.items():
-                self._save_daily_cache(
-                    day_date,
-                    granularity_str,
-                    self.default_metrics,
-                    group_dimensions,
-                    day_data_points,
-                )
-
-            logger.info(f"🔵 AWS: Saved daily cache for {len(daily_data)} dates")
-            return cost_summary
-
         except ClientError as e:
             self._handle_client_error(e)
+            raise  # Re-raise after handling
         except Exception as e:
             logger.error(f"AWS cost data retrieval failed: {e}")
             raise APIError(f"AWS cost data retrieval failed: {e}", provider=self.provider_name)
@@ -607,7 +674,9 @@ class AWSCostProvider(CloudCostProvider):
 
         for attempt in range(max_retries):
             try:
-                return self.cost_explorer_client.get_cost_and_usage(**params)
+                if not self.cost_explorer_client:
+                    raise ValueError("AWS Cost Explorer client not initialized")
+                return self.cost_explorer_client.get_cost_and_usage(**params)  # type: ignore[unreachable]
 
             except ClientError as e:
                 error_code = e.response["Error"]["Code"]
@@ -689,7 +758,7 @@ class AWSCostProvider(CloudCostProvider):
             # Add group by dimensions
             if group_dimensions:
                 chunk_params["GroupBy"] = [
-                    {"Type": "DIMENSION", "Key": dim} for dim in group_dimensions
+                    {"Type": "DIMENSION", "Key": dim} for dim in group_dimensions  # type: ignore[misc]
                 ]
 
             # Add filters if specified
@@ -768,108 +837,94 @@ class AWSCostProvider(CloudCostProvider):
             last_updated=datetime.now(),
         )
 
-    async def _parse_cost_response(
-        self,
-        response: dict[str, Any],
-        start_date: datetime,
-        end_date: datetime,
-        granularity: TimeGranularity,
-        group_dimensions: list[str] = None,
-    ) -> CostSummary:
-        """Parse AWS Cost Explorer response into our standard format."""
-        data_points = []
-        total_cost = 0.0
+    def _extract_service_and_account_from_keys(
+        self, keys: list[str], group_dimensions: list[str] | None
+    ) -> tuple[str | None, str | None]:
+        """Extract service name and account ID from AWS group keys based on dimensions."""
+        service_name = None
+        account_id = None
 
-        # Deduplication tracking: aggregate costs by (date, service, account) to prevent duplicates
-        # Key: (date, service_name, account_id), Value: total_amount
-        aggregated_costs = {}
+        logger.debug(f"🔵 AWS: Processing group with keys: {keys}, dimensions: {group_dimensions}")
+
+        if len(keys) == 1:
+            # Single dimension grouping
+            if group_dimensions and "LINKED_ACCOUNT" in group_dimensions:
+                account_id = keys[0]
+                logger.debug(f"🔵 AWS: Single dimension LINKED_ACCOUNT: {account_id}")
+            elif group_dimensions and "SERVICE" in group_dimensions:
+                service_name = keys[0]
+                logger.debug(f"🔵 AWS: Single dimension SERVICE: {service_name}")
+            else:
+                # Fallback - assume it's service name if no dimensions specified
+                service_name = keys[0]
+                logger.debug(f"🔵 AWS: Single dimension fallback to SERVICE: {service_name}")
+
+        elif len(keys) == 2:
+            # Two dimension grouping - check the order
+            if group_dimensions and len(group_dimensions) >= 2:
+                if group_dimensions[0] == "SERVICE" and group_dimensions[1] == "LINKED_ACCOUNT":
+                    service_name, account_id = keys[0], keys[1]
+                elif group_dimensions[0] == "LINKED_ACCOUNT" and group_dimensions[1] == "SERVICE":
+                    account_id, service_name = keys[0], keys[1]
+                else:
+                    # Default fallback
+                    service_name, account_id = keys[0], keys[1]
+            else:
+                # Default fallback for two keys
+                service_name, account_id = keys[0], keys[1]
+
+            logger.debug(f"🔵 AWS: Dual dimension - service: {service_name}, account: {account_id}")
+
+        return service_name, account_id
+
+    def _extract_cost_from_metrics(self, metrics_data: dict[str, Any]) -> tuple[float, str]:
+        """Extract cost amount and currency from AWS metrics data."""
+        amount = 0.0
+        currency = "USD"
+
+        # Look for UNBLENDED_COST first, then fallback to any other metric
+        if "UnblendedCost" in metrics_data:
+            metric_data = metrics_data["UnblendedCost"]
+            amount = float(metric_data.get("Amount", 0))
+            currency = metric_data.get("Unit", "USD")
+        elif "UNBLENDED_COST" in metrics_data:
+            metric_data = metrics_data["UNBLENDED_COST"]
+            amount = float(metric_data.get("Amount", 0))
+            currency = metric_data.get("Unit", "USD")
+        elif metrics_data:
+            # Fallback to first available metric
+            first_metric = list(metrics_data.items())[0]
+            metric_data = first_metric[1]
+            amount = float(metric_data.get("Amount", 0))
+            currency = metric_data.get("Unit", "USD")
+
+        return amount, currency
+
+    def _process_aws_cost_groups(
+        self, response: dict[str, Any], group_dimensions: list[str] | None
+    ) -> dict[tuple[date, str, str | None], dict[str, Any]]:
+        """Process AWS cost response groups and aggregate costs to prevent duplication."""
+        aggregated_costs: dict[tuple[date, str, str | None], dict[str, Any]] = {}
 
         for result in response.get("ResultsByTime", []):
             period_start = datetime.strptime(result["TimePeriod"]["Start"], "%Y-%m-%d")
-
-            # Skip total costs to avoid duplication - Groups data contains the same information
-            # with more granular breakdown. Processing both Total and Groups would double-count costs.
 
             # Handle grouped costs
             for group in result.get("Groups", []):
                 keys = group.get("Keys", [])
 
-                # Extract service name and account ID from the group keys based on grouping dimensions
-                # We need to dynamically determine what each key represents
-                service_name = None
-                account_id = None
-
-                # The keys correspond to the GroupBy dimensions in order
-                # Common patterns:
-                # ["SERVICE"] -> keys = [service_name]
-                # ["LINKED_ACCOUNT"] -> keys = [account_id]
-                # ["SERVICE", "LINKED_ACCOUNT"] -> keys = [service_name, account_id]
-                # ["LINKED_ACCOUNT", "SERVICE"] -> keys = [account_id, service_name]
-
-                logger.debug(
-                    f"🔵 AWS: Processing group with keys: {keys}, dimensions: {group_dimensions}"
+                # Extract service name and account ID from keys
+                service_name, account_id = self._extract_service_and_account_from_keys(
+                    keys, group_dimensions
                 )
-
-                if len(keys) == 1:
-                    # Single dimension grouping
-                    if group_dimensions and "LINKED_ACCOUNT" in group_dimensions:
-                        account_id = keys[0]
-                        logger.debug(f"🔵 AWS: Single dimension LINKED_ACCOUNT: {account_id}")
-                    elif group_dimensions and "SERVICE" in group_dimensions:
-                        service_name = keys[0]
-                        logger.debug(f"🔵 AWS: Single dimension SERVICE: {service_name}")
-                    else:
-                        # Fallback - assume it's service name if no dimensions specified
-                        service_name = keys[0]
-                        logger.debug(f"🔵 AWS: Single dimension fallback to SERVICE: {service_name}")
-                elif len(keys) == 2:
-                    # Two dimension grouping - check the order
-                    if group_dimensions and len(group_dimensions) >= 2:
-                        if (
-                            group_dimensions[0] == "SERVICE"
-                            and group_dimensions[1] == "LINKED_ACCOUNT"
-                        ):
-                            service_name, account_id = keys[0], keys[1]
-                        elif (
-                            group_dimensions[0] == "LINKED_ACCOUNT"
-                            and group_dimensions[1] == "SERVICE"
-                        ):
-                            account_id, service_name = keys[0], keys[1]
-                        else:
-                            # Default fallback
-                            service_name, account_id = keys[0], keys[1]
-                    else:
-                        # Default fallback for two keys
-                        service_name, account_id = keys[0], keys[1]
-                    logger.debug(
-                        f"🔵 AWS: Dual dimension - service: {service_name}, account: {account_id}"
-                    )
 
                 # Set defaults for None values
                 if service_name is None:
                     service_name = "Unknown"
 
-                # Process only UNBLENDED_COST to match AWS Console behavior
-                # Prefer UNBLENDED_COST over BLENDED_COST for accuracy
+                # Extract cost metrics
                 metrics_data = group.get("Metrics", {})
-                amount = 0.0
-                currency = "USD"
-
-                # Look for UNBLENDED_COST first, then fallback to any other metric
-                if "UnblendedCost" in metrics_data:
-                    metric_data = metrics_data["UnblendedCost"]
-                    amount = float(metric_data.get("Amount", 0))
-                    currency = metric_data.get("Unit", "USD")
-                elif "UNBLENDED_COST" in metrics_data:
-                    metric_data = metrics_data["UNBLENDED_COST"]
-                    amount = float(metric_data.get("Amount", 0))
-                    currency = metric_data.get("Unit", "USD")
-                elif metrics_data:
-                    # Fallback to first available metric
-                    first_metric = list(metrics_data.items())[0]
-                    metric_data = first_metric[1]
-                    amount = float(metric_data.get("Amount", 0))
-                    currency = metric_data.get("Unit", "USD")
+                amount, currency = self._extract_cost_from_metrics(metrics_data)
 
                 # Aggregate costs by (date, service, account) to prevent duplication
                 if amount > 0:  # Only process non-zero amounts
@@ -880,22 +935,32 @@ class AWSCostProvider(CloudCostProvider):
                         aggregated_costs[agg_key] = {"amount": 0.0, "currency": currency}
                     aggregated_costs[agg_key]["amount"] += amount
 
-        # Create data points from aggregated costs to eliminate duplicates
+        return aggregated_costs
+
+    def _format_account_name(self, account_id: str | None) -> str:
+        """Format account name using cached account names."""
+        if not account_id:
+            return "AWS Account (Unknown)"
+
+        raw_account_name = self.account_names_cache.get(account_id, account_id)
+        if raw_account_name and raw_account_name != account_id:
+            # We have a proper account name, format as "Name (Account ID)"
+            return f"{raw_account_name} ({account_id})"
+        else:
+            # Fallback to generic format
+            return f"AWS Account ({account_id})"
+
+    def _create_data_points_from_aggregated_costs(
+        self, aggregated_costs: dict[tuple[date, str, str | None], dict[str, Any]]
+    ) -> tuple[list[CostDataPoint], float]:
+        """Create data points from aggregated costs and calculate total cost."""
+        data_points = []
+        total_cost = 0.0
+
         for (date_val, service_name, account_id), cost_data in aggregated_costs.items():
             amount = cost_data["amount"]
             if amount > 0:  # Only include non-zero costs
-                # Get account name from cache and format as "Name (Account ID)"
-                raw_account_name = (
-                    self.account_names_cache.get(account_id, account_id)
-                    if account_id
-                    else account_id
-                )
-                if raw_account_name and raw_account_name != account_id:
-                    # We have a proper account name, format as "Name (Account ID)"
-                    account_name = f"{raw_account_name} ({account_id})"
-                else:
-                    # Fallback to generic format
-                    account_name = f"AWS Account ({account_id})"
+                account_name = self._format_account_name(account_id)
 
                 data_points.append(
                     CostDataPoint(
@@ -910,8 +975,23 @@ class AWSCostProvider(CloudCostProvider):
                 )
                 total_cost += amount
 
-        # Skip account name enrichment for now to avoid the group_by error
-        # Return data immediately with account IDs only
+        return data_points, total_cost
+
+    async def _parse_cost_response(
+        self,
+        response: dict[str, Any],
+        start_date: datetime,
+        end_date: datetime,
+        granularity: TimeGranularity,
+        group_dimensions: list[str] | None = None,
+    ) -> CostSummary:
+        """Parse AWS Cost Explorer response into our standard format."""
+        # Process response groups and aggregate costs to prevent duplication
+        aggregated_costs = self._process_aws_cost_groups(response, group_dimensions)
+
+        # Create data points from aggregated costs
+        data_points, total_cost = self._create_data_points_from_aggregated_costs(aggregated_costs)
+
         logger.debug(
             f"🔵 AWS: Returning cost data with {len(data_points)} points (account IDs only)"
         )
@@ -964,7 +1044,7 @@ class AWSCostProvider(CloudCostProvider):
         cost_summary = await self.get_cost_data(start_date, end_date, group_by=["SERVICE"])
 
         # Aggregate costs by service
-        service_costs = {}
+        service_costs: dict[str, float] = {}
         for point in cost_summary.data_points:
             if point.service_name:
                 service_name = point.service_name
@@ -1037,18 +1117,19 @@ class AWSCostProvider(CloudCostProvider):
     def _build_filter(self, filter_by: dict[str, Any]) -> dict[str, Any]:
         """Build AWS Cost Explorer filter from our generic filter format."""
         # Example filter building - can be expanded based on needs
-        aws_filter = {}
+        aws_filter: dict[str, Any] = {}
 
         if "services" in filter_by:
             aws_filter = {"Dimensions": {"Key": "SERVICE", "Values": filter_by["services"]}}
 
         if "regions" in filter_by:
+            region_filter = {"Dimensions": {"Key": "REGION", "Values": filter_by["regions"]}}
             if "And" not in aws_filter:
                 aws_filter = {"And": [aws_filter] if aws_filter else []}
 
-            aws_filter["And"].append(
-                {"Dimensions": {"Key": "REGION", "Values": filter_by["regions"]}}
-            )
+            # aws_filter["And"] is guaranteed to be a list at this point
+            and_filters: list[dict[str, Any]] = aws_filter["And"]
+            and_filters.append(region_filter)
 
         return aws_filter
 
@@ -1204,7 +1285,7 @@ class AWSCostProvider(CloudCostProvider):
         if not self.organizations_client:
             return account_id  # Return just the account ID if no Organizations access
 
-        try:
+        try:  # type: ignore[unreachable]
             # Implement exponential backoff for rate limiting
             max_retries = 3
             base_delay = 1.0  # Start with 1 second
@@ -1264,7 +1345,7 @@ class AWSCostProvider(CloudCostProvider):
             logger.error(f"Error resolving account name for {account_id}: {e}")
             raise APIError(f"Account name resolution failed: {e}", provider=self.provider_name)
 
-    def format_account_display_name(self, account_id: str, account_name: str = None) -> str:
+    def format_account_display_name(self, account_id: str, account_name: str | None = None) -> str:
         """Format account display name as 'Name (Account ID)' or just 'Account ID'."""
         if not account_name or account_name == account_id:
             return account_id

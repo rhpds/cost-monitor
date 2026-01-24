@@ -379,69 +379,92 @@ class MultiCloudCostSummary(BaseModel):
 
         return validated
 
-    @model_validator(mode="after")
-    def validate_multi_cloud_summary(self):
-        """Validate multi-cloud summary consistency and business rules."""
-        # Validate date range
+    def _validate_date_range(self) -> None:
+        """Validate that start date is before end date."""
         if self.start_date >= self.end_date:
             raise ValueError(
                 f"Start date {self.start_date} must be before end date {self.end_date}"
             )
 
-        # Validate total cost consistency with provider breakdown
-        if self.provider_breakdown:
-            breakdown_total = sum(self.provider_breakdown.values())
-            tolerance = max(abs(self.total_cost) * 0.05, 0.01)  # 5% tolerance
+    def _validate_cost_breakdown_consistency(self) -> None:
+        """Validate total cost consistency with provider breakdown."""
+        if not self.provider_breakdown:
+            return
 
-            if abs(breakdown_total - self.total_cost) > tolerance:
+        breakdown_total = sum(self.provider_breakdown.values())
+        tolerance = max(abs(self.total_cost) * 0.05, 0.01)  # 5% tolerance
+
+        if abs(breakdown_total - self.total_cost) > tolerance:
+            logger.warning(
+                f"Provider breakdown total ({breakdown_total:.2f}) doesn't match total_cost ({self.total_cost:.2f})"
+            )
+
+    def _validate_provider_data_consistency(self) -> None:
+        """Validate consistency between provider_data and provider_breakdown."""
+        if not (self.provider_data and self.provider_breakdown):
+            return
+
+        data_providers = set(self.provider_data.keys())
+        breakdown_providers = set(self.provider_breakdown.keys())
+
+        missing_in_breakdown = data_providers - breakdown_providers
+        missing_in_data = breakdown_providers - data_providers
+
+        if missing_in_breakdown:
+            logger.warning(f"Providers in data but not breakdown: {missing_in_breakdown}")
+        if missing_in_data:
+            logger.warning(f"Providers in breakdown but not data: {missing_in_data}")
+
+    def _validate_currency_consistency(self) -> None:
+        """Validate currency consistency across provider data."""
+        if not self.provider_data:
+            return
+
+        provider_currencies = {data.currency for data in self.provider_data.values()}
+        if len(provider_currencies) > 1:
+            logger.warning(f"Multiple currencies in provider data: {provider_currencies}")
+
+        # Check if main currency matches provider currencies
+        if self.currency not in provider_currencies and provider_currencies:
+            logger.warning(
+                f"Main currency {self.currency} not found in provider currencies: {provider_currencies}"
+            )
+
+    def _validate_date_consistency(self) -> None:
+        """Validate date consistency across provider data."""
+        if not self.provider_data:
+            return
+
+        for provider, data in self.provider_data.items():
+            if data.start_date != self.start_date:
                 logger.warning(
-                    f"Provider breakdown total ({breakdown_total:.2f}) doesn't match total_cost ({self.total_cost:.2f})"
+                    f"Start date mismatch for {provider}: {data.start_date} vs {self.start_date}"
+                )
+            if data.end_date != self.end_date:
+                logger.warning(
+                    f"End date mismatch for {provider}: {data.end_date} vs {self.end_date}"
                 )
 
-        # Validate consistency between provider_data and provider_breakdown
-        if self.provider_data and self.provider_breakdown:
-            data_providers = set(self.provider_data.keys())
-            breakdown_providers = set(self.provider_breakdown.keys())
+    def _validate_daily_costs_range(self) -> None:
+        """Validate combined daily costs date range."""
+        if not self.combined_daily_costs:
+            return
 
-            missing_in_breakdown = data_providers - breakdown_providers
-            missing_in_data = breakdown_providers - data_providers
+        expected_days = (self.end_date - self.start_date).days + 1
+        actual_days = len(self.combined_daily_costs)
 
-            if missing_in_breakdown:
-                logger.warning(f"Providers in data but not breakdown: {missing_in_breakdown}")
-            if missing_in_data:
-                logger.warning(f"Providers in breakdown but not data: {missing_in_data}")
+        if abs(actual_days - expected_days) > expected_days * 0.1:
+            logger.warning(f"Expected ~{expected_days} daily entries but got {actual_days}")
 
-        # Validate currency consistency across provider data
-        if self.provider_data:
-            provider_currencies = {data.currency for data in self.provider_data.values()}
-            if len(provider_currencies) > 1:
-                logger.warning(f"Multiple currencies in provider data: {provider_currencies}")
-
-            # Check if main currency matches provider currencies
-            if self.currency not in provider_currencies and provider_currencies:
-                logger.warning(
-                    f"Main currency {self.currency} not found in provider currencies: {provider_currencies}"
-                )
-
-        # Validate date consistency across provider data
-        if self.provider_data:
-            for provider, data in self.provider_data.items():
-                if data.start_date != self.start_date:
-                    logger.warning(
-                        f"Start date mismatch for {provider}: {data.start_date} vs {self.start_date}"
-                    )
-                if data.end_date != self.end_date:
-                    logger.warning(
-                        f"End date mismatch for {provider}: {data.end_date} vs {self.end_date}"
-                    )
-
-        # Validate combined daily costs date range
-        if self.combined_daily_costs:
-            expected_days = (self.end_date - self.start_date).days + 1
-            actual_days = len(self.combined_daily_costs)
-
-            if abs(actual_days - expected_days) > expected_days * 0.1:
-                logger.warning(f"Expected ~{expected_days} daily entries but got {actual_days}")
+    @model_validator(mode="after")
+    def validate_multi_cloud_summary(self):
+        """Validate multi-cloud summary consistency and business rules."""
+        self._validate_date_range()
+        self._validate_cost_breakdown_consistency()
+        self._validate_provider_data_consistency()
+        self._validate_currency_consistency()
+        self._validate_date_consistency()
+        self._validate_daily_costs_range()
 
         return self
 
@@ -667,7 +690,7 @@ class CostDataNormalizer:
         self.service_normalizer = ServiceNameNormalizer()
         self.region_normalizer = RegionNormalizer()
         self.currency_converter = CurrencyConverter()
-        self.providers = {}
+        self.providers: dict[str, Any] = {}
 
     def set_providers(self, providers: dict[str, Any]):
         """Set provider instances for accessing cached data like account names."""
@@ -716,7 +739,7 @@ class CostDataNormalizer:
 
     def _normalize_daily_costs(self, cost_summary: CostSummary) -> list[dict[str, Any]]:
         """Normalize daily cost data."""
-        daily_totals = defaultdict(float)
+        daily_totals: defaultdict[date, float] = defaultdict(float)
 
         # Aggregate by date
         for point in cost_summary.data_points:
@@ -733,7 +756,7 @@ class CostDataNormalizer:
 
     def _normalize_service_breakdown(self, cost_summary: CostSummary) -> dict[str, float]:
         """Normalize service breakdown data."""
-        service_totals = defaultdict(float)
+        service_totals: defaultdict[str, float] = defaultdict(float)
 
         for point in cost_summary.data_points:
             if point.service_name:
@@ -753,7 +776,7 @@ class CostDataNormalizer:
 
     def _normalize_regional_breakdown(self, cost_summary: CostSummary) -> dict[str, float]:
         """Normalize regional breakdown data."""
-        regional_totals = defaultdict(float)
+        regional_totals: defaultdict[str, float] = defaultdict(float)
 
         for point in cost_summary.data_points:
             if point.region:
@@ -820,17 +843,17 @@ class CostDataNormalizer:
 
         # Aggregate daily costs
         daily_start = time.time()
-        combined_daily = self._aggregate_daily_costs(normalized_data.values())
+        combined_daily = self._aggregate_daily_costs(list(normalized_data.values()))
         daily_time = time.time() - daily_start
 
         # Aggregate service breakdown
         service_start = time.time()
-        combined_services = self._aggregate_service_breakdown(normalized_data.values())
+        combined_services = self._aggregate_service_breakdown(list(normalized_data.values()))
         service_time = time.time() - service_start
 
         # Aggregate regional breakdown
         region_start = time.time()
-        combined_regions = self._aggregate_regional_breakdown(normalized_data.values())
+        combined_regions = self._aggregate_regional_breakdown(list(normalized_data.values()))
         region_time = time.time() - region_start
 
         # Aggregate account breakdown
@@ -894,7 +917,7 @@ class CostDataNormalizer:
         self, normalized_data: list[NormalizedCostData]
     ) -> dict[str, float]:
         """Aggregate service breakdown across providers with provider prefixes."""
-        combined_services = defaultdict(float)
+        combined_services: defaultdict[str, float] = defaultdict(float)
 
         for data in normalized_data:
             provider_prefix = data.provider.upper()
@@ -909,7 +932,7 @@ class CostDataNormalizer:
         self, normalized_data: list[NormalizedCostData]
     ) -> dict[str, float]:
         """Aggregate regional breakdown across providers."""
-        combined_regions = defaultdict(float)
+        combined_regions: defaultdict[str, float] = defaultdict(float)
 
         for data in normalized_data:
             for region, cost in data.regional_breakdown.items():
@@ -921,8 +944,8 @@ class CostDataNormalizer:
         self, cost_summaries: list[CostSummary]
     ) -> dict[str, dict[str, Any]]:
         """Aggregate account/project/subscription breakdown across providers."""
-        account_totals = defaultdict(float)
-        account_details = {}
+        account_totals: defaultdict[str, float] = defaultdict(float)
+        account_details: dict[str, dict[str, Any]] = {}
 
         # Map of provider to account type label
         provider_labels = {
@@ -973,9 +996,9 @@ class CostDataNormalizer:
                         }
 
         # Combine totals with details and sort by cost (descending)
-        combined_accounts = {}
+        combined_accounts: dict[str, dict[str, Any]] = {}
         for account_key, total_cost in account_totals.items():
-            details = account_details[account_key]
+            details = dict(account_details[account_key])  # Create a copy
             details["total_cost"] = total_cost
             details["percentage"] = (
                 (total_cost / sum(account_totals.values()) * 100) if account_totals else 0

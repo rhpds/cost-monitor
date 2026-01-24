@@ -462,7 +462,7 @@ class ThresholdMonitor:
         if rule.provider is None:
             # Global threshold - check total across all providers
             current_cost = multi_cloud_summary.total_cost
-            if current_cost > rule.threshold_value:
+            if rule.threshold_value is not None and current_cost > rule.threshold_value:
                 alert = Alert(
                     id=self._generate_alert_id(),
                     rule_name=rule.name,
@@ -478,6 +478,8 @@ class ThresholdMonitor:
                         "provider_breakdown": multi_cloud_summary.provider_breakdown,
                         "threshold_exceeded_by": current_cost - rule.threshold_value,
                     },
+                    acknowledged=False,
+                    resolved=False,
                 )
                 alerts.append(alert)
         else:
@@ -485,7 +487,7 @@ class ThresholdMonitor:
             for summary in cost_summaries:
                 if summary.provider == rule.provider:
                     current_cost = summary.total_cost
-                    if current_cost > rule.threshold_value:
+                    if rule.threshold_value is not None and current_cost > rule.threshold_value:
                         alert = Alert(
                             id=self._generate_alert_id(),
                             rule_name=rule.name,
@@ -498,6 +500,8 @@ class ThresholdMonitor:
                             message=f"{summary.provider.upper()} daily cost ${current_cost:.2f} exceeds threshold ${rule.threshold_value:.2f}",
                             timestamp=datetime.now(),
                             metadata={"threshold_exceeded_by": current_cost - rule.threshold_value},
+                            acknowledged=False,
+                            resolved=False,
                         )
                         alerts.append(alert)
                     break
@@ -646,7 +650,7 @@ class BudgetMonitor:
     """Monitors costs against predefined budgets."""
 
     def __init__(self):
-        self.budgets: dict[str, dict[str, float]] = {}
+        self.budgets: dict[str, dict[str, dict[str, Any]]] = {}
 
     def set_budget(self, provider: str, period: str, amount: float, currency: str = "USD"):
         """

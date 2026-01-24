@@ -35,7 +35,7 @@ Required AWS IAM permissions:
 ```bash
 oc create secret generic azure-credentials \
   --from-literal=client-id="YOUR_AZURE_CLIENT_ID" \
-  --from-literal=client-secret="YOUR_AZURE_CLIENT_SECRET" \
+  --from-literal=client-secret="YOUR_AZURE_CLIENT_SECRET" \ # pragma: allowlist secret
   --from-literal=tenant-id="YOUR_AZURE_TENANT_ID" \
   --from-literal=subscription-id="YOUR_AZURE_SUBSCRIPTION_ID" \
   --from-literal=storage-account="YOUR_STORAGE_ACCOUNT_NAME" \

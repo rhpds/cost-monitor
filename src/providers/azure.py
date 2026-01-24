@@ -10,16 +10,12 @@ VALIDATION STATUS (January 2026):
    Processes 223 Azure subscriptions with costs matching Azure official billing.
 """
 
-import csv
-import hashlib
-import io
 import json
 import logging
 import os
 import re
-import time
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional
 
 try:
     from azure.identity import ClientSecretCredential
@@ -44,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 class AzureCostProvider(CloudCostProvider):
     """Azure Cost Management provider using billing exports."""
+
+    blob_service_client: Optional["BlobServiceClient"]
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
@@ -160,15 +158,80 @@ class AzureCostProvider(CloudCostProvider):
         logger.info(f"Using configured container: {self.container_name}")
         return [self.container_name]
 
+    def _is_export_related_blob(self, blob_path: str) -> bool:
+        """Check if a blob path is related to exports."""
+        return (
+            self.export_name in blob_path
+            or "billing" in blob_path.lower()
+            or "export" in blob_path.lower()
+        )
+
+    def _parse_date_range_from_path_parts(
+        self, path_parts: list[str], target_start_pattern: str
+    ) -> tuple[date | None, date | None, str | None]:
+        """Parse date range from path parts and return start/end dates plus matching part."""
+        from datetime import datetime as dt
+
+        for part in path_parts:
+            date_range_match = re.match(r"(\d{8})-(\d{8})", part)
+            if date_range_match:
+                folder_start_str = date_range_match.group(1)
+                folder_end_str = date_range_match.group(2)
+
+                # Check if this folder starts with our target month pattern
+                if folder_start_str.startswith(target_start_pattern):
+                    try:
+                        # Parse folder date range for metadata
+                        folder_start = dt.strptime(folder_start_str, "%Y%m%d").date()
+                        folder_end = dt.strptime(folder_end_str, "%Y%m%d").date()
+                        return folder_start, folder_end, part
+                    except ValueError as e:
+                        logger.debug(f"Could not parse date range from {part}: {e}")
+                        continue
+
+        return None, None, None
+
+    def _build_folder_path_up_to_date_part(
+        self, path_parts: list[str], target_part: str
+    ) -> str | None:
+        """Build folder path up to the date range part."""
+        folder_path_parts = []
+        for path_part in path_parts:
+            folder_path_parts.append(path_part)
+            if path_part == target_part:  # Found the date range part
+                break
+
+        if len(folder_path_parts) >= 2:
+            return "/".join(folder_path_parts)
+        return None
+
+    def _create_folder_candidate(
+        self,
+        container_name: str,
+        folder_path: str,
+        folder_start: date,
+        folder_end: date,
+        last_modified,
+    ) -> dict[str, Any]:
+        """Create a folder candidate dictionary."""
+        return {
+            "path": folder_path,
+            "container": container_name,
+            "start_date": folder_start,
+            "end_date": folder_end,
+            "last_modified": last_modified,
+        }
+
     def _find_export_folders_in_container(
         self, container_name: str, target_month: date
     ) -> list[dict]:
         """Find export folders in a container that contain data for target month."""
-        from datetime import datetime as dt
-
         try:
             # Generate target pattern: YYYYMM01 (first day of target month)
             target_start_pattern = target_month.strftime("%Y%m01")
+
+            if not self.blob_service_client:
+                raise ValueError("Azure blob service client not authenticated")
 
             container_client = self.blob_service_client.get_container_client(container_name)
             blob_list = container_client.list_blobs()
@@ -192,54 +255,35 @@ class AzureCostProvider(CloudCostProvider):
                 processed_paths.add(folder_base)
 
                 # Look for our export name and date range patterns
-                if (
-                    self.export_name in blob_path
-                    or "billing" in blob_path.lower()
-                    or "export" in blob_path.lower()
-                ):
-                    # Look for date range patterns like YYYYMMDD-YYYYMMDD that start with our target
-                    for part in path_parts:
-                        date_range_match = re.match(r"(\d{8})-(\d{8})", part)
-                        if date_range_match:
-                            folder_start_str = date_range_match.group(1)
-                            folder_end_str = date_range_match.group(2)
+                if self._is_export_related_blob(blob_path):
+                    # Parse date range from path parts
+                    (
+                        folder_start,
+                        folder_end,
+                        matching_part,
+                    ) = self._parse_date_range_from_path_parts(path_parts, target_start_pattern)
 
-                            # Check if this folder starts with our target month pattern
-                            if folder_start_str.startswith(target_start_pattern):
-                                try:
-                                    # Parse folder date range for metadata
-                                    folder_start = dt.strptime(folder_start_str, "%Y%m%d").date()
-                                    folder_end = dt.strptime(folder_end_str, "%Y%m%d").date()
+                    if folder_start and folder_end and matching_part:
+                        # Build folder path up to the date range part
+                        folder_path = self._build_folder_path_up_to_date_part(
+                            path_parts, matching_part
+                        )
 
-                                    # Build folder path up to the date range part
-                                    folder_path_parts = []
-                                    for _i, path_part in enumerate(path_parts):
-                                        folder_path_parts.append(path_part)
-                                        if path_part == part:  # Found the date range part
-                                            break
+                        if folder_path:
+                            candidate = self._create_folder_candidate(
+                                container_name,
+                                folder_path,
+                                folder_start,
+                                folder_end,
+                                blob.last_modified,
+                            )
+                            folder_candidates.append(candidate)
 
-                                    if len(folder_path_parts) >= 2:
-                                        folder_path = "/".join(folder_path_parts)
-
-                                        folder_candidates.append(
-                                            {
-                                                "path": folder_path,
-                                                "container": container_name,
-                                                "start_date": folder_start,
-                                                "end_date": folder_end,
-                                                "last_modified": blob.last_modified,
-                                            }
-                                        )
-
-                                        logger.info(
-                                            f"Found exact match export folder: {folder_path} "
-                                            f"(covers {folder_start} to {folder_end})"
-                                        )
-                                        break
-
-                                except ValueError as e:
-                                    logger.debug(f"Could not parse date range from {part}: {e}")
-                                    continue
+                            logger.info(
+                                f"Found exact match export folder: {folder_path} "
+                                f"(covers {folder_start} to {folder_end})"
+                            )
+                            break
 
             # Sort candidates by recency (most recent first)
             folder_candidates.sort(
@@ -258,25 +302,128 @@ class AzureCostProvider(CloudCostProvider):
             logger.error(f"Error scanning container {container_name}: {e}")
             return []
 
-    def _find_latest_export_files(self, target_month: date) -> dict[str, str] | None:
+    def _discover_all_export_folders(self, target_month: date) -> list[dict] | None:
+        """Discover all export folders across containers for target month."""
+        containers = self._get_export_containers()
+
+        if not containers:
+            logger.error("No export containers found")
+            return None
+
+        all_export_folders = []
+
+        # Search each container for export folders
+        for container in containers:
+            container_folders = self._find_export_folders_in_container(container, target_month)
+            all_export_folders.extend(container_folders)
+
+        if not all_export_folders:
+            logger.warning(f"No export folders found for {target_month}")
+            return None
+
+        return all_export_folders
+
+    def _find_guid_directories_in_export(self, best_export: dict) -> dict[str, dict]:
+        """Find GUID subdirectories in the export folder."""
+        if not self.blob_service_client:
+            raise ValueError("Azure blob service client not authenticated")
+        container_client = self.blob_service_client.get_container_client(best_export["container"])
+
+        # Look for GUID subdirectories in the export folder
+        export_dirs = {}
+        prefix = best_export["path"] + "/"
+
+        for blob in container_client.list_blobs(name_starts_with=prefix):
+            path_parts = blob.name.split("/")
+            # Look for GUID pattern after the export path
+            export_path_parts = best_export["path"].split("/")
+            if len(path_parts) > len(export_path_parts):
+                guid_candidate = path_parts[len(export_path_parts)]
+                # Check if this looks like a GUID (36 chars with hyphens)
+                if len(guid_candidate) == 36 and guid_candidate.count("-") == 4:
+                    if guid_candidate not in export_dirs:
+                        export_dirs[guid_candidate] = {
+                            "last_modified": blob.last_modified,
+                            "blobs": [],
+                        }
+                    blob_list = export_dirs[guid_candidate]["blobs"]
+                    if isinstance(blob_list, list):
+                        blob_list.append(blob.name)
+                    current_last_modified = export_dirs[guid_candidate]["last_modified"]
+                    if (
+                        isinstance(current_last_modified, datetime)
+                        and blob.last_modified > current_last_modified
+                    ):
+                        export_dirs[guid_candidate]["last_modified"] = blob.last_modified
+
+        return export_dirs
+
+    def _find_manifest_file(self, latest_export: dict) -> str | None:
+        """Find manifest file in the latest export."""
+        blobs = latest_export.get("blobs", [])
+        for blob_name in blobs:
+            if isinstance(blob_name, str) and blob_name.endswith("manifest.json"):
+                return blob_name
+        return None
+
+    def _get_csv_files_fallback(self, latest_export: dict, latest_guid: str) -> dict | None:
+        """Fallback method to find CSV files directly when no manifest is available."""
+        logger.error(f"No manifest file found in export {latest_guid}")
+        csv_files = []
+        for blob_name in latest_export["blobs"]:
+            if blob_name.endswith(".csv"):
+                csv_files.append(
+                    {
+                        "name": blob_name,
+                        "byte_count": 0,  # Unknown without manifest
+                        "row_count": 0,  # Unknown without manifest
+                    }
+                )
+
+        if csv_files:
+            logger.info(f"Found {len(csv_files)} CSV files without manifest")
+            return {"csv_files": csv_files}
+        return None
+
+    def _extract_csv_files_from_manifest(
+        self, manifest: dict, latest_guid: str
+    ) -> list[dict] | None:
+        """Extract CSV files information from manifest."""
+        csv_files = []
+        for blob_info in manifest["blobs"]:
+            blob_name = blob_info.get("blobName", "")
+            if blob_name.endswith(".csv"):
+                csv_files.append(
+                    {
+                        "name": blob_name,
+                        "byte_count": blob_info.get("byteCount", 0),
+                        "row_count": blob_info.get("dataRowCount", 0),
+                    }
+                )
+
+        if not csv_files:
+            logger.error(f"No CSV files found in manifest for {latest_guid}")
+            return None
+
+        return csv_files
+
+    def _log_csv_files_summary(self, csv_files: list[dict]) -> None:
+        """Log summary information about found CSV files."""
+        logger.info(
+            f"Found {len(csv_files)} CSV files in manifest: {[f['name'].split('/')[-1] for f in csv_files]}"
+        )
+        total_rows = sum(f["row_count"] for f in csv_files)
+        total_size_mb = sum(f["byte_count"] for f in csv_files) / 1024 / 1024
+        logger.info(
+            f"Total export data: {total_rows:,} rows, {total_size_mb:.1f}MB across {len(csv_files)} files"
+        )
+
+    def _find_latest_export_files(self, target_month: date) -> dict[str, Any] | None:
         """Find the latest export files for a given month using sophisticated discovery."""
         try:
-            # First, discover all potential containers
-            containers = self._get_export_containers()
-
-            if not containers:
-                logger.error("No export containers found")
-                return None
-
-            all_export_folders = []
-
-            # Search each container for export folders
-            for container in containers:
-                container_folders = self._find_export_folders_in_container(container, target_month)
-                all_export_folders.extend(container_folders)
-
+            # Discover all export folders
+            all_export_folders = self._discover_all_export_folders(target_month)
             if not all_export_folders:
-                logger.warning(f"No export folders found for {target_month}")
                 return None
 
             # Take the first (most recent) candidate
@@ -286,32 +433,8 @@ class AzureCostProvider(CloudCostProvider):
                 f"(covers {best_export['start_date']} to {best_export['end_date']})"
             )
 
-            # Now find the latest GUID directory within this export folder
-            container_client = self.blob_service_client.get_container_client(
-                best_export["container"]
-            )
-
-            # Look for GUID subdirectories in the export folder
-            export_dirs = {}
-            prefix = best_export["path"] + "/"
-
-            for blob in container_client.list_blobs(name_starts_with=prefix):
-                path_parts = blob.name.split("/")
-                # Look for GUID pattern after the export path
-                export_path_parts = best_export["path"].split("/")
-                if len(path_parts) > len(export_path_parts):
-                    guid_candidate = path_parts[len(export_path_parts)]
-                    # Check if this looks like a GUID (36 chars with hyphens)
-                    if len(guid_candidate) == 36 and guid_candidate.count("-") == 4:
-                        if guid_candidate not in export_dirs:
-                            export_dirs[guid_candidate] = {
-                                "last_modified": blob.last_modified,
-                                "blobs": [],
-                            }
-                        export_dirs[guid_candidate]["blobs"].append(blob.name)
-                        if blob.last_modified > export_dirs[guid_candidate]["last_modified"]:
-                            export_dirs[guid_candidate]["last_modified"] = blob.last_modified
-
+            # Find GUID directories in the export folder
+            export_dirs = self._find_guid_directories_in_export(best_export)
             if not export_dirs:
                 logger.error(f"No GUID directories found in export folder {best_export['path']}")
                 return None
@@ -325,31 +448,9 @@ class AzureCostProvider(CloudCostProvider):
             )
 
             # Find manifest file
-            manifest_file = None
-            for blob_name in latest_export["blobs"]:
-                if blob_name.endswith("manifest.json"):
-                    manifest_file = blob_name
-                    break
-
+            manifest_file = self._find_manifest_file(latest_export)
             if not manifest_file:
-                logger.error(f"No manifest file found in export {latest_guid}")
-                # Fallback: scan for CSV files directly
-                csv_files = []
-                for blob_name in latest_export["blobs"]:
-                    if blob_name.endswith(".csv"):
-                        csv_files.append(
-                            {
-                                "name": blob_name,
-                                "byte_count": 0,  # Unknown without manifest
-                                "row_count": 0,  # Unknown without manifest
-                            }
-                        )
-
-                if csv_files:
-                    logger.info(f"Found {len(csv_files)} CSV files without manifest")
-                    return {"csv_files": csv_files}
-                else:
-                    return None
+                return self._get_csv_files_fallback(latest_export, latest_guid)
 
             # Parse manifest to get the definitive list of CSV files
             manifest = self._parse_manifest(manifest_file, best_export["container"])
@@ -358,30 +459,11 @@ class AzureCostProvider(CloudCostProvider):
                 return None
 
             # Extract CSV files from manifest
-            csv_files = []
-            for blob_info in manifest["blobs"]:
-                blob_name = blob_info.get("blobName", "")
-                if blob_name.endswith(".csv"):
-                    csv_files.append(
-                        {
-                            "name": blob_name,
-                            "byte_count": blob_info.get("byteCount", 0),
-                            "row_count": blob_info.get("dataRowCount", 0),
-                        }
-                    )
-
+            csv_files = self._extract_csv_files_from_manifest(manifest, latest_guid)
             if not csv_files:
-                logger.error(f"No CSV files found in manifest for {latest_guid}")
                 return None
 
-            logger.info(
-                f"Found {len(csv_files)} CSV files in manifest: {[f['name'].split('/')[-1] for f in csv_files]}"
-            )
-            total_rows = sum(f["row_count"] for f in csv_files)
-            total_size_mb = sum(f["byte_count"] for f in csv_files) / 1024 / 1024
-            logger.info(
-                f"Total export data: {total_rows:,} rows, {total_size_mb:.1f}MB across {len(csv_files)} files"
-            )
+            self._log_csv_files_summary(csv_files)
 
             return {"csv_files": csv_files, "container": best_export["container"]}
 
@@ -389,10 +471,14 @@ class AzureCostProvider(CloudCostProvider):
             logger.error(f"Error finding export files: {e}")
             return None
 
-    def _parse_manifest(self, manifest_blob_name: str, container_name: str = None) -> dict | None:
+    def _parse_manifest(
+        self, manifest_blob_name: str, container_name: str | None = None
+    ) -> dict | None:
         """Parse the manifest.json file to get export metadata."""
         try:
             container = container_name or self.container_name
+            if not self.blob_service_client:
+                raise ValueError("Azure blob service client not authenticated")
             blob_client = self.blob_service_client.get_blob_client(
                 container=container, blob=manifest_blob_name
             )
@@ -401,7 +487,7 @@ class AzureCostProvider(CloudCostProvider):
             logger.info(
                 f"Parsed manifest with {len(manifest.get('blobs', []))} files from container {container}"
             )
-            return manifest
+            return dict(manifest)  # Ensure return type is dict
         except Exception as e:
             logger.error(
                 f"Failed to parse manifest {manifest_blob_name} from container {container_name}: {e}"
@@ -409,71 +495,45 @@ class AzureCostProvider(CloudCostProvider):
             return None
 
     def _download_and_parse_csv(
-        self, blob_name: str, container_name: str = None, target_date: date | None = None
+        self, blob_name: str, container_name: str | None = None, target_date: date | None = None
     ) -> list[CostDataPoint]:
         """Download and parse CSV data from blob storage with caching and download deduplication."""
         try:
-            # Check if this is current month data (files still growing, use short-lived cache)
-            current_month = date.today().replace(day=1)
-            is_current_month = blob_name and current_month.strftime("%Y%m%d") in blob_name
+            # Import the Azure CSV service module
+            from .azure_csv_service import (
+                acquire_download_lock,
+                check_current_month_cache_age,
+                download_blob_with_etag_check,
+                handle_etag_conditional_download,
+                parse_csv_content_to_cost_points,
+                release_download_lock,
+                validate_cache_and_setup_lock,
+                wait_for_concurrent_download,
+            )
 
-            # Create a lock key for this specific file to prevent concurrent downloads
-            lock_key = f"azure_download_lock:{hashlib.md5(blob_name.encode()).hexdigest()}"
+            # Step 1: Validate cache settings and setup download lock
+            lock_key, is_current_month, _ = validate_cache_and_setup_lock(blob_name)
 
-            # Check if CSV is already cached
+            # Step 2: Check if CSV is already cached and validate age for current month
             csv_content = self._load_cached_csv(blob_name)
-
-            # For current month, check if cached version is recent (within 1 hour)
-            if csv_content and is_current_month:
-                cache_path = self._get_csv_cache_path(blob_name)
-                try:
-                    cache_age_seconds = time.time() - os.path.getmtime(cache_path)
-                    if cache_age_seconds > 3600:  # 1 hour
-                        logger.info(
-                            f"Current month cache expired ({cache_age_seconds/3600:.1f}h old), will check for updates: {blob_name}"
-                        )
-                        csv_content = None  # Force refresh check
-                    else:
-                        logger.info(
-                            f"Using recent current month cache ({cache_age_seconds/60:.1f}m old): {blob_name}"
-                        )
-                except OSError as e:
-                    logger.warning(f"Failed to check cache age: {e}")
-                    csv_content = None  # Force refresh on error
+            if csv_content:
+                csv_content = check_current_month_cache_age(
+                    blob_name, csv_content, is_current_month, self._get_csv_cache_path
+                )
 
             if csv_content:
                 logger.info(f"Using cached CSV data: {blob_name}")
             else:
-                # Try to acquire download lock to prevent concurrent downloads
-                lock_acquired = False
-                redis_client = None
+                # Step 3: Handle download with lock management
                 try:
-                    import redis
-
-                    redis_client = redis.from_url(
-                        os.getenv("REDIS_URL", "redis://localhost:6379/0"), decode_responses=True
-                    )
-
-                    # Try to acquire lock for 10 minutes with 30 second timeout for lock acquisition
-                    lock_acquired = redis_client.set(lock_key, "downloading", ex=600, nx=True)
+                    lock_acquired, redis_client = acquire_download_lock(lock_key)
 
                     if not lock_acquired:
-                        # Another process is downloading, wait and check cache again
-                        logger.info(f"Another process downloading {blob_name}, waiting...")
-                        for _attempt in range(6):  # Wait up to 30 seconds
-                            time.sleep(5)
-                            csv_content = self._load_cached_csv(blob_name)
-                            if csv_content:
-                                logger.info(f"Using cached CSV data after wait: {blob_name}")
-                                break
-
-                        if not csv_content:
-                            logger.warning(
-                                f"Cache still empty after 30s wait, proceeding with download: {blob_name}"
-                            )
+                        # Another process is downloading, wait for completion
+                        csv_content = wait_for_concurrent_download(blob_name, self._load_cached_csv)
 
                     if not csv_content:
-                        # Proceed with download (either we got the lock or fallback after wait)
+                        # Step 4: Download blob data with ETag support
                         if is_current_month:
                             logger.info(
                                 f"Current month detected - checking for updates: {blob_name}"
@@ -482,64 +542,28 @@ class AzureCostProvider(CloudCostProvider):
                             logger.info(f"No cache found - downloading data: {blob_name}")
 
                         container = container_name or self.container_name
+                        if not self.blob_service_client:
+                            raise ValueError("Azure blob service client not authenticated")
                         blob_client = self.blob_service_client.get_blob_client(
                             container=container, blob=blob_name
                         )
 
-                        # For current month, use conditional download if we have cached ETag
-                        etag_cache_path = self._get_csv_cache_path(blob_name) + ".etag"
-                        cached_etag = None
-                        if is_current_month and os.path.exists(etag_cache_path):
-                            try:
-                                with open(etag_cache_path) as f:
-                                    cached_etag = f.read().strip()
-                                logger.info(
-                                    f"Found cached ETag for conditional download: {cached_etag}"
-                                )
-                            except Exception as e:
-                                logger.warning(f"Failed to read cached ETag: {e}")
+                        # Handle ETag conditional download
+                        cached_etag, etag_cache_path = handle_etag_conditional_download(
+                            blob_client, blob_name, is_current_month, self._get_csv_cache_path
+                        )
 
                         logger.info(f"Downloading export data: {blob_name}")
 
                         try:
-                            if cached_etag and is_current_month:
-                                # Get blob properties to check ETag
-                                blob_properties = blob_client.get_blob_properties()
-                                current_etag = blob_properties.etag
-
-                                if current_etag == cached_etag:
-                                    # File hasn't changed, use cached version
-                                    csv_content = self._load_cached_csv(blob_name)
-                                    logger.info(
-                                        f"File unchanged (ETag match), using cached data: {blob_name}"
-                                    )
-                                else:
-                                    # File changed, download new version
-                                    blob_data = blob_client.download_blob()
-                                    csv_content = blob_data.readall().decode("utf-8")
-                                    logger.info(
-                                        f"File changed (ETag: {cached_etag} -> {current_etag}), downloaded fresh: {blob_name}"
-                                    )
-
-                                    # Save new ETag
-                                    with open(etag_cache_path, "w") as f:
-                                        f.write(current_etag)
-                            else:
-                                # No cached ETag or not current month, download normally
-                                blob_data = blob_client.download_blob()
-                                csv_content = blob_data.readall().decode("utf-8")
-
-                                # Save ETag for future conditional downloads (current month only)
-                                if is_current_month:
-                                    try:
-                                        blob_properties = blob_client.get_blob_properties()
-                                        with open(etag_cache_path, "w") as f:
-                                            f.write(blob_properties.etag)
-                                        logger.info(
-                                            f"Saved ETag for future conditional downloads: {blob_properties.etag}"
-                                        )
-                                    except Exception as e:
-                                        logger.warning(f"Failed to save ETag: {e}")
+                            csv_content = download_blob_with_etag_check(
+                                blob_client,
+                                cached_etag,
+                                is_current_month,
+                                blob_name,
+                                etag_cache_path,
+                                self._load_cached_csv,
+                            )
 
                         except Exception as download_error:
                             logger.error(f"Download failed: {download_error}")
@@ -552,7 +576,7 @@ class AzureCostProvider(CloudCostProvider):
                             else:
                                 raise download_error
 
-                        # Cache the downloaded content
+                        # Step 5: Cache the downloaded content
                         if csv_content:
                             self._save_csv_to_cache(blob_name, csv_content)
                             if is_current_month:
@@ -564,19 +588,16 @@ class AzureCostProvider(CloudCostProvider):
                                     f"Cached CSV data for future use: {len(csv_content):,} characters"
                                 )
 
-                    # Release the download lock if we acquired it
-                    if lock_acquired and redis_client:
-                        try:
-                            redis_client.delete(lock_key)
-                            logger.debug(f"Released download lock: {lock_key}")
-                        except Exception as e:
-                            logger.warning(f"Failed to release lock: {e}")
+                    # Step 6: Release download lock
+                    release_download_lock(lock_acquired, redis_client, lock_key)
 
-                except (ImportError, redis.RedisError) as e:
+                except (ImportError, Exception) as e:
                     logger.warning(f"Redis lock failed, proceeding without lock: {e}")
-                    # Continue without locking as fallback - still better than infinite loops
+                    # Continue without locking as fallback
                     if not csv_content:
                         container = container_name or self.container_name
+                        if not self.blob_service_client:
+                            raise ValueError("Azure blob service client not authenticated")
                         blob_client = self.blob_service_client.get_blob_client(
                             container=container, blob=blob_name
                         )
@@ -586,117 +607,8 @@ class AzureCostProvider(CloudCostProvider):
                         self._save_csv_to_cache(blob_name, csv_content)
                         logger.info(f"Cached CSV data: {len(csv_content):,} characters")
 
-            # Parse CSV data
-            csv_reader = csv.DictReader(io.StringIO(csv_content))
-            cost_points = []
-
-            total_rows = 0
-            filtered_rows = 0
-            sample_logged = False
-
-            for row in csv_reader:
-                total_rows += 1
-
-                # Parse the date field - try multiple field names and formats
-                date_str = (
-                    row.get("date")
-                    or row.get("billingPeriodStartDate")
-                    or row.get("servicePeriodStartDate")
-                )
-                if not date_str:
-                    continue
-
-                try:
-                    # Try different date formats
-                    row_date = None
-                    for date_format in ["%m/%d/%Y", "%Y-%m-%d", "%Y%m%d"]:
-                        try:
-                            row_date = datetime.strptime(date_str, date_format).date()
-                            break
-                        except ValueError:
-                            continue
-
-                    if row_date is None:
-                        logger.debug(f"Could not parse date: '{date_str}'")
-                        continue
-                except (ValueError, KeyError) as e:
-                    logger.debug(f"Could not parse date from row: {e}")
-                    continue
-
-                # Filter by target date if specified
-                if target_date and row_date != target_date:
-                    continue
-
-                filtered_rows += 1
-
-                # Parse cost amount - VALIDATED: use costInBillingCurrency for accurate billing
-                #
-                # CRITICAL VALIDATION (Jan 2026): Compared costInBillingCurrency vs paygCostInBillingCurrency
-                # against official Azure Cost Analysis export:
-                # - costInBillingCurrency: EXACT match with Azure official billing (96% accuracy, 20/22 perfect days)
-                # - paygCostInBillingCurrency: 39% higher than official billing (not the billable amount)
-                #
-                # Jan 20, 2026 validation:
-                # - Azure Official: $2,813.35
-                # - costInBillingCurrency: $2,813.35 (EXACT MATCH)
-                # - paygCostInBillingCurrency: $3,894.87 (39% inflated)
-                #
-                # CONCLUSION: costInBillingCurrency represents actual billable amounts
-                try:
-                    cost_amount = float(row.get("costInBillingCurrency", 0))
-                except (ValueError, TypeError):
-                    cost_amount = 0.0
-
-                if cost_amount <= 0:
-                    continue
-
-                # Extract service name and other metadata
-                service_name = row.get("meterCategory", "Unknown")
-                subscription_id = row.get("SubscriptionId", "")
-                subscription_name = row.get("subscriptionName", "")
-                resource_group = row.get("resourceGroupName", "")
-
-                # Extract currency (use billingCurrency since we use costInBillingCurrency)
-                currency = row.get("billingCurrency", "USD")
-                if not currency or currency.strip() == "":
-                    currency = "USD"
-
-                # Format account name as "Subscription Name (Subscription ID)"
-                if subscription_name and subscription_name.strip():
-                    formatted_account_name = f"{subscription_name} ({subscription_id})"
-                else:
-                    formatted_account_name = f"Azure Subscription ({subscription_id})"
-
-                cost_points.append(
-                    CostDataPoint(
-                        date=row_date,
-                        amount=cost_amount,
-                        currency=currency,
-                        service_name=service_name,
-                        account_id=subscription_id,
-                        account_name=formatted_account_name,
-                        region=row.get("location", ""),
-                        resource_id=row.get("resourceGroupName", ""),
-                        tags={
-                            "subscription_name": subscription_name,
-                            "resource_group": resource_group,
-                            "product_name": row.get("ProductName", ""),
-                            "meter_name": row.get("meterName", ""),
-                        },
-                    )
-                )
-
-                # Log first few cost points for debugging
-                if not sample_logged and len(cost_points) <= 3:
-                    logger.info(
-                        f"Sample cost point {len(cost_points)}: {row_date} - {service_name} - {currency} {cost_amount:.6f}"
-                    )
-                    if len(cost_points) == 3:
-                        sample_logged = True
-
-            logger.info(
-                f"Processed {total_rows} total rows, {filtered_rows} matching date filter, {len(cost_points)} with costs"
-            )
+            # Step 7: Parse CSV data using service function
+            cost_points = parse_csv_content_to_cost_points(csv_content, target_date)
             return cost_points
 
         except Exception as e:
@@ -812,6 +724,8 @@ class AzureCostProvider(CloudCostProvider):
             await self.ensure_authenticated()
 
             # Try to list containers to verify access
+            if not self.blob_service_client:
+                raise ValueError("Azure blob service client not authenticated")
             list(self.blob_service_client.list_containers())
             logger.info("Azure blob storage connection successful")
             return True
@@ -847,7 +761,7 @@ class AzureCostProvider(CloudCostProvider):
     ) -> dict[str, float]:
         """Get cost breakdown by service for the specified period."""
         cost_summary = await self.get_cost_data(start_date, end_date)
-        service_costs = {}
+        service_costs: dict[str, float] = {}
         for point in cost_summary.data_points:
             service = point.service_name or "Unknown"
             service_costs[service] = service_costs.get(service, 0.0) + point.amount

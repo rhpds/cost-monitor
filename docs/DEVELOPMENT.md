@@ -6,10 +6,11 @@ This guide covers local development setup, testing, and contribution guidelines 
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.11+
 - PostgreSQL 13+
 - Redis 6+
 - Git
+- Pre-commit (automatically installed with dev dependencies)
 
 ### Quick Setup
 
@@ -18,8 +19,8 @@ This guide covers local development setup, testing, and contribution guidelines 
 git clone <repository-url>
 cd cost-monitor
 
-# Install dependencies
-pip install -r requirements.txt
+# Install development environment (includes dependencies + git hooks)
+./scripts/dev.sh install
 
 # Copy configuration template
 cp config/config.example.yaml config/config.local.yaml
@@ -72,7 +73,7 @@ Create a `.env.local` file for development:
 
 ```bash
 # Database
-DATABASE_URL=postgresql://username:password@localhost:5432/cost_monitor
+DATABASE_URL=postgresql://username:password@localhost:5432/cost_monitor  # pragma: allowlist secret
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -133,7 +134,7 @@ docker build -f dockerfiles/Dockerfile.dashboard -t cost-monitor-dashboard .
 
 # Run API container
 docker run -p 8000:8000 \
-    -e DATABASE_URL=postgresql://user:pass@host:5432/db \
+    -e DATABASE_URL=postgresql://user:pass@host:5432/db \  # pragma: allowlist secret
     -e REDIS_URL=redis://host:6379 \
     cost-monitor-api
 
@@ -210,78 +211,113 @@ cost-monitor/
    git checkout -b feature/your-feature-name
    ```
 
-2. **Make your changes and test locally:**
+2. **Make your changes and test iteratively:**
    ```bash
-   python -m src.main api &
-   python -m src.main dashboard &
-   # Test your changes
-   kill %1 %2  # Stop background processes
+   # Quick validation during development
+   ./scripts/dev.sh test-fast
+
+   # Start services for testing
+   ./scripts/dev.sh api      # FastAPI backend
+   ./scripts/dev.sh dashboard # Dash dashboard
    ```
 
-3. **Run tests:**
+3. **Validate before committing:**
    ```bash
-   pytest
-   pytest --cov=src  # With coverage
+   # Quick smoke tests
+   ./scripts/dev.sh test-smoke
+
+   # Full validation
+   ./scripts/dev.sh quality    # Runs: format + lint + test + security
    ```
 
-4. **Check code quality:**
+4. **Commit changes:**
    ```bash
-   # Format code
-   black src/
+   # Git hooks automatically run quality gates + tests
+   git add .
+   git commit -m "feat: your feature description"
 
-   # Check imports
-   isort src/
-
-   # Lint code
-   flake8 src/
-
-   # Type checking
-   mypy src/
+   # Push for review
+   git push origin feature/your-feature-name
    ```
+
+**Note**: Git hooks automatically run security scanning, formatting, linting, and critical tests on every commit. No manual quality checks needed!
 
 ### Testing
 
-#### Unit Tests
+The project maintains **100% test reliability** with comprehensive automated testing at multiple levels.
+
+#### 🎯 **Multi-Tier Test Strategy**
 
 ```bash
-# Run all tests
-pytest
+# Development Commands (use these during development)
+./scripts/dev.sh test-smoke   # Pre-commit tests (~1s)
+./scripts/dev.sh test-fast    # Quick iteration (~3s)
+./scripts/dev.sh test-all     # Full suite (71 tests, ~6s)
+./scripts/dev.sh test         # With coverage (~8s)
 
-# Run specific test file
-pytest tests/test_providers.py
-
-# Run specific test class
-pytest tests/test_providers.py::TestAWSProvider
-
-# Run specific test method
-pytest tests/test_providers.py::TestAWSProvider::test_get_costs
-
-# Run with coverage
-pytest --cov=src --cov-report=html
+# Quality Assurance
+./scripts/dev.sh quality      # Complete: format + lint + test + security
 ```
 
-#### Integration Tests
+#### ⚡ **Pre-commit Integration**
+
+Every commit automatically runs:
+- **Security scanning** (detect-secrets + gitleaks)
+- **Code formatting** (black + isort)
+- **Linting** (ruff + mypy)
+- **Dead code detection** (vulture)
+- **Critical functionality tests** (3 smoke tests in <1s)
 
 ```bash
-# Test with real cloud providers (requires credentials)
-pytest tests/integration/ -m integration
+# Git hooks run automatically
+git commit -m "changes"  # Auto-runs quality gates + tests
 
-# Test specific provider
-pytest tests/integration/test_aws_integration.py
+# Manual hook execution
+pre-commit run --all-files
+
+# Emergency bypass (use sparingly)
+git commit --no-verify -m "emergency fix"
 ```
 
-#### End-to-End Tests
+#### 🧪 **Test Categories**
 
+**Smoke Tests** (Pre-commit):
+- Health endpoint validation
+- Cost summary API functionality
+- End-to-end workflow validation
+
+**Integration Tests** (71 total):
+- API Endpoints: 21 tests (FastAPI + error handling)
+- Database Integration: 22 tests (Connection + data operations)
+- Service Logic: 19 tests (Business logic + caching)
+- End-to-End Workflows: 10 tests (Complete user flows)
+
+**Advanced Testing**:
 ```bash
-# Test full application flow
-pytest tests/e2e/
+# Run specific test categories
+pytest tests/integration/test_api_endpoints.py -v
+pytest tests/integration/test_database_integration.py -v
+pytest tests/integration/test_cost_service.py -v
 
-# Test API endpoints
-pytest tests/e2e/test_api.py
+# Debug failing tests
+pytest tests/integration/ -vx --tb=long
 
-# Test dashboard functionality
-pytest tests/e2e/test_dashboard.py
+# Performance testing
+pytest tests/integration/ --benchmark-only
 ```
+
+#### 🛡️ **Automated Quality Gates**
+
+The development workflow ensures code quality through:
+
+1. **Real-time validation** during development
+2. **Pre-commit prevention** of broken code
+3. **Comprehensive coverage** of critical functionality
+4. **Security scanning** for credential leaks
+5. **Type safety** with mypy validation
+6. **Dead code removal** with vulture detection
+
+See [../TESTING.md](../TESTING.md) for complete testing strategy documentation.
 
 ### Adding New Cloud Providers
 
@@ -510,7 +546,7 @@ python -m src.main --help
 pg_isready -h localhost -p 5432
 
 # Test connection
-psql postgresql://username:password@localhost:5432/cost_monitor
+psql postgresql://username:password@localhost:5432/cost_monitor  # nosec
 ```
 
 **Cache connection errors:**

@@ -73,7 +73,7 @@ class MemoryCache(CacheBackend):
         self.max_size = max_size
         self.default_ttl = default_ttl
         self._cache: dict[str, dict[str, Any]] = {}
-        self._access_order = []  # Track access order for better LRU eviction
+        self._access_order: list[str] = []  # Track access order for better LRU eviction
 
     def _cleanup_expired(self):
         """Remove expired entries from cache."""
@@ -228,7 +228,8 @@ class DiskCache(CacheBackend):
         """Set a value in the cache with optional TTL."""
         try:
             ttl = ttl or self.default_ttl
-            return self._cache.set(key, value, expire=ttl)
+            result = self._cache.set(key, value, expire=ttl)
+            return bool(result)
         except Exception as e:
             logger.error(f"Failed to set cache entry {key}: {e}")
             return False
@@ -236,7 +237,8 @@ class DiskCache(CacheBackend):
     def delete(self, key: str) -> bool:
         """Delete a key from the cache."""
         try:
-            return self._cache.delete(key)
+            result = self._cache.delete(key)
+            return bool(result)
         except Exception as e:
             logger.error(f"Failed to delete cache entry {key}: {e}")
             return False
@@ -285,7 +287,7 @@ class RedisCache(CacheBackend):
     """Redis-based cache backend with TTL support."""
 
     def __init__(
-        self, redis_url: str = None, default_ttl: int = 1800, prefix: str = "cost-monitor:"
+        self, redis_url: str | None = None, default_ttl: int = 1800, prefix: str = "cost-monitor:"
     ):
         """
         Initialize Redis cache.
@@ -326,6 +328,8 @@ class RedisCache(CacheBackend):
     def get(self, key: str) -> Any | None:
         """Get a value from the cache."""
         try:
+            if self._client is None:
+                return None
             prefixed_key = self._get_key(key)
             cached = self._client.get(prefixed_key)
             if cached:
@@ -338,6 +342,8 @@ class RedisCache(CacheBackend):
     def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Set a value in the cache with optional TTL."""
         try:
+            if self._client is None:
+                return False
             prefixed_key = self._get_key(key)
             ttl = ttl or self.default_ttl
             serialized = json.dumps(value, default=str)
@@ -356,9 +362,11 @@ class RedisCache(CacheBackend):
     def delete(self, key: str) -> bool:
         """Delete a key from the cache."""
         try:
+            if self._client is None:
+                return False
             prefixed_key = self._get_key(key)
             result = self._client.delete(prefixed_key)
-            return result > 0
+            return bool(result > 0)
         except Exception as e:
             logger.warning(f"Redis delete failed for key '{key}': {e}")
             return False
@@ -366,6 +374,8 @@ class RedisCache(CacheBackend):
     def clear(self) -> bool:
         """Clear all entries from the cache with our prefix."""
         try:
+            if self._client is None:
+                return False
             # Find all keys with our prefix
             pattern = f"{self.prefix}*"
             keys = self._client.keys(pattern)
@@ -380,6 +390,8 @@ class RedisCache(CacheBackend):
     def size(self) -> int:
         """Get the current size of the cache."""
         try:
+            if self._client is None:
+                return 0
             pattern = f"{self.prefix}*"
             keys = self._client.keys(pattern)
             return len(keys)
@@ -390,6 +402,8 @@ class RedisCache(CacheBackend):
     def keys(self) -> list:
         """Get all keys in the cache."""
         try:
+            if self._client is None:
+                return []
             pattern = f"{self.prefix}*"
             prefixed_keys = self._client.keys(pattern)
             # Remove prefix from keys for consistent interface
@@ -401,6 +415,8 @@ class RedisCache(CacheBackend):
     def info(self) -> dict[str, Any]:
         """Get cache backend information."""
         try:
+            if self._client is None:
+                return {"type": "redis", "status": "not connected"}
             redis_info = self._client.info("memory")
             return {
                 "type": "redis",
@@ -419,9 +435,28 @@ class RedisCache(CacheBackend):
                 "error": str(e),
             }
 
+    def stats(self) -> dict[str, Any]:
+        """Get Redis cache statistics."""
+        if self._client is None:
+            return {"type": "redis", "status": "not connected"}
+
+        try:
+            redis_info = self._client.info()
+            return {
+                "type": "redis",
+                "connected": True,
+                "memory_used": redis_info.get("used_memory_human", "unknown"),
+                "total_keys": self._client.dbsize(),
+                "redis_version": redis_info.get("redis_version", "unknown"),
+            }
+        except Exception as e:
+            return {"type": "redis", "error": str(e)}
+
 
 class CacheManager:
     """High-level cache manager with multiple backends and strategies."""
+
+    _backend: MemoryCache | DiskCache | RedisCache | None
 
     def __init__(self, config: dict[str, Any]):
         """
@@ -545,7 +580,7 @@ class CacheManager:
 
         try:
             keys_to_delete = []
-            for key in self._backend:
+            for key in self._backend.keys():
                 # This is a simplified approach - in practice, you might want to
                 # store provider info in the key more explicitly
                 if provider in key:
@@ -710,7 +745,7 @@ class SmartCacheStrategy:
 _global_cache_manager = None
 
 
-def get_cache_manager(config: dict[str, Any] | None = None) -> CacheManager:
+def get_cache_manager(config: dict[str, Any] | None = None) -> CacheManager | None:
     """Get global cache manager instance."""
     global _global_cache_manager
 

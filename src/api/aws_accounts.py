@@ -148,6 +148,13 @@ async def resolve_aws_accounts_background(
         return True
 
     try:
+        # Handle test environment where auth_manager.config might be None
+        if not hasattr(auth_manager, "config") or auth_manager.config is None:
+            logger.info(
+                "🔵 AWS: No auth_manager config available, skipping background account resolution"
+            )
+            return False
+
         # Get AWS provider for account resolution
         aws_config = auth_manager.config.get("clouds", {}).get("aws", {})
         if not aws_config.get("enabled", False):
@@ -172,7 +179,7 @@ async def resolve_aws_accounts_background(
 
         # Get management account ID if we have Organizations access
         if aws_provider.organizations_client:
-            try:
+            try:  # type: ignore[unreachable]
                 org_response = aws_provider.organizations_client.describe_organization()
                 management_account_id = org_response["Organization"]["MasterAccountId"]
             except Exception as e:

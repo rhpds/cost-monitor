@@ -15,19 +15,19 @@ The cost monitor now exports metrics in Prometheus format that can be:
 
 ```bash
 # Option 1: Push to Pushgateway (recommended for batch processing)
-cost-monitor export-prometheus --pushgateway-url http://prometheus-pushgateway:9091
+python -m src.main export-prometheus --pushgateway-url http://prometheus-pushgateway:9091
 
 # Option 2: Save to file for scraping
-cost-monitor export-prometheus --output /var/lib/prometheus/cost-metrics.prom
+python -m src.main export-prometheus --output /var/lib/prometheus/cost-metrics.prom
 
 # Option 3: Print to stdout for debugging
-cost-monitor export-prometheus
+python -m src.main export-prometheus
 ```
 
 ### 2. Set Up Rundeck Batch Job
 
 **Job Configuration:**
-- **Command**: `cost-monitor export-prometheus --pushgateway-url http://your-pushgateway:9091`
+- **Command**: `python -m src.main export-prometheus --pushgateway-url http://your-pushgateway:9091`
 - **Schedule**: `*/15 * * * *` (every 15 minutes)
 - **Timeout**: 5 minutes
 - **Retry**: Once after 2 minutes
@@ -46,7 +46,7 @@ cost-monitor export-prometheus
     </schedule>
     <sequence>
       <command>
-        <exec>cost-monitor export-prometheus --pushgateway-url http://prometheus-pushgateway:9091</exec>
+        <exec>python -m src.main export-prometheus --pushgateway-url http://prometheus-pushgateway:9091</exec>
       </command>
     </sequence>
     <timeout>PT5M</timeout>
@@ -185,17 +185,17 @@ groups:
 
 3. **Missing metrics**:
    - Verify cloud providers are configured and enabled
-   - Check authentication: `cost-monitor test-auth`
+   - Check authentication: `python -m src.main test-auth`
    - Review export command parameters
 
 ### Validation Commands
 
 ```bash
 # Test cloud authentication
-cost-monitor test-auth
+python -m src.main test-auth
 
 # Test metric export
-cost-monitor export-prometheus --days 1
+python -m src.main export-prometheus --days 1
 
 # Check pushgateway
 curl http://pushgateway:9091/metrics | grep cloud_cost

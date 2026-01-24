@@ -103,19 +103,22 @@ class CloudConfig:
     @property
     def aws(self) -> dict[str, Any]:
         """AWS configuration settings."""
-        return self.settings.get("clouds.aws", {})
+        result: dict[str, Any] = self.settings.get("clouds.aws", {})
+        return result
 
     @property
     def azure(self) -> dict[str, Any]:
         """Azure configuration settings."""
-        return self.settings.get("clouds.azure", {})
+        result: dict[str, Any] = self.settings.get("clouds.azure", {})
+        return result
 
     @property
     def gcp(self) -> dict[str, Any]:
         """GCP configuration settings."""
         # Ensure environment variables are loaded for GCP
         self._load_gcp_environment_variables()
-        return self.settings.get("clouds.gcp", {})
+        result: dict[str, Any] = self.settings.get("clouds.gcp", {})
+        return result
 
     @property
     def enabled_providers(self) -> list[str]:
@@ -132,17 +135,20 @@ class CloudConfig:
     @property
     def monitoring(self) -> dict[str, Any]:
         """Monitoring and alerting configuration."""
-        return self.settings.get("monitoring", {})
+        result: dict[str, Any] = self.settings.get("monitoring", {})
+        return result
 
     @property
     def dashboard(self) -> dict[str, Any]:
         """Dashboard configuration."""
-        return self.settings.get("dashboard", {})
+        result: dict[str, Any] = self.settings.get("dashboard", {})
+        return result
 
     @property
     def cache(self) -> dict[str, Any]:
         """Cache configuration."""
-        return self.settings.get("cache", {})
+        result: dict[str, Any] = self.settings.get("cache", {})
+        return result
 
     def get_provider_config(self, provider: str) -> dict[str, Any]:
         """Get configuration for a specific cloud provider."""
@@ -181,10 +187,10 @@ class CloudConfig:
 
     def get_icinga_config(self, provider: str | None = None) -> dict[str, Any]:
         """Get Icinga-specific configuration."""
-        base_config = self.monitoring.get("icinga", {})
+        base_config: dict[str, Any] = self.monitoring.get("icinga", {})
 
         if provider:
-            provider_config = self.get_provider_config(provider).get("icinga", {})
+            provider_config: dict[str, Any] = self.get_provider_config(provider).get("icinga", {})
             # Merge provider-specific config over base config
             return {**base_config, **provider_config}
 

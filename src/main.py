@@ -25,7 +25,7 @@ from .monitoring.text_alerts import AlertFormatConfig, OutputFormat, TextAlertNo
 from .providers.base import ProviderFactory
 from .utils.auth import MultiCloudAuthManager
 from .utils.data_normalizer import CostDataNormalizer
-from .visualization.dashboard import DASH_AVAILABLE, CostMonitorDashboard
+from .visualization.dashboard.core import DASH_AVAILABLE, CostMonitorDashboard
 
 # Set up logging
 logging.basicConfig(
@@ -113,6 +113,86 @@ def cli(ctx, config, verbose):
     default="colored",
     help="Output format",
 )
+async def _authenticate_providers_for_check(config, providers_to_check):
+    """Authenticate providers and return successfully authenticated ones."""
+    auth_manager = MultiCloudAuthManager()
+    authenticated_providers = {}
+
+    for provider_name in providers_to_check:
+        if not config.is_provider_enabled(provider_name):
+            continue
+
+        provider_config = config.get_provider_config(provider_name)
+        try:
+            provider_instance = ProviderFactory.create_provider(provider_name, provider_config)
+            auth_result = await auth_manager.authenticate_provider(provider_name, provider_config)
+
+            if auth_result.success:
+                authenticated_providers[provider_name] = provider_instance
+            else:
+                click.echo(
+                    f"Failed to authenticate {provider_name}: {auth_result.error_message}", err=True
+                )
+
+        except Exception as e:
+            click.echo(f"Error setting up {provider_name}: {e}", err=True)
+
+    return authenticated_providers
+
+
+async def _gather_cost_data_for_check(authenticated_providers, check_date):
+    """Gather cost data from all authenticated providers."""
+    provider_costs = {}
+    total_cost = 0.0
+
+    for provider_name, provider_instance in authenticated_providers.items():
+        try:
+            cost_summary = await provider_instance.get_cost_data(check_date, check_date)
+            provider_costs[provider_name] = cost_summary.total_cost
+            total_cost += cost_summary.total_cost
+        except Exception as e:
+            click.echo(f"Error getting cost data for {provider_name}: {e}", err=True)
+
+    return provider_costs, total_cost
+
+
+def _display_check_json_results(check_date, total_cost, provider_costs, alerts):
+    """Display check results in JSON format."""
+    import json
+
+    result = {
+        "date": check_date.isoformat(),
+        "total_cost": total_cost,
+        "provider_costs": provider_costs,
+        "alerts": [alert.to_dict() for alert in alerts],
+        "status": "ok" if not alerts else "alert",
+    }
+    click.echo(json.dumps(result, indent=2))
+
+
+def _display_check_text_results(notifier, provider_costs, config, alerts, output_format):
+    """Display check results in text format."""
+    # Show cost status
+    notifier.display_cost_status(
+        provider_costs,
+        {
+            p: {
+                "warning": config.get_threshold("warning", p),
+                "critical": config.get_threshold("critical", p),
+            }
+            for p in provider_costs
+        },
+    )
+
+    # Show alerts if any
+    if alerts:
+        click.echo("\n")
+        format_type = OutputFormat(output_format)
+        notifier.notify_multiple(alerts, format_type, include_summary=True)
+    else:
+        click.echo("\n✅ All costs within thresholds")
+
+
 @click.pass_context
 def check(ctx, provider, warning, critical, date, output_format):
     """Check current costs against thresholds."""
@@ -124,101 +204,34 @@ def check(ctx, provider, warning, critical, date, output_format):
         check_date = date.date() if date else date_class.today()
 
         # Set up components
-        auth_manager = MultiCloudAuthManager()
         threshold_monitor = ThresholdMonitor(config)
-
-        # Configure alert formatter
         format_config = AlertFormatConfig(
             use_colors=(output_format == "colored"), show_details=True, include_metadata=True
         )
         notifier = TextAlertNotifier(format_config=format_config)
 
         try:
-            # Determine providers to check
+            # Determine and authenticate providers
             providers_to_check = [provider] if provider != "all" else config.enabled_providers
-
-            # Authenticate providers
-            authenticated_providers = {}
-            for provider_name in providers_to_check:
-                if not config.is_provider_enabled(provider_name):
-                    continue
-
-                provider_config = config.get_provider_config(provider_name)
-                try:
-                    provider_instance = ProviderFactory.create_provider(
-                        provider_name, provider_config
-                    )
-                    auth_result = await auth_manager.authenticate_provider(
-                        provider_name, provider_config
-                    )
-
-                    if auth_result.success:
-                        authenticated_providers[provider_name] = provider_instance
-                    else:
-                        click.echo(
-                            f"Failed to authenticate {provider_name}: {auth_result.error_message}",
-                            err=True,
-                        )
-
-                except Exception as e:
-                    click.echo(f"Error setting up {provider_name}: {e}", err=True)
+            authenticated_providers = await _authenticate_providers_for_check(
+                config, providers_to_check
+            )
 
             if not authenticated_providers:
                 click.echo("No authenticated providers available", err=True)
                 return
 
-            # Override thresholds if specified
-            if warning or critical:
-                # TODO: Implement threshold override in threshold monitor
-                pass
-
-            # Check thresholds
+            # Check thresholds and gather cost data
             alerts = await threshold_monitor.check_thresholds(authenticated_providers, check_date)
+            provider_costs, total_cost = await _gather_cost_data_for_check(
+                authenticated_providers, check_date
+            )
 
-            # Get cost data for display
-            provider_costs = {}
-            total_cost = 0.0
-
-            for provider_name, provider_instance in authenticated_providers.items():
-                try:
-                    cost_summary = await provider_instance.get_cost_data(check_date, check_date)
-                    provider_costs[provider_name] = cost_summary.total_cost
-                    total_cost += cost_summary.total_cost
-                except Exception as e:
-                    click.echo(f"Error getting cost data for {provider_name}: {e}", err=True)
-
-            # Display results
+            # Display results based on format
             if output_format == "json":
-                import json
-
-                result = {
-                    "date": check_date.isoformat(),
-                    "total_cost": total_cost,
-                    "provider_costs": provider_costs,
-                    "alerts": [alert.to_dict() for alert in alerts],
-                    "status": "ok" if not alerts else "alert",
-                }
-                click.echo(json.dumps(result, indent=2))
+                _display_check_json_results(check_date, total_cost, provider_costs, alerts)
             else:
-                # Show cost status
-                notifier.display_cost_status(
-                    provider_costs,
-                    {
-                        p: {
-                            "warning": config.get_threshold("warning", p),
-                            "critical": config.get_threshold("critical", p),
-                        }
-                        for p in provider_costs
-                    },
-                )
-
-                # Show alerts if any
-                if alerts:
-                    click.echo("\n")
-                    format_type = OutputFormat(output_format)
-                    notifier.notify_multiple(alerts, format_type, include_summary=True)
-                else:
-                    click.echo("\n✅ All costs within thresholds")
+                _display_check_text_results(notifier, provider_costs, config, alerts, output_format)
 
         except Exception as e:
             click.echo(f"Check failed: {e}", err=True)
@@ -266,6 +279,136 @@ def check(ctx, provider, warning, critical, date, output_format):
     multiple=True,
     help="Group by dimensions (e.g. SERVICE, LINKED_ACCOUNT for AWS; SERVICE, SUBSCRIPTION_ID for Azure; SERVICE, PROJECT for GCP). Can be specified multiple times.",
 )
+async def _authenticate_providers_for_costs(config, providers_to_query):
+    """Authenticate providers for cost data retrieval."""
+    auth_manager = MultiCloudAuthManager()
+    authenticated_providers = {}
+
+    for provider_name in providers_to_query:
+        if not config.is_provider_enabled(provider_name):
+            continue
+
+        provider_config = config.get_provider_config(provider_name)
+        try:
+            provider_instance = ProviderFactory.create_provider(provider_name, provider_config)
+            auth_result = await auth_manager.authenticate_provider(provider_name, provider_config)
+
+            if auth_result.success:
+                authenticated_providers[provider_name] = provider_instance
+        except Exception as e:
+            click.echo(f"Error getting costs for {provider_name}: {e}", err=True)
+
+    return authenticated_providers
+
+
+async def _collect_cost_data(authenticated_providers, start, end, granularity, group_by):
+    """Collect cost data from authenticated providers."""
+    from .providers.base import TimeGranularity
+
+    cost_summaries = []
+    granularity_enum = TimeGranularity.DAILY if granularity == "daily" else TimeGranularity.MONTHLY
+    group_by_list = [g.strip().upper() for g in group_by if g.strip()] if group_by else None
+
+    for provider_name, provider_instance in authenticated_providers.items():
+        try:
+            cost_summary = await provider_instance.get_cost_data(
+                start, end, granularity_enum, group_by=group_by_list
+            )
+            cost_summaries.append(cost_summary)
+        except Exception as e:
+            click.echo(f"Error getting costs for {provider_name}: {e}", err=True)
+
+    return cost_summaries
+
+
+def _display_service_breakdown(data, top_services, provider):
+    """Display service breakdown in table format."""
+    if top_services and "combined_service_breakdown" in data and data["combined_service_breakdown"]:
+        # Multi-provider service breakdown
+        provider_context = ""
+        if (
+            provider == "all"
+            and "provider_breakdown" in data
+            and len([p for p, c in data["provider_breakdown"].items() if c > 0]) > 1
+        ):
+            provider_context = " (All Providers)"
+        elif provider != "all":
+            provider_context = f" ({provider.upper()})"
+
+        click.echo(f"\nTop Services by Cost{provider_context}:")
+        sorted_services = sorted(
+            data["combined_service_breakdown"].items(), key=lambda x: x[1], reverse=True
+        )[:10]
+        for service, cost in sorted_services:
+            click.echo(f"  {service}: {cost:.2f} {data['currency']}")
+
+    elif top_services and "service_breakdown" in data and data["service_breakdown"]:
+        # Single-provider service breakdown
+        provider_context = f" ({provider.upper()})" if provider != "all" else ""
+        click.echo(f"\nTop Services by Cost{provider_context}:")
+        sorted_services = sorted(
+            data["service_breakdown"].items(), key=lambda x: x[1], reverse=True
+        )[:10]
+        for service, cost in sorted_services:
+            click.echo(f"  {service}: {cost:.2f} {data['currency']}")
+
+
+def _display_account_breakdown(data, group_by, cost_summaries):
+    """Display account breakdown in table format."""
+    if not (group_by and "LINKED_ACCOUNT" in [g.upper() for g in group_by]):
+        return
+
+    # Multi-provider account breakdown
+    if "combined_account_breakdown" in data and data["combined_account_breakdown"]:
+        click.echo("\nTop Accounts by Cost:")
+        sorted_accounts = sorted(
+            data["combined_account_breakdown"].items(),
+            key=lambda x: x[1].get("total_cost", 0),
+            reverse=True,
+        )[:15]
+
+        for i, (account_key, account_data) in enumerate(sorted_accounts, 1):
+            account_name = account_data.get("account_name", account_key.split(":")[-1])
+            cost = account_data.get("total_cost", 0)
+            percentage = (cost / data["total_cost"]) * 100 if data["total_cost"] > 0 else 0
+            click.echo(
+                f"  {i:2d}. {account_name}: {cost:.2f} {data['currency']} ({percentage:.1f}%)"
+            )
+
+    # Single provider account breakdown
+    elif cost_summaries and len(cost_summaries) == 1:
+        account_totals = {}
+        for point in cost_summaries[0].data_points:
+            if point.account_id:
+                account_totals[point.account_id] = (
+                    account_totals.get(point.account_id, 0) + point.amount
+                )
+
+        if account_totals:
+            click.echo("\nTop Accounts by Cost:")
+            sorted_accounts = sorted(account_totals.items(), key=lambda x: x[1], reverse=True)[:15]
+            for i, (account_id, cost) in enumerate(sorted_accounts, 1):
+                percentage = (cost / data["total_cost"]) * 100 if data["total_cost"] > 0 else 0
+                click.echo(
+                    f"  {i:2d}. Account {account_id}: {cost:.2f} {data['currency']} ({percentage:.1f}%)"
+                )
+
+
+def _display_cost_table(data, start, end, top_services, provider, group_by, cost_summaries):
+    """Display cost data in table format."""
+    click.echo(f"\nCost Summary ({start} to {end})")
+    click.echo("=" * 50)
+    click.echo(f"Total Cost: {data['total_cost']:.2f} {data['currency']}")
+
+    if "provider_breakdown" in data:
+        click.echo("\nProvider Breakdown:")
+        for provider_name, cost in data["provider_breakdown"].items():
+            click.echo(f"  {provider_name.upper()}: {cost:.2f} {data['currency']}")
+
+    _display_service_breakdown(data, top_services, provider)
+    _display_account_breakdown(data, group_by, cost_summaries)
+
+
 @click.pass_context
 def costs(
     ctx,
@@ -285,57 +428,25 @@ def costs(
         start = start_date.date() if start_date else date.today() - timedelta(days=7)
         end = end_date.date() if end_date else date.today()
 
-        # Set up components
-        auth_manager = MultiCloudAuthManager()
         normalizer = CostDataNormalizer(target_currency=currency)
 
         try:
             # Determine providers to query
             providers_to_query = [provider] if provider != "all" else config.enabled_providers
 
-            # Authenticate and collect cost data
-            cost_summaries = []
-
-            for provider_name in providers_to_query:
-                if not config.is_provider_enabled(provider_name):
-                    continue
-
-                provider_config = config.get_provider_config(provider_name)
-                try:
-                    provider_instance = ProviderFactory.create_provider(
-                        provider_name, provider_config
-                    )
-                    auth_result = await auth_manager.authenticate_provider(
-                        provider_name, provider_config
-                    )
-
-                    if auth_result.success:
-                        from .providers.base import TimeGranularity
-
-                        granularity_enum = (
-                            TimeGranularity.DAILY
-                            if granularity == "daily"
-                            else TimeGranularity.MONTHLY
-                        )
-
-                        # Convert group_by tuple to list and filter empty values
-                        group_by_list = (
-                            [g.strip().upper() for g in group_by if g.strip()] if group_by else None
-                        )
-
-                        cost_summary = await provider_instance.get_cost_data(
-                            start, end, granularity_enum, group_by=group_by_list
-                        )
-                        cost_summaries.append(cost_summary)
-
-                except Exception as e:
-                    click.echo(f"Error getting costs for {provider_name}: {e}", err=True)
+            # Authenticate providers and collect cost data
+            authenticated_providers = await _authenticate_providers_for_costs(
+                config, providers_to_query
+            )
+            cost_summaries = await _collect_cost_data(
+                authenticated_providers, start, end, granularity, group_by
+            )
 
             if not cost_summaries:
                 click.echo("No cost data available", err=True)
                 return
 
-            # Normalize and display data
+            # Normalize data
             if len(cost_summaries) > 1:
                 multi_cloud_summary = normalizer.aggregate_multi_cloud_data(cost_summaries)
                 data = multi_cloud_summary.to_dict()
@@ -343,105 +454,17 @@ def costs(
                 normalized_data = normalizer.normalize_cost_summary(cost_summaries[0])
                 data = normalized_data.to_dict()
 
+            # Display results based on output format
             if output_format == "json":
                 import json
 
                 click.echo(json.dumps(data, indent=2))
             elif output_format == "csv":
-                # TODO: Implement CSV output
                 click.echo("CSV output not yet implemented")
             else:
-                # Table format
-                click.echo(f"\nCost Summary ({start} to {end})")
-                click.echo("=" * 50)
-                click.echo(f"Total Cost: {data['total_cost']:.2f} {data['currency']}")
-
-                if "provider_breakdown" in data:
-                    click.echo("\nProvider Breakdown:")
-                    for provider_name, cost in data["provider_breakdown"].items():
-                        click.echo(f"  {provider_name.upper()}: {cost:.2f} {data['currency']}")
-
-                # Only show service breakdown if requested
-                if (
-                    top_services
-                    and "combined_service_breakdown" in data
-                    and data["combined_service_breakdown"]
-                ):
-                    # Determine if this is multi-provider or single provider data
-                    provider_context = ""
-                    if (
-                        provider == "all"
-                        and "provider_breakdown" in data
-                        and len([p for p, c in data["provider_breakdown"].items() if c > 0]) > 1
-                    ):
-                        provider_context = " (All Providers)"
-                    elif provider != "all":
-                        provider_context = f" ({provider.upper()})"
-
-                    click.echo(f"\nTop Services by Cost{provider_context}:")
-                    sorted_services = sorted(
-                        data["combined_service_breakdown"].items(), key=lambda x: x[1], reverse=True
-                    )[:10]
-                    for service, cost in sorted_services:
-                        click.echo(f"  {service}: {cost:.2f} {data['currency']}")
-
-                # Also check for single-provider service breakdown
-                elif top_services and "service_breakdown" in data and data["service_breakdown"]:
-                    provider_context = f" ({provider.upper()})" if provider != "all" else ""
-                    click.echo(f"\nTop Services by Cost{provider_context}:")
-                    sorted_services = sorted(
-                        data["service_breakdown"].items(), key=lambda x: x[1], reverse=True
-                    )[:10]
-                    for service, cost in sorted_services:
-                        click.echo(f"  {service}: {cost:.2f} {data['currency']}")
-
-                # Show account breakdown if LINKED_ACCOUNT grouping is used
-                if group_by and "LINKED_ACCOUNT" in [g.upper() for g in group_by]:
-                    # Check for combined account breakdown (multi-provider)
-                    if "combined_account_breakdown" in data and data["combined_account_breakdown"]:
-                        click.echo("\nTop Accounts by Cost:")
-                        sorted_accounts = sorted(
-                            data["combined_account_breakdown"].items(),
-                            key=lambda x: x[1].get("total_cost", 0),
-                            reverse=True,
-                        )[
-                            :15
-                        ]  # Show top 15 accounts
-                        for i, (account_key, account_data) in enumerate(sorted_accounts, 1):
-                            account_name = account_data.get(
-                                "account_name", account_key.split(":")[-1]
-                            )
-                            cost = account_data.get("total_cost", 0)
-                            percentage = (
-                                (cost / data["total_cost"]) * 100 if data["total_cost"] > 0 else 0
-                            )
-                            click.echo(
-                                f"  {i:2d}. {account_name}: {cost:.2f} {data['currency']} ({percentage:.1f}%)"
-                            )
-                    else:
-                        # For single provider, try to build account breakdown from data points
-                        if cost_summaries and len(cost_summaries) == 1:
-                            account_totals = {}
-                            for point in cost_summaries[0].data_points:
-                                if point.account_id:
-                                    account_totals[point.account_id] = (
-                                        account_totals.get(point.account_id, 0) + point.amount
-                                    )
-
-                            if account_totals:
-                                click.echo("\nTop Accounts by Cost:")
-                                sorted_accounts = sorted(
-                                    account_totals.items(), key=lambda x: x[1], reverse=True
-                                )[:15]
-                                for i, (account_id, cost) in enumerate(sorted_accounts, 1):
-                                    percentage = (
-                                        (cost / data["total_cost"]) * 100
-                                        if data["total_cost"] > 0
-                                        else 0
-                                    )
-                                    click.echo(
-                                        f"  {i:2d}. Account {account_id}: {cost:.2f} {data['currency']} ({percentage:.1f}%)"
-                                    )
+                _display_cost_table(
+                    data, start, end, top_services, provider, group_by, cost_summaries
+                )
 
         except Exception as e:
             click.echo(f"Cost retrieval failed: {e}", err=True)

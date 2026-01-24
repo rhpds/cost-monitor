@@ -224,7 +224,7 @@ class CostSummary(BaseModel):
     @property
     def service_breakdown(self) -> dict[str, float]:
         """Get cost breakdown by service."""
-        breakdown = {}
+        breakdown: dict[str, float] = {}
         for point in self.data_points:
             service = point.service_name or "Unknown"
             breakdown[service] = breakdown.get(service, 0.0) + point.amount
@@ -520,10 +520,10 @@ class CloudCostProvider(ABC):
 class ProviderFactory:
     """Factory class for creating cloud provider instances."""
 
-    _providers = {}
+    _providers: dict[str, type[CloudCostProvider]] = {}
 
     @classmethod
-    def register_provider(cls, name: str, provider_class: type):
+    def register_provider(cls, name: str, provider_class: type[CloudCostProvider]) -> None:
         """Register a provider class with the factory."""
         cls._providers[name.lower()] = provider_class
 
@@ -548,7 +548,8 @@ class ProviderFactory:
             raise ValueError(f"Unknown provider '{name}'. Available providers: {available}")
 
         provider_class = cls._providers[name]
-        return provider_class(config)
+        result: CloudCostProvider = provider_class(config)
+        return result
 
     @classmethod
     def get_available_providers(cls) -> list[str]:

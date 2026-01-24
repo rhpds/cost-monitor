@@ -134,7 +134,7 @@ cp config/development.yaml config/config.yaml
 aws configure --profile default
 
 # 3. Start the dashboard
-cost-monitor dashboard --debug
+python -m src.main dashboard
 ```
 
 ### Production Environment
@@ -143,8 +143,8 @@ cost-monitor dashboard --debug
 cp config/production.yaml config/config.yaml
 
 # 2. Set up environment variables (secure)
-export AWS_ACCESS_KEY_ID="your-key"
-export AWS_SECRET_ACCESS_KEY="your-secret"
+export AWS_ACCESS_KEY_ID="your-key"  # pragma: allowlist secret
+export AWS_SECRET_ACCESS_KEY="your-secret"  # pragma: allowlist secret
 export AZURE_SUBSCRIPTION_ID="your-subscription"
 # ... other credentials
 
@@ -152,7 +152,7 @@ export AZURE_SUBSCRIPTION_ID="your-subscription"
 # Edit config.yaml email settings
 
 # 4. Start monitoring
-cost-monitor check
+python -m src.main check
 ```
 
 ### Docker Deployment
@@ -162,11 +162,11 @@ docker build -t cost-monitor .
 
 # 2. Run with environment variables
 docker run -d \
-  -e AWS_ACCESS_KEY_ID="your-key" \
-  -e AWS_SECRET_ACCESS_KEY="your-secret" \
+  -e AWS_ACCESS_KEY_ID="your-key" \  # pragma: allowlist secret
+  -e AWS_SECRET_ACCESS_KEY="your-secret" \  # pragma: allowlist secret
   -e AZURE_SUBSCRIPTION_ID="your-subscription" \
   -p 8050:8050 \
-  -p 8080:8080 \
+  -p 8000:8000 \
   cost-monitor
 
 # 3. Or use Docker Compose
@@ -206,23 +206,23 @@ sudo chmod +x /usr/local/bin/cost-monitor-icinga
 ### Test Configuration
 ```bash
 # Validate configuration
-cost-monitor config-info
+python -m src.main config-info
 
 # Test authentication
-cost-monitor test-auth
+python -m src.main test-auth
 
 # Test cost retrieval
-cost-monitor costs --start-date 2024-12-01 --end-date 2024-12-02
+python -m src.main costs --start-date 2024-12-01 --end-date 2024-12-02
 ```
 
 ### Health Checks
 ```bash
 # Check application health
-curl http://localhost:8080/health
+curl http://localhost:8000/api/health/ready
 
 # Check individual components
-curl http://localhost:8080/health/ready
-curl http://localhost:8080/health/live
+curl http://localhost:8000/api/health/ready
+curl http://localhost:8000/api/health/live
 ```
 
 ## Security Best Practices
@@ -250,7 +250,7 @@ curl http://localhost:8080/health/live
 #### Authentication Failures
 ```bash
 # Check credentials
-cost-monitor test-auth
+python -m src.main test-auth
 
 # Verify environment variables
 env | grep -E "(AWS|AZURE|GCP)"
@@ -262,7 +262,7 @@ aws sts get-caller-identity
 #### High API Costs
 ```bash
 # Check cache configuration
-cost-monitor config-info
+python -m src.main config-info
 
 # Enable caching if disabled
 # Edit config.yaml:
@@ -280,7 +280,7 @@ curl http://localhost:8050
 tail -f /var/log/cost-monitor/cost-monitor.log
 
 # Verify configuration
-cost-monitor config-info | grep dashboard
+python -m src.main config-info | grep dashboard
 ```
 
 ## Advanced Configuration
@@ -328,7 +328,7 @@ performance:
       - type: "prometheus"
         endpoint: "http://prometheus:9090"
       - type: "datadog"
-        api_key: "your-datadog-key"
+        api_key: "your-datadog-key"  # pragma: allowlist secret
 ```
 
 ## Support

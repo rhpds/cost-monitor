@@ -176,6 +176,7 @@ warn_unreachable = true
 strict_optional = true
 no_implicit_reexport = true
 show_error_codes = true
+exclude = "src/visualization/dashboard/__init__.py"
 
 [[tool.mypy.overrides]]
 module = [

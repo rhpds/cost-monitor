@@ -86,7 +86,7 @@ class GCPCostProvider(CloudCostProvider):
         self.cache_dir = os.path.join(os.path.expanduser(base_cache_dir), "gcp")
         os.makedirs(self.cache_dir, exist_ok=True)
         # Cache files for 24 hours (GCP billing updates hourly)
-        self.cache_max_age_hours = 24
+        self.cache_max_age_hours: int = 24
         logger.debug(f"GCP cache initialized at: {self.cache_dir}")
 
     def _get_cache_key(
@@ -131,6 +131,7 @@ class GCPCostProvider(CloudCostProvider):
 
         if data_date:
             # Calculate how old the data is (not the cache file age)
+            assert isinstance(data_date, date), "data_date must be a date object"
             data_age_hours = (datetime.now().date() - data_date).total_seconds() / 3600
 
             # PERMANENT CACHING: Historical data (>48 hours old) never expires
@@ -376,7 +377,9 @@ class GCPCostProvider(CloudCostProvider):
             await self.ensure_authenticated()
 
             # Test billing API access
-            request = billing_v1.ListBillingAccountsRequest()
+            if not self.billing_client:
+                raise ValueError("GCP billing client not initialized")
+            request = billing_v1.ListBillingAccountsRequest()  # type: ignore[unreachable]
             billing_accounts = self.billing_client.list_billing_accounts(request=request)
 
             # Try to iterate through at least one account
@@ -470,8 +473,8 @@ class GCPCostProvider(CloudCostProvider):
         try:
             logger.info(f"🟢 GCP: Fetching fresh cost data for {start_date} to {end_date}")
             # Use BigQuery billing export if available, otherwise use Cloud Billing API
-            if self.bigquery_client and self.bq_dataset:
-                logger.info("🟢 GCP: Using BigQuery billing export")
+            if self.bigquery_client and self.bq_dataset:  # type: ignore[unreachable]
+                logger.info("🟢 GCP: Using BigQuery billing export")  # type: ignore[unreachable]
                 cost_summary = await self._get_cost_data_from_bigquery(
                     start_date, end_date, granularity, group_by, filter_by
                 )
@@ -486,7 +489,7 @@ class GCPCostProvider(CloudCostProvider):
             )
 
             # Save daily cache - group data points by date and save separately
-            daily_data = {}
+            daily_data: dict[date, list[CostDataPoint]] = {}
             for point in cost_summary.data_points:
                 point_date = point.date
                 if point_date not in daily_data:
@@ -504,6 +507,7 @@ class GCPCostProvider(CloudCostProvider):
 
         except GoogleAPICallError as e:
             self._handle_gcp_error(e)
+            raise  # Re-raise after handling
         except Exception as e:
             logger.error(f"GCP cost data retrieval failed: {e}")
             raise APIError(f"GCP cost data retrieval failed: {e}", provider=self.provider_name)
@@ -517,6 +521,8 @@ class GCPCostProvider(CloudCostProvider):
         filter_by: dict[str, Any] | None = None,
     ) -> CostSummary:
         """Get cost data from BigQuery billing export."""
+        if not self.billing_account_id:
+            raise ValueError("GCP billing account ID not set")
         table_name = f"{self.bq_table}{self.billing_account_id.replace('-', '_')}"
 
         # Build SQL query
@@ -575,7 +581,9 @@ class GCPCostProvider(CloudCostProvider):
         """
 
         try:
-            query_job = self.bigquery_client.query(query)
+            if not self.bigquery_client:
+                raise ValueError("GCP BigQuery client not initialized")
+            query_job = self.bigquery_client.query(query)  # type: ignore[unreachable]
             results = query_job.result()
 
             return self._parse_bigquery_results(
@@ -610,7 +618,9 @@ class GCPCostProvider(CloudCostProvider):
         project_name = f"projects/{self.project_id}"
 
         try:
-            project_billing_info = self.billing_client.get_project_billing_info(name=project_name)
+            if not self.billing_client:
+                raise ValueError("GCP billing client not initialized")
+            project_billing_info = self.billing_client.get_project_billing_info(name=project_name)  # type: ignore[unreachable]
 
             if not project_billing_info.billing_enabled:
                 logger.warning(f"Billing is not enabled for project {self.project_id}")
@@ -651,7 +661,7 @@ class GCPCostProvider(CloudCostProvider):
         include_projects = "PROJECT" in [dim.upper() for dim in group_by]
 
         # Deduplication tracking: aggregate costs based on grouping requirements
-        aggregated_costs = {}
+        aggregated_costs: dict[tuple[date, str] | tuple[date, str, str], dict[str, Any]] = {}
 
         for row in results:
             # Parse date
@@ -673,7 +683,11 @@ class GCPCostProvider(CloudCostProvider):
 
             if include_projects:
                 # For account breakdown: aggregate by (date, service, project) to preserve individual projects
-                agg_key = (usage_date, normalized_service, project_id or "unknown-project")
+                agg_key: tuple[date, str] | tuple[date, str, str] = (
+                    usage_date,
+                    normalized_service,
+                    project_id or "unknown-project",
+                )
             else:
                 # For service breakdown: aggregate by (date, service) to combine across projects
                 agg_key = (usage_date, normalized_service)
@@ -700,10 +714,12 @@ class GCPCostProvider(CloudCostProvider):
             if amount > 0:  # Only include non-zero costs
                 if include_projects:
                     # Project-level breakdown: agg_key is (date, service, project)
+                    assert len(agg_key) == 3, "Expected 3-tuple for project breakdown"
                     date_val, service_name, project_id = agg_key
                     account_id = project_id  # Use actual project ID as account ID
                 else:
                     # Service-level breakdown: agg_key is (date, service)
+                    assert len(agg_key) == 2, "Expected 2-tuple for service breakdown"
                     date_val, service_name = agg_key
                     projects = cost_data["projects"]
                     account_id = (
@@ -721,8 +737,10 @@ class GCPCostProvider(CloudCostProvider):
                     account_name=account_id,  # For GCP, use project ID as account name
                     region=cost_data["location"],
                     tags={
-                        "project_count": len(cost_data["projects"]),
-                        "projects": list(cost_data["projects"])[:5],  # Store up to 5 project names
+                        "project_count": str(len(cost_data["projects"])),
+                        "projects": ",".join(
+                            list(cost_data["projects"])[:5]
+                        ),  # Store up to 5 project names as comma-separated
                     },
                 )
 
@@ -758,7 +776,7 @@ class GCPCostProvider(CloudCostProvider):
         )
 
         # Group by date and sum costs
-        daily_costs = {}
+        daily_costs: dict[date, dict[str, Any]] = {}
         for point in cost_summary.data_points:
             date_key = point.date
             if date_key not in daily_costs:
@@ -767,7 +785,10 @@ class GCPCostProvider(CloudCostProvider):
 
         return [
             CostDataPoint(
-                date=date_key, amount=data["amount"], currency=data["currency"], service_name=None
+                date=date_key,
+                amount=float(data["amount"]),
+                currency=str(data["currency"]),
+                service_name=None,
             )
             for date_key, data in daily_costs.items()
         ]
@@ -779,7 +800,7 @@ class GCPCostProvider(CloudCostProvider):
         cost_summary = await self.get_cost_data(start_date, end_date, group_by=["SERVICE"])
 
         # Aggregate costs by service
-        service_costs = {}
+        service_costs: dict[str, float] = {}
         for point in cost_summary.data_points:
             if point.service_name:
                 service_name = point.service_name
@@ -884,7 +905,9 @@ class GCPCostProvider(CloudCostProvider):
         await self.ensure_authenticated()
 
         try:
-            request = billing_v1.ListBillingAccountsRequest()
+            if not self.billing_client:
+                raise ValueError("GCP billing client not initialized")
+            request = billing_v1.ListBillingAccountsRequest()  # type: ignore[unreachable]
             billing_accounts = self.billing_client.list_billing_accounts(request=request)
 
             accounts = []
@@ -909,7 +932,9 @@ class GCPCostProvider(CloudCostProvider):
         await self.ensure_authenticated()
 
         try:
-            request = billing_v1.ListProjectBillingInfoRequest(name=billing_account)
+            if not self.billing_client:
+                raise ValueError("GCP billing client not initialized")
+            request = billing_v1.ListProjectBillingInfoRequest(name=billing_account)  # type: ignore[unreachable]
             projects = self.billing_client.list_project_billing_info(request=request)
 
             project_list = []

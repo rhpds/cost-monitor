@@ -93,8 +93,15 @@ class AlertFormatConfig(BaseModel):
 class TextAlertFormatter:
     """Formats alerts for text-based output."""
 
-    def __init__(self, config: AlertFormatConfig = None):
-        self.config = config or AlertFormatConfig()
+    def __init__(self, config: AlertFormatConfig | None = None):
+        self.config = config or AlertFormatConfig(
+            show_timestamp=True,
+            show_provider=True,
+            show_details=True,
+            use_colors=True,
+            max_message_length=None,
+            include_metadata=False,
+        )
 
         # Disable colors if not supported or requested
         if not self.config.use_colors or not self._supports_color():
@@ -133,75 +140,96 @@ class TextAlertFormatter:
         else:
             return self._format_text(alert, format_type == OutputFormat.COLORED)
 
-    def _format_text(self, alert: Alert, use_colors: bool = True) -> str:
-        """Format alert as colored text."""
+    def _format_timestamp(self, alert: Alert, use_colors: bool) -> str | None:
+        """Format timestamp part if enabled."""
+        if not self.config.show_timestamp:
+            return None
+
+        timestamp = alert.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        if use_colors:
+            return f"{Color.CYAN}{timestamp}{Color.END}"
+        return timestamp
+
+    def _format_level(self, alert: Alert, use_colors: bool) -> str:
+        """Format alert level with symbol and color."""
         level_config = self.level_config[alert.alert_level]
 
-        # Build the message
-        parts = []
-
-        # Timestamp
-        if self.config.show_timestamp:
-            timestamp = alert.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-            if use_colors:
-                parts.append(f"{Color.CYAN}{timestamp}{Color.END}")
-            else:
-                parts.append(timestamp)
-
-        # Alert level with symbol and color
         if use_colors:
-            level_text = f"{level_config['color']}{level_config['symbol']} {level_config['prefix']}{Color.END}"
-        else:
-            level_text = f"[{level_config['prefix']}]"
-        parts.append(level_text)
+            return f"{level_config['color']}{level_config['symbol']} {level_config['prefix']}{Color.END}"
+        return f"[{level_config['prefix']}]"
 
-        # Provider
-        if self.config.show_provider and alert.provider:
-            provider_text = alert.provider.upper()
-            if use_colors:
-                parts.append(f"{Color.BOLD}{provider_text}{Color.END}")
-            else:
-                parts.append(f"[{provider_text}]")
+    def _format_provider(self, alert: Alert, use_colors: bool) -> str | None:
+        """Format provider part if enabled."""
+        if not (self.config.show_provider and alert.provider):
+            return None
 
-        # Main message
+        provider_text = alert.provider.upper()
+        if use_colors:
+            return f"{Color.BOLD}{provider_text}{Color.END}"
+        return f"[{provider_text}]"
+
+    def _format_message(self, alert: Alert, use_colors: bool) -> str:
+        """Format main alert message."""
         message = alert.message
+
         if self.config.max_message_length and len(message) > self.config.max_message_length:
             message = message[: self.config.max_message_length - 3] + "..."
 
         if use_colors and alert.alert_level == AlertLevel.CRITICAL:
             message = f"{Color.BOLD}{message}{Color.END}"
 
-        parts.append(message)
+        return message
 
-        # Details
-        if self.config.show_details:
-            details = []
-            details.append(f"Current: ${alert.current_value:.2f}")
-            details.append(f"Threshold: ${alert.threshold_value:.2f}")
+    def _format_details(self, alert: Alert, use_colors: bool) -> str | None:
+        """Format details part if enabled."""
+        if not self.config.show_details:
+            return None
 
-            if use_colors:
-                detail_text = f"{Color.WHITE}({', '.join(details)}){Color.END}"
-            else:
-                detail_text = f"({', '.join(details)})"
+        details = [
+            f"Current: ${alert.current_value:.2f}",
+            f"Threshold: ${alert.threshold_value:.2f}",
+        ]
 
-            parts.append(detail_text)
+        if use_colors:
+            return f"{Color.WHITE}({', '.join(details)}){Color.END}"
+        return f"({', '.join(details)})"
 
-        # Metadata (if enabled)
-        if self.config.include_metadata and alert.metadata:
-            metadata_items = []
-            for key, value in alert.metadata.items():
-                if key == "threshold_exceeded_by":
-                    metadata_items.append(f"Exceeded by: ${value:.2f}")
-                elif key == "provider_breakdown":
-                    breakdown = ", ".join([f"{k}: ${v:.2f}" for k, v in value.items()])
-                    metadata_items.append(f"Breakdown: {breakdown}")
+    def _format_metadata(self, alert: Alert, use_colors: bool) -> str | None:
+        """Format metadata part if enabled."""
+        if not (self.config.include_metadata and alert.metadata):
+            return None
 
-            if metadata_items:
-                if use_colors:
-                    metadata_text = f"{Color.CYAN}[{'; '.join(metadata_items)}]{Color.END}"
-                else:
-                    metadata_text = f"[{'; '.join(metadata_items)}]"
-                parts.append(metadata_text)
+        metadata_items = []
+        for key, value in alert.metadata.items():
+            if key == "threshold_exceeded_by":
+                metadata_items.append(f"Exceeded by: ${value:.2f}")
+            elif key == "provider_breakdown":
+                breakdown = ", ".join([f"{k}: ${v:.2f}" for k, v in value.items()])
+                metadata_items.append(f"Breakdown: {breakdown}")
+
+        if not metadata_items:
+            return None
+
+        if use_colors:
+            return f"{Color.CYAN}[{'; '.join(metadata_items)}]{Color.END}"
+        return f"[{'; '.join(metadata_items)}]"
+
+    def _format_text(self, alert: Alert, use_colors: bool = True) -> str:
+        """Format alert as colored text."""
+        parts = []
+
+        # Add each part if it exists
+        for format_method in [
+            self._format_timestamp,
+            self._format_level,
+            self._format_provider,
+            self._format_message,
+            self._format_details,
+            self._format_metadata,
+        ]:
+            formatted_part = format_method(alert, use_colors)
+            if formatted_part:
+                parts.append(formatted_part)
 
         return " ".join(parts)
 
@@ -322,7 +350,11 @@ class TextAlertFormatter:
 class TextAlertNotifier:
     """Handles text-based alert notifications."""
 
-    def __init__(self, output_stream: TextIO = None, format_config: AlertFormatConfig = None):
+    def __init__(
+        self,
+        output_stream: TextIO | None = None,
+        format_config: AlertFormatConfig | None = None,
+    ):
         self.output_stream = output_stream or sys.stdout
         self.formatter = TextAlertFormatter(format_config)
 
@@ -413,7 +445,9 @@ class TextAlertNotifier:
 class ConsoleAlertHandler:
     """Handles console-based alert display and interaction."""
 
-    def __init__(self, format_config: AlertFormatConfig = None, auto_acknowledge: bool = False):
+    def __init__(
+        self, format_config: AlertFormatConfig | None = None, auto_acknowledge: bool = False
+    ):
         self.notifier = TextAlertNotifier(format_config=format_config)
         self.auto_acknowledge = auto_acknowledge
 

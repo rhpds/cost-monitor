@@ -1,7 +1,9 @@
 # Multi-Cloud Cost Monitor
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-71%20passing-brightgreen.svg)](tests/)
+[![Code Quality](https://img.shields.io/badge/quality-pre--commit--enabled-brightgreen.svg)](.pre-commit-config.yaml)
 
 A comprehensive Python-based system for monitoring and analyzing cloud costs across AWS, Azure, and GCP with real-time visualization, intelligent alerting, and enterprise integrations.
 
@@ -140,6 +142,7 @@ python -m src.main export-prometheus
 
 ### Development & Deployment
 - [Development Guide](docs/DEVELOPMENT.md) - Local development and testing
+- [Testing Strategy](TESTING.md) - Comprehensive testing approach and workflows
 - [Deployment Guide](docs/DEPLOYMENT.md) - Production deployment options
 
 ## Architecture
@@ -152,11 +155,42 @@ The system consists of three main layers:
 
 ## Technology Stack
 
-- **Backend**: Python 3.8+, FastAPI, asyncpg (PostgreSQL), Redis
+- **Backend**: Python 3.11+, FastAPI, asyncpg (PostgreSQL), Redis
 - **Frontend**: Dash, Plotly, Bootstrap components
 - **Cloud SDKs**: boto3 (AWS), azure-* (Azure), google-cloud-* (GCP)
 - **Deployment**: Kubernetes/OpenShift with Kustomize, Docker
 - **Monitoring**: Prometheus, Icinga/Nagios integration
+
+## Testing & Quality Assurance
+
+The project maintains **100% test reliability** with comprehensive quality gates:
+
+### 🧪 **Multi-Tier Test Strategy**
+- **71/71 Integration Tests** - Complete API, database, and workflow coverage
+- **Pre-commit Smoke Tests** - Critical functionality validation in <1 second
+- **Fast Development Tests** - Quick iteration feedback in ~3 seconds
+- **Full Coverage Tests** - Comprehensive validation with coverage reporting
+
+### 🛡️ **Automated Quality Gates**
+- **Secret Scanning**: detect-secrets + gitleaks prevent credential leaks
+- **Code Formatting**: black + isort automatic formatting
+- **Comprehensive Linting**: ruff + mypy with type safety
+- **Dead Code Detection**: vulture removes unused code
+- **Critical Testing**: Pre-commit hooks ensure core functionality
+
+### 🚀 **Developer Experience**
+```bash
+# Quick development commands
+./scripts/dev.sh test-smoke   # Pre-commit tests (~1s)
+./scripts/dev.sh test-fast    # Quick iteration (~3s)
+./scripts/dev.sh test-all     # Full suite (71 tests, ~6s)
+./scripts/dev.sh quality      # Complete quality check
+
+# Automatic on every commit
+git commit  # Runs security + quality + tests automatically
+```
+
+See [TESTING.md](TESTING.md) for complete testing strategy and workflows.
 
 ## Cloud Provider Setup
 
@@ -170,7 +204,7 @@ See [AZURE_SETUP.md](docs/AZURE_SETUP.md) for service principal setup.
 
 ### GCP
 Uses BigQuery billing export with service account authentication.
-See [CONFIGURATION.md](docs/CONFIGURATION.md) for GCP setup details.
+See [GCP_SETUP.md](docs/GCP_SETUP.md) for detailed GCP setup instructions.
 
 ## Security
 

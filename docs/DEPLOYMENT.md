@@ -33,7 +33,7 @@ git:
 secrets:
   postgresql:
     username: "cost_monitor_user"
-    password: "your-secure-password"
+    password: "your-secure-password"  # pragma: allowlist secret
     # ... fill in all other credentials
 ```
 
@@ -43,10 +43,10 @@ Run the enhanced deployment script:
 
 ```bash
 # Test deployment (dry run)
-./deploy-new.sh local true
+./deploy.sh local true
 
 # Actual deployment
-./deploy-new.sh local false
+./deploy.sh local false
 ```
 
 The script will:

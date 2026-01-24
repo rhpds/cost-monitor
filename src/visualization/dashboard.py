@@ -323,7 +323,6 @@ class CostDataManager:
             }
             return DataWrapper(empty_data)
 
-
     async def get_service_breakdown(
         self, provider: str, start_date: date, end_date: date, top_n: int = 10
     ) -> dict[str, float]:
@@ -389,8 +388,6 @@ class CostDataManager:
 # The real CostMonitorDashboard class follows below
 
 
-
-
 # Real CostMonitorDashboard class below
 
 
@@ -429,7 +426,6 @@ class CostMonitorDashboard:
             __name__,
             external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
             title="Multi-Cloud Cost Monitor",
-            update_title=None,
             assets_folder="assets",
         )
 
@@ -1231,6 +1227,19 @@ class CostMonitorDashboard:
 
     def _setup_callbacks(self):
         """Set up dashboard callbacks."""
+        self._setup_data_store_callback()
+        self._setup_key_metrics_callback()
+        self._setup_alert_banner_callback()
+        self._setup_loading_callbacks()
+        self._setup_chart_callbacks()
+        self._setup_service_callbacks()
+        self._setup_account_callbacks()
+        self._setup_data_table_callback()
+        self._setup_date_range_callbacks()
+        self._setup_button_style_callbacks()
+
+    def _setup_data_store_callback(self):
+        """Set up the main data store callback."""
 
         @self.app.callback(
             [
@@ -1730,6 +1739,9 @@ class CostMonitorDashboard:
 
                 return {}, {}, formatted_error, loading_state
 
+    def _setup_key_metrics_callback(self):
+        """Set up the key metrics callback."""
+
         @self.app.callback(
             [
                 Output("total-cost-metric", "children"),
@@ -1801,6 +1813,9 @@ class CostMonitorDashboard:
                 trend_class,
             )
 
+    def _setup_alert_banner_callback(self):
+        """Set up the alert banner callback."""
+
         @self.app.callback(Output("alert-banner", "children"), [Input("alert-data-store", "data")])
         def update_alert_banner(alert_data):
             """Update alert banner."""
@@ -1826,6 +1841,9 @@ class CostMonitorDashboard:
                 color=alert_type,
                 className="mb-3",
             )
+
+    def _setup_loading_callbacks(self):
+        """Set up the loading state callbacks."""
 
         @self.app.callback(
             Output("loading-store", "data", allow_duplicate=True),
@@ -2984,17 +3002,9 @@ class CostMonitorDashboard:
             [State("date-range-type-store", "data")],
             prevent_initial_call=False,
         )
-        def update_button_styles(*args):
-            """Update button styles based on which button was clicked or date picker changed."""
-            import dash
-
-            ctx = dash.callback_context
-
-            # Extract the date range type state from the last argument
-            date_range_type = args[-1] if args else None
-
-            # Define all buttons and their default styles
-            buttons = [
+        def _get_button_list():
+            """Get the list of all date range buttons."""
+            return [
                 "btn-latest",
                 "btn-this-month",
                 "btn-last-month",
@@ -3004,82 +3014,91 @@ class CostMonitorDashboard:
                 "btn-last-7-days",
             ]
 
+        def _handle_initial_button_state():
+            """Handle button states for initial call (no triggers)."""
+            result = []
+            for button in _get_button_list():
+                if button == "btn-latest":
+                    # Latest button active by default
+                    result.extend([False, "primary"])  # outline=False, color='primary'
+                else:
+                    # Other buttons inactive
+                    result.extend([True, "secondary"])  # outline=True, color='secondary'
+            return result
+
+        def _handle_date_picker_trigger():
+            """Handle button states when date picker was manually changed."""
+            result = []
+            for _button in _get_button_list():
+                result.extend([True, "secondary"])  # All buttons outlined secondary
+            return result
+
+        def _handle_auto_refresh_trigger(date_range_type):
+            """Handle button states during auto-refresh."""
+            import dash
+
+            if date_range_type and date_range_type.get("type") == "latest":
+                # Keep Latest button active during auto-refresh
+                result = []
+                for button in _get_button_list():
+                    if button == "btn-latest":
+                        result.extend([False, "primary"])  # Latest active
+                    else:
+                        result.extend([True, "secondary"])  # Others inactive
+                return result
+            else:
+                # For non-latest modes during auto-refresh, don't change button states
+                return (
+                    dash.no_update,
+                ) * 14  # 14 no_update values for 7 buttons (outline, color each)
+
+        def _handle_button_click_trigger(clicked_button, date_range_type):
+            """Handle button states when a button was clicked."""
+            # Determine which button should be active
+            if (
+                date_range_type
+                and date_range_type.get("type") == "latest"
+                and clicked_button.startswith("btn-")
+            ):
+                active_button = clicked_button
+            else:
+                active_button = clicked_button
+
+            result = []
+            for button in _get_button_list():
+                if button == active_button:
+                    # Active button: solid primary color
+                    result.extend([False, "primary"])  # outline=False, color='primary'
+                else:
+                    # Inactive buttons: outlined secondary color
+                    result.extend([True, "secondary"])  # outline=True, color='secondary'
+
+            return result
+
+        def update_button_styles(*args):
+            """Update button styles based on which button was clicked or date picker changed."""
+            import dash
+
+            ctx = dash.callback_context
+
+            # Extract the date range type state from the last argument
+            date_range_type = args[-1] if args else None
+
             # On initial call (no triggers), default to Latest mode active
             if not ctx.triggered:
-                result = []
-                for button in buttons:
-                    if button == "btn-latest":
-                        # Latest button active by default
-                        result.extend([False, "primary"])  # outline=False, color='primary'
-                    else:
-                        # Other buttons inactive
-                        result.extend([True, "secondary"])  # outline=True, color='secondary'
-                return result
+                return _handle_initial_button_state()
 
             # Get what was triggered
             triggered_prop = ctx.triggered[0]["prop_id"].split(".")[0]
 
-            # Build the return values (outline, color pairs for each button)
-            result = []
-
             # Handle different trigger types
             if triggered_prop == "date-range-picker":
-                # If date picker was manually changed, make all buttons inactive
-                for _button in buttons:
-                    result.extend([True, "secondary"])  # All buttons outlined secondary
+                return _handle_date_picker_trigger()
             elif triggered_prop == "interval-component":
-                # Auto-refresh triggered - preserve current state based on date range type
-                if date_range_type and date_range_type.get("type") == "latest":
-                    # Keep Latest button active during auto-refresh
-                    for button in buttons:
-                        if button == "btn-latest":
-                            result.extend([False, "primary"])  # Latest active
-                        else:
-                            result.extend([True, "secondary"])  # Others inactive
-                else:
-                    # For non-latest modes during auto-refresh, don't change button states
-                    import dash
-
-                    return (
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                        dash.no_update,
-                    )
+                return _handle_auto_refresh_trigger(date_range_type)
             else:
-                # A button was clicked - determine which one should be active
-                clicked_button = triggered_prop
-
-                # If the date range type indicates we're in latest mode, keep latest button active
-                # This handles cases where auto-refresh or other triggers might reset button states
-                if (
-                    date_range_type
-                    and date_range_type.get("type") == "latest"
-                    and clicked_button.startswith("btn-")
-                ):
-                    active_button = clicked_button
-                else:
-                    active_button = clicked_button
-
-                for button in buttons:
-                    if button == active_button:
-                        # Active button: solid primary color
-                        result.extend([False, "primary"])  # outline=False, color='primary'
-                    else:
-                        # Inactive buttons: outlined secondary color
-                        result.extend([True, "secondary"])  # outline=True, color='secondary'
-
-            return result
+                # A button was clicked
+                return _handle_button_click_trigger(triggered_prop, date_range_type)
 
         @callback(
             [

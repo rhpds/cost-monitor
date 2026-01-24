@@ -165,7 +165,7 @@ spec:
       volumes:
       - name: gcp-credentials
         secret:
-          secretName: gcp-credentials
+          secretName: gcp-credentials  # pragma: allowlist secret
           items:
           - key: service-account.json
             path: service-account.json
