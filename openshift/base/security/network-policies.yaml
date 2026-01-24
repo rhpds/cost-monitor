@@ -1,56 +1,161 @@
 ---
+# Network policy for OAuth proxy (external access point)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: cost-monitor-network-policy
+  name: oauth-proxy-ingress
   labels:
     app: cost-monitor
+    component: oauth-proxy
 spec:
   podSelector:
     matchLabels:
-      app: cost-monitor
+      app: oauth-proxy
+      component: oauth-proxy
   policyTypes:
   - Ingress
   - Egress
 
-  # Ingress rules
+  # Ingress rules for OAuth proxy
   ingress:
-  # Allow traffic from OpenShift router
+  # Allow traffic from OpenShift router (ONLY external access point)
   - from:
     - namespaceSelector:
         matchLabels:
           name: openshift-ingress
     ports:
     - protocol: TCP
-      port: 8050  # Dashboard
-    - protocol: TCP
-      port: 8051  # API
-    - protocol: TCP
-      port: 8080  # Health checks
+      port: 4180  # OAuth proxy port
 
-  # Allow internal communication between dashboard and API
+  # Egress rules for OAuth proxy
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+  # Allow HTTPS to OpenShift OAuth server
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+
+  # Allow communication to dashboard service
+  - to:
+    - podSelector:
+        matchLabels:
+          app: cost-monitor
+          component: dashboard
+    ports:
+    - protocol: TCP
+      port: 8050
+
+  # Allow communication to Redis for session store
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+          component: cache
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# Network policy for dashboard (internal access via OAuth proxy only)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dashboard-access
+  labels:
+    app: cost-monitor
+    component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      app: cost-monitor
+      component: dashboard
+  policyTypes:
+  - Ingress
+  - Egress
+
+  # Ingress rules for dashboard
+  ingress:
+  # Allow traffic from OAuth proxy only
+  - from:
+    - podSelector:
+        matchLabels:
+          app: oauth-proxy
+          component: oauth-proxy
+    ports:
+    - protocol: TCP
+      port: 8050
+
+  # Egress rules for dashboard
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+  # Allow communication to data service API
+  - to:
+    - podSelector:
+        matchLabels:
+          app: cost-data-service
+          component: data-service
+    ports:
+    - protocol: TCP
+      port: 8000
+
+---
+# Network policy for data service (internal only - no external access)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: data-service-internal
+  labels:
+    app: cost-monitor
+    component: data-service
+spec:
+  podSelector:
+    matchLabels:
+      app: cost-data-service
+      component: data-service
+  policyTypes:
+  - Ingress
+  - Egress
+
+  # Ingress rules for data service
+  ingress:
+  # Allow traffic from dashboard only
   - from:
     - podSelector:
         matchLabels:
           app: cost-monitor
+          component: dashboard
     ports:
     - protocol: TCP
-      port: 8050
-    - protocol: TCP
-      port: 8051
-    - protocol: TCP
-      port: 8080
+      port: 8000  # API port
 
-  # Allow monitoring from OpenShift monitoring namespace
+  # Allow health checks from OpenShift monitoring (restricted route)
   - from:
     - namespaceSelector:
         matchLabels:
           name: openshift-monitoring
+    - namespaceSelector:
+        matchLabels:
+          name: openshift-ingress  # For health check route
     ports:
     - protocol: TCP
-      port: 9090  # Metrics
+      port: 8080  # Health check port
 
-  # Egress rules
+  # Egress rules for data service
   egress:
   # Allow DNS resolution
   - to: []
@@ -66,20 +171,63 @@ spec:
     - protocol: TCP
       port: 443
 
-  # Allow HTTP for health checks and internal communication
+  # Allow communication to PostgreSQL
   - to:
     - podSelector:
         matchLabels:
-          app: cost-monitor
+          app: postgresql
+          component: database
     ports:
     - protocol: TCP
-      port: 8050
+      port: 5432
+
+  # Allow communication to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+          component: cache
+    ports:
     - protocol: TCP
-      port: 8051
-    - protocol: TCP
-      port: 8080
+      port: 6379
 
 ---
+# Network policy for data tier (PostgreSQL and Redis)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: data-tier-access
+  labels:
+    app: cost-monitor
+    tier: data
+spec:
+  podSelector:
+    matchLabels:
+      tier: data
+  policyTypes:
+  - Ingress
+
+  # Ingress rules for data tier
+  ingress:
+  # Allow access from application pods only
+  - from:
+    - podSelector:
+        matchLabels:
+          app: cost-monitor
+    - podSelector:
+        matchLabels:
+          app: cost-data-service
+    - podSelector:
+        matchLabels:
+          app: oauth-proxy
+    ports:
+    - protocol: TCP
+      port: 5432  # PostgreSQL
+    - protocol: TCP
+      port: 6379  # Redis
+
+---
+# Default deny-all baseline policy
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -93,4 +241,4 @@ spec:
   policyTypes:
   - Ingress
   - Egress
-  # Empty rules = deny all by default (this policy provides baseline security)
+  # Empty rules = deny all by default (baseline security)

@@ -13,18 +13,21 @@ resources:
   - configmaps/postgresql-config.yaml
   - configmaps/redis-config.yaml
   - configmaps/app-config.yaml
-  
+
   # Data layer deployments
   - deployments/postgresql.yaml
   - deployments/redis.yaml
-  
+
   # Application deployments
   - deployments/cost-data-service.yaml
   - deployments/dashboard-service.yaml
-  
+
   # Services and networking
   - services/services.yaml
   - routes/routes.yaml
+
+  # Authentication and authorization
+  - auth/
 
 # Common labels applied to all resources
 labels:

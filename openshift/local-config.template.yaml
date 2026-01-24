@@ -7,8 +7,15 @@ deployment:
   cluster_domain: "apps.your-cluster.example.com"  # Replace with your OpenShift cluster domain
   image_registry: "default-route-openshift-image-registry.apps.your-cluster.example.com"  # Replace with your registry
 
+# OAuth SSO Configuration
+oauth:
+  enabled: true  # Set to false to disable OAuth and use basic routes
+  # OAuth settings will be auto-detected from OpenShift cluster
+  # client_id and cookie_secret will be auto-generated
+  # User role mappings can be configured in openshift/base/auth/oauth-secrets.yaml
+
 git:
-  repository: "https://github.com/your-org/cost-monitor.git"  # Replace with your actual repository
+  repository: "https://github.com/rhpds/cost-monitor.git"
   branch: "main"
 
 secrets:

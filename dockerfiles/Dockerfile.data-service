@@ -44,7 +44,7 @@ COPY --from=builder /opt/app-root/venv /opt/app-root/venv
 COPY src/ ./src/
 COPY config/ ./config/
 COPY entrypoints/ ./entrypoints/
-COPY health_check.py ./
+COPY scripts/ ./scripts/
 
 # Create directories (no permission changes needed)
 RUN mkdir -p /app/cache /app/logs
@@ -59,7 +59,7 @@ EXPOSE 8000 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python health_check.py --service=data-service || exit 1
+    CMD python scripts/health_check.py --service=data-service || exit 1
 
 # Default entrypoint (use sh to avoid needing execute permissions)
 ENTRYPOINT ["sh", "./entrypoints/data-service-entrypoint.sh"]
