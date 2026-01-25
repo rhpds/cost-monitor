@@ -89,7 +89,78 @@ def create_dashboard_layout(dashboard):
             dbc.Row(
                 [
                     dbc.Col(
-                        [html.H5("📊 Key Metrics", className="mb-3"), dbc.Row(id="key-metrics-row")]
+                        [
+                            html.H5("📊 Key Metrics", className="mb-3"),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.Card(
+                                            [
+                                                dbc.CardHeader("Total Cost"),
+                                                dbc.CardBody(
+                                                    html.H4(
+                                                        "$0.00",
+                                                        id="total-cost-metric",
+                                                        className="text-primary mb-0",
+                                                    )
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                        ),
+                                        md=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Card(
+                                            [
+                                                dbc.CardHeader("Daily Average"),
+                                                dbc.CardBody(
+                                                    html.H4(
+                                                        "$0.00",
+                                                        id="daily-average-metric",
+                                                        className="text-info mb-0",
+                                                    )
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                        ),
+                                        md=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Card(
+                                            [
+                                                dbc.CardHeader("Monthly Projection"),
+                                                dbc.CardBody(
+                                                    html.H4(
+                                                        "$0.00",
+                                                        id="monthly-projection-metric",
+                                                        className="text-warning mb-0",
+                                                    )
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                        ),
+                                        md=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Card(
+                                            [
+                                                dbc.CardHeader("Cost Trend"),
+                                                dbc.CardBody(
+                                                    html.H4(
+                                                        "0.0%",
+                                                        id="cost-trend-metric",
+                                                        className="text-muted mb-0",
+                                                    )
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                        ),
+                                        md=3,
+                                    ),
+                                ],
+                                id="key-metrics-row",
+                            ),
+                        ]
                     )
                 ],
                 className="mb-4",
