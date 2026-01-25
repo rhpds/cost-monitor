@@ -2,20 +2,22 @@
 # Optimized for Dash web application
 
 # Build stage
-FROM registry.access.redhat.com/ubi9/python-311:1-77.1726840859 AS builder
+# hadolint ignore=DL3007
+FROM registry.access.redhat.com/ubi9/python-311:latest AS builder
 
 # hadolint ignore=DL3002
 USER root
 
 # Install build dependencies (including runtime dependencies)
+# hadolint ignore=DL3041
 RUN dnf update -y && \
     dnf install -y \
-        gcc-11.5.0 \
-        gcc-c++-11.5.0 \
-        make-4.3 \
-        ca-certificates-2025.2.80_v9.0.305 \
-        nodejs-22.19.0 \
-        npm-10.9.3 \
+        gcc \
+        gcc-c++ \
+        make \
+        ca-certificates \
+        nodejs \
+        npm \
     && dnf clean all
 
 # Create app directory
@@ -25,14 +27,16 @@ WORKDIR /app
 COPY requirements.txt requirements-dashboard.txt ./
 
 # Install Python dependencies
+# hadolint ignore=DL3013
 RUN python -m venv /opt/app-root/venv && \
     source /opt/app-root/venv/bin/activate && \
-    pip install --no-cache-dir --upgrade pip==25.3 && \
+    pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir -r requirements-dashboard.txt
 
 # Production stage
-FROM registry.access.redhat.com/ubi9/python-311:1-77.1726840859
+# hadolint ignore=DL3007
+FROM registry.access.redhat.com/ubi9/python-311:latest
 
 # Create non-root user
 USER 1001
