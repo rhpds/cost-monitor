@@ -20,7 +20,8 @@ try:
     import dash
     import dash_bootstrap_components as dbc
     import plotly.graph_objects as go
-    from dash import ALL, Input, Output, State, callback, dash_table, dcc, html
+
+    # Dashboard callback imports handled by specific callback modules
 
     DASH_AVAILABLE = True
 except ImportError:

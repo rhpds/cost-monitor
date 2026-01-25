@@ -118,7 +118,7 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
         hover_values = []
         text_labels = []
 
-        for i, (item, value) in enumerate(zip(daily_costs, values, strict=False)):
+        for _, (item, value) in enumerate(zip(daily_costs, values, strict=False)):
             is_today = item["date"] == today_str
 
             if provider == "aws" and is_today:
@@ -158,7 +158,7 @@ def _add_single_provider_trace(fig, daily_costs, dates, selected_provider, today
         hover_values = []
         text_labels = []
 
-        for i, (item, value) in enumerate(zip(daily_costs, values, strict=False)):
+        for _, (item, value) in enumerate(zip(daily_costs, values, strict=False)):
             is_today = item["date"] == today_str
             if is_today:
                 # For today's AWS data, show minimal bar and "N/A" text

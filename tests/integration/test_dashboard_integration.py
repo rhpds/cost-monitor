@@ -12,9 +12,7 @@ import pytest
 
 # Dashboard imports with availability check
 try:
-    import dash
-    from dash.testing.application_runners import import_app
-    from selenium.webdriver.chrome.options import Options
+    import dash  # noqa: F401
 
     DASH_AVAILABLE = True
 except ImportError:
@@ -78,7 +76,7 @@ class TestDashboardInitialization:
             ) as mock_chart_callbacks, patch(
                 "src.visualization.dashboard.callbacks.interactions.setup_interaction_callbacks"
             ) as mock_interaction_callbacks:
-                dashboard = CostMonitorDashboard(test_config)
+                dashboard = CostMonitorDashboard(test_config)  # noqa: F841
 
                 mock_data_callbacks.assert_called_once()
                 mock_chart_callbacks.assert_called_once()
@@ -158,7 +156,9 @@ class TestDashboardDataManager:
             # Mock cache operations
             with patch.object(data_manager, "_cache_key") as mock_cache_key, patch.object(
                 data_manager, "_get_from_cache"
-            ) as mock_get_cache, patch.object(data_manager, "_set_cache") as mock_set_cache:
+            ) as mock_get_cache, patch.object(
+                data_manager, "_set_cache"
+            ):  # noqa: F841
                 mock_cache_key.return_value = "test_cache_key"
                 mock_get_cache.return_value = None  # Cache miss
 
@@ -166,7 +166,7 @@ class TestDashboardDataManager:
                 await data_manager.fetch_cost_summary(start_date, end_date, use_cache=True)
 
                 mock_get_cache.assert_called_once()
-                # mock_set_cache should be called to store the result
+                # Cache should be called to store the result
 
 
 class TestDashboardLayout:
@@ -280,9 +280,11 @@ class TestDashboardUtils:
         assert chart1 is chart2  # Should return same object from cache
 
         # Test cache size limit
-        chart3 = memoizer.get_or_create("key2", "line", create_test_chart)
-        chart4 = memoizer.get_or_create("key3", "pie", create_test_chart)
-        chart5 = memoizer.get_or_create("key4", "bar", create_test_chart)  # Should evict oldest
+        chart3 = memoizer.get_or_create("key2", "line", create_test_chart)  # noqa: F841
+        chart4 = memoizer.get_or_create("key3", "pie", create_test_chart)  # noqa: F841
+        chart5 = memoizer.get_or_create(  # noqa: F841
+            "key4", "bar", create_test_chart
+        )  # Should evict oldest
 
         assert len(memoizer._cache) <= 3
 
@@ -475,7 +477,7 @@ class TestDashboardPerformance:
 
             # Create multiple dashboard instances to test memory handling
             dashboards = []
-            for i in range(3):
+            for _ in range(3):
                 dashboard = CostMonitorDashboard(test_config)
                 dashboards.append(dashboard)
 

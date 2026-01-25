@@ -181,15 +181,20 @@ exclude = "src/visualization/dashboard/__init__.py"
 [[tool.mypy.overrides]]
 module = [
     "boto3.*",
+    "botocore.*",
     "google.*",
     "azure.*",
     "plotly.*",
     "dash.*",
+    "dash_bootstrap_components.*",
     "redis.*",
     "asyncpg.*",
     "structlog.*",
     "tenacity.*",
     "dynaconf.*",
+    "diskcache.*",
+    "click.*",
+    "uvicorn.*",
 ]
 ignore_missing_imports = true
 

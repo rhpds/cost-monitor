@@ -580,7 +580,7 @@ class CacheManager:
 
         try:
             keys_to_delete = []
-            for key in self._backend.keys():
+            for key in self._backend.keys():  # noqa: SIM118
                 # This is a simplified approach - in practice, you might want to
                 # store provider info in the key more explicitly
                 if provider in key:

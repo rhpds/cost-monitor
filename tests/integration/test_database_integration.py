@@ -52,10 +52,9 @@ class TestDatabaseConnection:
     async def test_database_transaction_handling(self, mock_db_pool):
         """Test database transaction handling."""
         # The mock is already set up in conftest.py with transaction support
-        async with mock_db_pool.acquire() as conn:
-            async with conn.transaction():
-                result = await conn.execute("INSERT INTO test_table (id) VALUES (1)")
-                assert "INSERT" in result
+        async with mock_db_pool.acquire() as conn, conn.transaction():
+            result = await conn.execute("INSERT INTO test_table (id) VALUES (1)")
+            assert "INSERT" in result
 
     @pytest.mark.asyncio
     async def test_database_concurrent_connections(self, mock_db_pool):

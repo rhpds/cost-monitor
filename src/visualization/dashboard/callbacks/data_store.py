@@ -261,10 +261,7 @@ def _setup_key_metrics_callback(dashboard):
         daily_costs = cost_data.get("daily_costs", [])
 
         # Calculate daily average
-        if daily_costs:
-            daily_average = total_cost / len(daily_costs)
-        else:
-            daily_average = 0
+        daily_average = total_cost / len(daily_costs) if daily_costs else 0
 
         # Calculate monthly projection (30 days)
         monthly_projection = daily_average * 30

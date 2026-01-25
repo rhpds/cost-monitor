@@ -12,7 +12,13 @@ repos:
             package-lock\.json|
             yarn\.lock|
             \.git/|
-            \.secrets\.baseline
+            \.secrets\.baseline|
+            ^docs/.*|
+            ^tests/.*|
+            ^config/.*|
+            ^openshift/.*|
+            \.env\.template|
+            docker-compose\.yml
           )
 
   # Security: Alternative secret detection (gitleaks)

@@ -681,7 +681,7 @@ class TestDataIntegrity:
                     assert field in data, f"Missing field: {field}"
 
                 # Validate data types
-                assert isinstance(data["total_cost"], (int, float))
+                assert isinstance(data["total_cost"], int | float)
                 assert isinstance(data["currency"], str)
                 assert isinstance(data["provider_breakdown"], dict)
                 assert isinstance(data["combined_daily_costs"], list)

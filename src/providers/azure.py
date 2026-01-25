@@ -499,121 +499,156 @@ class AzureCostProvider(CloudCostProvider):
     ) -> list[CostDataPoint]:
         """Download and parse CSV data from blob storage with caching and download deduplication."""
         try:
-            # Import the Azure CSV service module
-            from .azure_csv_service import (
-                acquire_download_lock,
-                check_current_month_cache_age,
-                download_blob_with_etag_check,
-                handle_etag_conditional_download,
-                parse_csv_content_to_cost_points,
-                release_download_lock,
-                validate_cache_and_setup_lock,
-                wait_for_concurrent_download,
-            )
+            # Get or validate cached CSV content
+            csv_content = self._get_or_validate_cached_csv(blob_name)
 
-            # Step 1: Validate cache settings and setup download lock
-            lock_key, is_current_month, _ = validate_cache_and_setup_lock(blob_name)
+            if not csv_content:
+                # Download CSV content with appropriate strategy
+                csv_content = self._download_csv_with_strategy(blob_name, container_name)
 
-            # Step 2: Check if CSV is already cached and validate age for current month
-            csv_content = self._load_cached_csv(blob_name)
-            if csv_content:
-                csv_content = check_current_month_cache_age(
-                    blob_name, csv_content, is_current_month, self._get_csv_cache_path
-                )
+            if not csv_content:
+                logger.warning(f"No CSV content available for {blob_name}")
+                return []
 
-            if csv_content:
-                logger.info(f"Using cached CSV data: {blob_name}")
-            else:
-                # Step 3: Handle download with lock management
-                try:
-                    lock_acquired, redis_client = acquire_download_lock(lock_key)
+            # Parse CSV data using service function
+            from .azure_csv_service import parse_csv_content_to_cost_points
 
-                    if not lock_acquired:
-                        # Another process is downloading, wait for completion
-                        csv_content = wait_for_concurrent_download(blob_name, self._load_cached_csv)
-
-                    if not csv_content:
-                        # Step 4: Download blob data with ETag support
-                        if is_current_month:
-                            logger.info(
-                                f"Current month detected - checking for updates: {blob_name}"
-                            )
-                        else:
-                            logger.info(f"No cache found - downloading data: {blob_name}")
-
-                        container = container_name or self.container_name
-                        if not self.blob_service_client:
-                            raise ValueError("Azure blob service client not authenticated")
-                        blob_client = self.blob_service_client.get_blob_client(
-                            container=container, blob=blob_name
-                        )
-
-                        # Handle ETag conditional download
-                        cached_etag, etag_cache_path = handle_etag_conditional_download(
-                            blob_client, blob_name, is_current_month, self._get_csv_cache_path
-                        )
-
-                        logger.info(f"Downloading export data: {blob_name}")
-
-                        try:
-                            csv_content = download_blob_with_etag_check(
-                                blob_client,
-                                cached_etag,
-                                is_current_month,
-                                blob_name,
-                                etag_cache_path,
-                                self._load_cached_csv,
-                            )
-
-                        except Exception as download_error:
-                            logger.error(f"Download failed: {download_error}")
-                            # Try to use cached version as fallback
-                            csv_content = self._load_cached_csv(blob_name)
-                            if csv_content:
-                                logger.info(
-                                    f"Using cached data as fallback after download error: {blob_name}"
-                                )
-                            else:
-                                raise download_error
-
-                        # Step 5: Cache the downloaded content
-                        if csv_content:
-                            self._save_csv_to_cache(blob_name, csv_content)
-                            if is_current_month:
-                                logger.info(
-                                    f"Cached current month data (1h TTL): {len(csv_content):,} characters"
-                                )
-                            else:
-                                logger.info(
-                                    f"Cached CSV data for future use: {len(csv_content):,} characters"
-                                )
-
-                    # Step 6: Release download lock
-                    release_download_lock(lock_acquired, redis_client, lock_key)
-
-                except (ImportError, Exception) as e:
-                    logger.warning(f"Redis lock failed, proceeding without lock: {e}")
-                    # Continue without locking as fallback
-                    if not csv_content:
-                        container = container_name or self.container_name
-                        if not self.blob_service_client:
-                            raise ValueError("Azure blob service client not authenticated")
-                        blob_client = self.blob_service_client.get_blob_client(
-                            container=container, blob=blob_name
-                        )
-                        logger.info(f"Downloading export data (no lock): {blob_name}")
-                        blob_data = blob_client.download_blob()
-                        csv_content = blob_data.readall().decode("utf-8")
-                        self._save_csv_to_cache(blob_name, csv_content)
-                        logger.info(f"Cached CSV data: {len(csv_content):,} characters")
-
-            # Step 7: Parse CSV data using service function
             cost_points = parse_csv_content_to_cost_points(csv_content, target_date)
             return cost_points
 
         except Exception as e:
             logger.error(f"Error downloading/parsing CSV data: {e}")
             return []
+
+    def _get_or_validate_cached_csv(self, blob_name: str) -> str | None:
+        """Check for cached CSV content and validate age for current month."""
+        from .azure_csv_service import check_current_month_cache_age, validate_cache_and_setup_lock
+
+        # Validate cache settings and setup download lock
+        _, is_current_month, _ = validate_cache_and_setup_lock(blob_name)
+
+        # Check if CSV is already cached and validate age for current month
+        csv_content = self._load_cached_csv(blob_name)
+        if csv_content:
+            csv_content = check_current_month_cache_age(
+                blob_name, csv_content, is_current_month, self._get_csv_cache_path
+            )
+
+        if csv_content:
+            logger.info(f"Using cached CSV data: {blob_name}")
+            return csv_content
+
+        return None
+
+    def _download_csv_with_strategy(
+        self, blob_name: str, container_name: str | None = None
+    ) -> str | None:
+        """Download CSV using locking strategy with fallback."""
+        try:
+            # Try download with locking
+            return self._download_csv_with_locking(blob_name, container_name)
+        except (ImportError, Exception) as e:
+            logger.warning(f"Redis lock failed, proceeding without lock: {e}")
+            # Fallback to simple download
+            return self._download_csv_fallback(blob_name, container_name)
+
+    def _download_csv_with_locking(
+        self, blob_name: str, container_name: str | None = None
+    ) -> str | None:
+        """Download CSV with Redis locking for deduplication."""
+        from .azure_csv_service import (
+            acquire_download_lock,
+            release_download_lock,
+            validate_cache_and_setup_lock,
+            wait_for_concurrent_download,
+        )
+
+        lock_key, is_current_month, _ = validate_cache_and_setup_lock(blob_name)
+        csv_content = None
+
+        lock_acquired, redis_client = acquire_download_lock(lock_key)
+
+        if not lock_acquired:
+            # Another process is downloading, wait for completion
+            return wait_for_concurrent_download(blob_name, self._load_cached_csv)
+
+        try:
+            csv_content = self._perform_blob_download(blob_name, container_name, is_current_month)
+
+            # Cache the downloaded content
+            if csv_content:
+                self._save_csv_to_cache(blob_name, csv_content)
+                cache_msg = "1h TTL" if is_current_month else "for future use"
+                logger.info(f"Cached CSV data ({cache_msg}): {len(csv_content):,} characters")
+        finally:
+            # Always release the lock
+            release_download_lock(lock_acquired, redis_client, lock_key)
+
+        return csv_content
+
+    def _perform_blob_download(
+        self, blob_name: str, container_name: str | None, is_current_month: bool
+    ) -> str | None:
+        """Perform the actual blob download with ETag support."""
+        from .azure_csv_service import (
+            download_blob_with_etag_check,
+            handle_etag_conditional_download,
+        )
+
+        if is_current_month:
+            logger.info(f"Current month detected - checking for updates: {blob_name}")
+        else:
+            logger.info(f"No cache found - downloading data: {blob_name}")
+
+        container = container_name or self.container_name
+        if not self.blob_service_client:
+            raise ValueError("Azure blob service client not authenticated")
+
+        blob_client = self.blob_service_client.get_blob_client(container=container, blob=blob_name)
+
+        # Handle ETag conditional download
+        cached_etag, etag_cache_path = handle_etag_conditional_download(
+            blob_client, blob_name, is_current_month, self._get_csv_cache_path
+        )
+
+        logger.info(f"Downloading export data: {blob_name}")
+
+        try:
+            return download_blob_with_etag_check(
+                blob_client,
+                cached_etag,
+                is_current_month,
+                blob_name,
+                etag_cache_path,
+                self._load_cached_csv,
+            )
+        except Exception as download_error:
+            logger.error(f"Download failed: {download_error}")
+            # Try to use cached version as fallback
+            csv_content = self._load_cached_csv(blob_name)
+            if csv_content:
+                logger.info(f"Using cached data as fallback after download error: {blob_name}")
+                return csv_content
+            else:
+                raise download_error
+
+    def _download_csv_fallback(
+        self, blob_name: str, container_name: str | None = None
+    ) -> str | None:
+        """Simple CSV download without locking as fallback."""
+        container = container_name or self.container_name
+        if not self.blob_service_client:
+            raise ValueError("Azure blob service client not authenticated")
+
+        blob_client = self.blob_service_client.get_blob_client(container=container, blob=blob_name)
+        logger.info(f"Downloading export data (no lock): {blob_name}")
+
+        blob_data = blob_client.download_blob()
+        csv_content: str = blob_data.readall().decode("utf-8")
+        self._save_csv_to_cache(blob_name, csv_content)
+        logger.info(f"Cached CSV data: {len(csv_content):,} characters")
+
+        return csv_content
 
     async def get_cost_data(
         self,
