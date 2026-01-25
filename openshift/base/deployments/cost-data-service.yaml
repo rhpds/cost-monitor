@@ -105,6 +105,11 @@ spec:
           value: "/etc/credentials/gcp/service-account.json"
         - name: CLOUDCOST__CLOUDS__GCP__CREDENTIALS_PATH
           value: "/etc/credentials/gcp/service-account.json"
+        - name: CLOUDCOST__CLOUDS__GCP__PROJECT_ID
+          valueFrom:
+            secretKeyRef:
+              name: gcp-credentials
+              key: project-id
 
         resources:
           requests:

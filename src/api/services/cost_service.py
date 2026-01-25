@@ -511,20 +511,25 @@ def _build_daily_costs_dict(daily_rows):
     """Build daily costs dictionary from database rows."""
     daily_costs_dict = {}
     for row in daily_rows:
-        date_str = row["date"]
+        date_obj = row["date"]
+        date_str = date_obj.isoformat() if hasattr(date_obj, "isoformat") else str(date_obj)
+
         if date_str not in daily_costs_dict:
             daily_costs_dict[date_str] = {
                 "date": date_str,
-                "total": 0.0,
-                "aws": 0.0,
-                "azure": 0.0,
-                "gcp": 0.0,
+                "total_cost": 0.0,
+                "currency": row.get("currency", "USD"),
+                "provider_breakdown": {
+                    "aws": 0.0,
+                    "azure": 0.0,
+                    "gcp": 0.0,
+                },
             }
 
         provider = row["provider"]
         cost = float(row["cost"])
-        daily_costs_dict[date_str][provider] = cost
-        daily_costs_dict[date_str]["total"] += cost
+        daily_costs_dict[date_str]["provider_breakdown"][provider] = cost
+        daily_costs_dict[date_str]["total_cost"] += cost
 
     # Convert to list format expected by dashboard
     return list(daily_costs_dict.values())
@@ -539,7 +544,7 @@ def _build_provider_data(service_rows, total_rows):
         provider_data[provider] = {
             "total_cost": float(row["total_cost"]),
             "currency": row["currency"],
-            "services": {},
+            "service_breakdown": {},
         }
 
     # Add service breakdown to each provider
@@ -549,13 +554,13 @@ def _build_provider_data(service_rows, total_rows):
         cost = float(row["cost"])
 
         if provider in provider_data:
-            provider_data[provider]["services"][service] = cost
+            provider_data[provider]["service_breakdown"][service] = cost
         else:
             # Handle case where service data exists but no total (shouldn't happen)
             provider_data[provider] = {
                 "total_cost": cost,
                 "currency": row["currency"],
-                "services": {service: cost},
+                "service_breakdown": {service: cost},
             }
 
     return provider_data
@@ -568,13 +573,22 @@ def _build_account_breakdown(all_account_rows):
     for row in all_account_rows:
         logger.info(f"🔍 DEBUG: Processing account row: {row} (type: {type(row)})")
         try:
+            provider = row["provider"]
             account_name = row.get("account_name", row["account_id"]) if row else "unknown"
-            result[row["provider"]] = {
-                "account_id": row["account_id"],
-                "account_name": account_name,
-                "cost": float(row["cost"]),
-                "currency": row["currency"],
-            }
+
+            # Initialize provider list if not exists
+            if provider not in result:
+                result[provider] = []
+
+            # Add account data to provider's list
+            result[provider].append(
+                {
+                    "account_id": row["account_id"],
+                    "account_name": account_name,
+                    "cost": float(row["cost"]),
+                    "currency": row["currency"],
+                }
+            )
         except Exception as e:
             logger.error(f"🔍 DEBUG: Error processing account row {row}: {e}")
     return result

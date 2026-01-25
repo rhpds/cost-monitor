@@ -240,15 +240,19 @@ create_secrets() {
 
     # GCP credentials (if service account file exists)
     local gcp_file=$(yq eval '.secrets.gcp.service_account_file' "$CONFIG_FILE")
+    local gcp_project_id=$(yq eval '.secrets.gcp.project_id' "$CONFIG_FILE")
+
     if [ -f "$gcp_file" ]; then
         oc create secret generic gcp-credentials -n ${NAMESPACE} \
             --from-file=service-account.json="$gcp_file" \
+            --from-literal=project-id="$gcp_project_id" \
             --dry-run=client -o yaml | oc apply -f -
     else
         echo -e "${YELLOW}⚠️  GCP service account file not found: $gcp_file${NC}"
         echo -e "${YELLOW}   Creating placeholder GCP secret${NC}"
         oc create secret generic gcp-credentials -n ${NAMESPACE} \
             --from-literal=service-account.json='{}' \
+            --from-literal=project-id="${gcp_project_id:-}" \
             --dry-run=client -o yaml | oc apply -f -
     fi
 
