@@ -109,26 +109,28 @@ def _setup_main_data_callback(dashboard):
 def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
     """Determine the date range based on the triggered button."""
     today = date.today()
+    # Use 2 days ago as safe end date since AWS Cost Explorer data has 1-2 day delay
+    safe_end_date = today - timedelta(days=2)
     triggered_prop = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else None
 
     logger.info(f"🔘 BUTTON DEBUG: Triggered by {triggered_prop}")
 
     if triggered_prop == "btn-latest" or triggered_prop == "btn-this-month":
         start_date_obj = dashboard._get_month_start(today)
-        end_date_obj = today
+        end_date_obj = safe_end_date
     elif triggered_prop == "btn-last-month":
         start_date_obj, end_date_obj = dashboard._get_last_month()
     elif triggered_prop == "btn-this-week":
         start_date_obj = dashboard._get_week_start(today)
-        end_date_obj = today
+        end_date_obj = safe_end_date
     elif triggered_prop == "btn-last-week":
         start_date_obj, end_date_obj = dashboard._get_last_week()
     elif triggered_prop == "btn-last-30-days":
         start_date_obj = today - timedelta(days=30)
-        end_date_obj = today
+        end_date_obj = safe_end_date
     elif triggered_prop == "btn-last-7-days":
         start_date_obj = today - timedelta(days=7)
-        end_date_obj = today
+        end_date_obj = safe_end_date
     elif triggered_prop == "btn-apply-dates":
         # Use date picker values for Apply button
         if start_date_picker and end_date_picker:
@@ -137,15 +139,15 @@ def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
         else:
             # Fallback if date picker values are missing
             start_date_obj = dashboard._get_month_start(today)
-            end_date_obj = today
+            end_date_obj = safe_end_date
     elif triggered_prop == "interval-component":
         # Auto-refresh: use This Month for consistency
         start_date_obj = dashboard._get_month_start(today)
-        end_date_obj = today
+        end_date_obj = safe_end_date
     else:
         # Default case or initial load
         start_date_obj = dashboard._get_month_start(today)
-        end_date_obj = today
+        end_date_obj = safe_end_date
 
     return start_date_obj, end_date_obj
 

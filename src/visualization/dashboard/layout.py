@@ -5,7 +5,7 @@ Contains the main layout function and component definitions
 for the dashboard UI structure.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 import dash_bootstrap_components as dbc
 from dash import dcc, html
@@ -53,7 +53,8 @@ def create_dashboard_layout(dashboard):
                                                                 start_date=date.today().replace(
                                                                     day=1
                                                                 ),
-                                                                end_date=date.today(),
+                                                                end_date=date.today()
+                                                                - timedelta(days=2),
                                                                 display_format="YYYY-MM-DD",
                                                                 style={"width": "100%"},
                                                             )
