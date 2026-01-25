@@ -2,20 +2,21 @@
 # Multi-stage build for production optimization
 
 # Build stage
-FROM registry.access.redhat.com/ubi9/python-311:latest AS builder
+FROM registry.access.redhat.com/ubi9/python-311:1-77.1726840859 AS builder
 
+# hadolint ignore=DL3002
 USER root
 
 # Install system dependencies (including runtime dependencies)
 RUN dnf update -y && \
     dnf install -y \
-        gcc \
-        gcc-c++ \
-        make \
-        libpq-devel \
-        libpq \
-        openssl-devel \
-        ca-certificates \
+        gcc-11.5.0 \
+        gcc-c++-11.5.0 \
+        make-4.3 \
+        libpq-devel-13.23 \
+        libpq-13.23 \
+        openssl-devel-3.5.1 \
+        ca-certificates-2025.2.80_v9.0.305 \
     && dnf clean all
 
 # Create app directory
@@ -27,12 +28,12 @@ COPY requirements.txt requirements-data-service.txt ./
 # Install Python dependencies in virtual environment
 RUN python -m venv /opt/app-root/venv && \
     source /opt/app-root/venv/bin/activate && \
-    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --upgrade pip==25.3 && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir -r requirements-data-service.txt
 
 # Production stage
-FROM registry.access.redhat.com/ubi9/python-311:latest
+FROM registry.access.redhat.com/ubi9/python-311:1-77.1726840859
 
 # Set working directory as root
 WORKDIR /app
