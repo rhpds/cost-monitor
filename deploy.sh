@@ -391,10 +391,9 @@ configure_oauth_files() {
             redirect_uri="https://cost-monitor.${CLUSTER_DOMAIN}/oauth/callback"
         fi
 
-        # Update OAuth RBAC with correct redirect URI, namespace, and generated client secret
-        sed -e "s|cost-monitor\\.apps\\.cluster\\.local|cost-monitor.${CLUSTER_DOMAIN}|g" \
-            -e "s|namespace: cost-monitor|namespace: ${NAMESPACE}|g" \
-            -e "s|\"https://cost-monitor.apps.cluster.local/oauth/callback\"|\"${redirect_uri}\"|g" \
+        # Update OAuth RBAC with correct redirect URI and generated client secret
+        # Note: namespace changes are handled automatically by kustomize
+        sed -e "s|https://cost-monitor\\.apps\\.cluster\\.local/oauth/callback|${redirect_uri}|g" \
             -e "s|secret: cost-monitor-oauth-secret|secret: ${OAUTH_CLIENT_SECRET}|g" \
             "$oauth_rbac_base" > "$oauth_rbac_patch"
         echo "Created OAuth RBAC patch: $oauth_rbac_patch"
