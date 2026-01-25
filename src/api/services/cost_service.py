@@ -385,10 +385,7 @@ async def _get_gcp_account_breakdown(start_date: date, end_date: date):
         config = get_config()
         logger.info(f"🔍 DEBUG: get_config() returned: {config} (type: {type(config)})")
 
-        # Handle None config case during testing
-        if config is None:
-            logger.info("Config is None - skipping GCP account collection (likely in test mode)")
-            return gcp_account_rows
+        # Config is guaranteed to be non-None per type annotations
 
         logger.info(f"🔍 DEBUG: Config has gcp attribute: {hasattr(config, 'gcp')}")
 

@@ -22,6 +22,7 @@ from .monitoring.alerts import ThresholdMonitor
 from .monitoring.text_alerts import AlertFormatConfig, OutputFormat, TextAlertNotifier
 
 # Import provider implementations to register them
+from .providers import aws, azure, gcp  # noqa: F401
 from .providers.base import ProviderFactory
 from .utils.auth import MultiCloudAuthManager
 from .utils.data_normalizer import CostDataNormalizer

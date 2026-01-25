@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Import provider implementations to register them
 from ..config.settings import get_config
+from ..providers import aws, azure, gcp  # noqa: F401
 
 # Import provider system for on-demand data collection
 from ..providers.base import CostDataPoint as ProviderCostDataPoint
@@ -251,7 +252,11 @@ async def store_cost_data(provider_name: str, cost_points: list[ProviderCostData
         """
 
         for point in cost_points:
-            point_date = point.date if isinstance(point.date, date) else point.date.date()
+            point_date = (
+                point.date
+                if isinstance(point.date, date) and not isinstance(point.date, datetime)
+                else point.date.date()
+            )
             await conn.execute(
                 insert_query,
                 provider_id,
