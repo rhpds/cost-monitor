@@ -13,8 +13,8 @@ LOCKFILE="/tmp/dashboard.lock"
 cleanup() {
     echo "🧹 Cleaning up dashboard process..."
     rm -f "$PIDFILE" "$LOCKFILE"
-    # Kill any orphaned dashboard processes
-    pkill -f "python.*dashboard" 2>/dev/null || true
+    # Kill any orphaned dashboard processes (avoid system processes)
+    pkill -f "src.visualization.dashboard" 2>/dev/null || true
     echo "✅ Cleanup completed"
 }
 
@@ -23,7 +23,8 @@ trap cleanup EXIT INT TERM
 
 # Check for existing dashboard processes and clean them up
 echo "🔍 Checking for existing dashboard processes..."
-EXISTING_PIDS=$(pgrep -f "python.*dashboard" 2>/dev/null || echo "")
+# Use more specific pattern and filter out system processes (PID 1, 2)
+EXISTING_PIDS=$(pgrep -f "src.visualization.dashboard" 2>/dev/null | grep -v "^1$" | grep -v "^2$" || echo "")
 if [ -n "$EXISTING_PIDS" ]; then
     echo "⚠️  Found existing dashboard processes: $EXISTING_PIDS"
     echo "🔄 Terminating existing processes..."
@@ -32,6 +33,8 @@ if [ -n "$EXISTING_PIDS" ]; then
     # Force kill if still running
     echo "$EXISTING_PIDS" | xargs kill -KILL 2>/dev/null || true
     echo "✅ Existing processes terminated"
+else
+    echo "✅ No existing dashboard processes found"
 fi
 
 # Create lock file to prevent concurrent starts
@@ -127,12 +130,14 @@ except ImportError as e:
 "
 
 # Final process check before exec
-FINAL_CHECK=$(pgrep -f "python.*dashboard" 2>/dev/null | wc -l)
+FINAL_CHECK=$(pgrep -f "src.visualization.dashboard" 2>/dev/null | grep -v "^1$" | grep -v "^2$" | wc -l)
 if [ "$FINAL_CHECK" -gt 0 ]; then
     echo "❌ Dashboard processes still detected before start: $FINAL_CHECK"
     echo "🔄 Force cleaning..."
-    pkill -9 -f "python.*dashboard" 2>/dev/null || true
+    pkill -9 -f "src.visualization.dashboard" 2>/dev/null || true
     sleep 2
+else
+    echo "✅ No conflicting dashboard processes detected"
 fi
 
 # Record our PID for monitoring

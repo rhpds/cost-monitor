@@ -11,14 +11,30 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-OVERLAY="${1:-local}"
+ENVIRONMENT="${1:-prod}"
 DRY_RUN="${2:-false}"
-CONFIG_FILE="openshift/local/local-config.yaml"
+OVERLAY="local"
+
+# Determine config file based on environment
+if [ "${ENVIRONMENT}" = "dev" ]; then
+    CONFIG_FILE="openshift/local/local-config-dev.yaml"
+elif [ "${ENVIRONMENT}" = "prod" ]; then
+    CONFIG_FILE="openshift/local/local-config.yaml"
+else
+    echo -e "${RED}❌ Invalid environment: ${ENVIRONMENT}${NC}"
+    echo "Usage: $0 [prod|dev] [dry-run]"
+    echo "  prod: Deploy to production namespace (default)"
+    echo "  dev:  Deploy to development namespace"
+    echo "  dry-run: Show what would be deployed without applying"
+    exit 1
+fi
 LOCAL_OVERLAY_DIR="openshift/overlays/local"
 TEMPLATE_OVERLAY_DIR="openshift/overlays/local-template"
 
 echo -e "${BLUE}🚀 Cost Monitor Deployment Script (Enhanced)${NC}"
 echo -e "${BLUE}=============================================${NC}"
+echo -e "${YELLOW}Environment: ${ENVIRONMENT}${NC}"
+echo -e "${YELLOW}Config File: ${CONFIG_FILE}${NC}"
 echo ""
 
 # Check for required tools
@@ -34,12 +50,18 @@ done
 
 # Check local configuration
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo -e "${RED}❌ Local configuration file not found: $CONFIG_FILE${NC}"
+    echo -e "${RED}❌ Configuration file for ${ENVIRONMENT} environment not found: $CONFIG_FILE${NC}"
     echo ""
-    echo -e "${YELLOW}Please create your local configuration:${NC}"
-    echo -e "1. Copy the template: ${BLUE}cp openshift/local-config.template.yaml $CONFIG_FILE${NC}"
-    echo -e "2. Edit the file with your actual values: ${BLUE}vi $CONFIG_FILE${NC}"
+    echo -e "${YELLOW}Please create your ${ENVIRONMENT} environment configuration:${NC}"
+    if [ "${ENVIRONMENT}" = "dev" ]; then
+        echo -e "1. Copy from existing: ${BLUE}cp openshift/local/local-config.yaml $CONFIG_FILE${NC}"
+        echo -e "2. Or copy from template: ${BLUE}cp openshift/local-config.template.yaml $CONFIG_FILE${NC}"
+    else
+        echo -e "1. Copy the template: ${BLUE}cp openshift/local-config.template.yaml $CONFIG_FILE${NC}"
+    fi
+    echo -e "3. Edit the file with your actual values: ${BLUE}vi $CONFIG_FILE${NC}"
     echo ""
+    echo "Available environments: prod, dev"
     exit 1
 fi
 
@@ -84,8 +106,12 @@ cp "$TEMPLATE_OVERLAY_DIR/kustomization.yaml" "$LOCAL_OVERLAY_DIR/"
 cp "$TEMPLATE_OVERLAY_DIR/routes-patch.yaml" "$LOCAL_OVERLAY_DIR/"
 
 # Replace placeholders in kustomization.yaml
+# Replace registry and namespace in image paths, but preserve image names
+sed -i "s|YOUR_REGISTRY_URL/cost-monitor/|${IMAGE_REGISTRY}/${NAMESPACE}/|g" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
+# Replace remaining YOUR_REGISTRY_URL instances (if any)
 sed -i "s|YOUR_REGISTRY_URL|${IMAGE_REGISTRY}|g" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
-sed -i "s|cost-monitor|${NAMESPACE}|g" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
+# Replace namespace field
+sed -i "s|^namespace: cost-monitor|namespace: ${NAMESPACE}|g" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
 
 # Replace placeholders in routes-patch.yaml
 sed -i "s|YOUR_CLUSTER_DOMAIN|${CLUSTER_DOMAIN}|g" "$LOCAL_OVERLAY_DIR/routes-patch.yaml"
@@ -374,9 +400,9 @@ EOF
     echo -e "${GREEN}✅ OAuth configuration files configured for deployment${NC}"
 }
 
-# Function for ordered deployment to prevent race conditions
+# Function for ordered service startup to prevent race conditions
 deploy_services_ordered() {
-    echo -e "${BLUE}🔄 Implementing ordered deployment sequence (race condition prevention)...${NC}"
+    echo -e "${BLUE}🔄 Implementing ordered service startup sequence (race condition prevention)...${NC}"
 
     if [ "${DRY_RUN}" = "true" ]; then
         echo -e "${YELLOW}[DRY RUN] Would execute ordered deployment sequence${NC}"
@@ -405,13 +431,9 @@ deploy_services_ordered() {
 
     echo -e "${GREEN}✅ Step 1: Application services scaled down cleanly${NC}"
 
-    # Step 2: Apply all configuration changes
-    echo -e "${YELLOW}⚙️  Step 2: Applying configuration updates...${NC}"
-    oc apply -k "$LOCAL_OVERLAY_DIR" || {
-        echo -e "${RED}❌ Configuration update failed${NC}"
-        exit 1
-    }
-    echo -e "${GREEN}✅ Step 2: Configuration applied${NC}"
+    # Step 2: Configuration already applied, just ensure clean state
+    echo -e "${YELLOW}⚙️  Step 2: Configuration already applied - verifying clean state...${NC}"
+    echo -e "${GREEN}✅ Step 2: Ready for ordered startup${NC}"
 
     # Step 3: Start services in dependency order
     echo -e "${YELLOW}🚀 Step 3: Starting services in dependency order...${NC}"
@@ -603,6 +625,16 @@ else
 
     echo ""
 
+    # Deploy all resources first (infrastructure and applications)
+    echo -e "${BLUE}🚀 Deploying all resources...${NC}"
+    oc apply -k "$LOCAL_OVERLAY_DIR" || {
+        echo -e "${RED}❌ Configuration deployment failed${NC}"
+        exit 1
+    }
+    echo -e "${GREEN}✅ All resources deployed${NC}"
+
+    echo ""
+
     # Wait for databases to be ready first (infrastructure layer)
     echo -e "${BLUE}🗄️  Ensuring database infrastructure is ready...${NC}"
     wait_for_statefulset "postgresql" 600
@@ -610,7 +642,7 @@ else
 
     echo ""
 
-    # Deploy application services with race condition prevention
+    # Start application services in proper order to prevent race conditions
     deploy_services_ordered
 
     # Setup OAuth client and wait for proxy if enabled

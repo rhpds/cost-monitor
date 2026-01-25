@@ -11,10 +11,10 @@ resources:
 # Override images with your local registry
 # Replace YOUR_REGISTRY_URL with your actual OpenShift image registry
 images:
-- name: cost-monitor-dashboard:latest
+- name: image-registry.openshift-image-registry.svc:5000/cost-monitor/cost-monitor-dashboard:latest
   newName: YOUR_REGISTRY_URL/cost-monitor/cost-monitor-dashboard
   newTag: latest
-- name: cost-data-service:latest
+- name: image-registry.openshift-image-registry.svc:5000/cost-monitor/cost-data-service:latest
   newName: YOUR_REGISTRY_URL/cost-monitor/cost-data-service
   newTag: latest
 
