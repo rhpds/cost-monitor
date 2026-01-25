@@ -31,17 +31,20 @@ spec:
       - name: oauth-proxy
         image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:latest
         ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
         - containerPort: 8443
           name: https
           protocol: TCP
         args:
         - -provider=openshift
-        - -https-address=:8443
-        - -http-address=
+        - -http-address=:8080
+        - -https-address=
         - -email-domain=*
         - -upstream=http://dashboard-service:8050/
-        - -tls-cert=/etc/tls/private/tls.crt
-        - -tls-key=/etc/tls/private/tls.key
+        - -client-id=cost-monitor-oauth-client
+        - -client-secret-file=/etc/proxy/secrets/client-secret
         - -cookie-secret-file=/etc/proxy/secrets/session_secret
         - -openshift-service-account=cost-monitor-oauth
         - -openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
@@ -75,8 +78,8 @@ spec:
         livenessProbe:
           httpGet:
             path: /oauth/healthz
-            port: 8443
-            scheme: HTTPS
+            port: 8080
+            scheme: HTTP
           initialDelaySeconds: 10
           timeoutSeconds: 5
           periodSeconds: 10
@@ -84,8 +87,8 @@ spec:
         readinessProbe:
           httpGet:
             path: /oauth/healthz
-            port: 8443
-            scheme: HTTPS
+            port: 8080
+            scheme: HTTP
           initialDelaySeconds: 5
           timeoutSeconds: 3
           periodSeconds: 5
@@ -115,6 +118,10 @@ spec:
     app: oauth-proxy
     component: oauth-proxy
   ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
   - name: https
     port: 8443
     targetPort: 8443
