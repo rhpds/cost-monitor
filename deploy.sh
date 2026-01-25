@@ -241,11 +241,15 @@ create_secrets() {
     # GCP credentials (if service account file exists)
     local gcp_file=$(yq eval '.secrets.gcp.service_account_file' "$CONFIG_FILE")
     local gcp_project_id=$(yq eval '.secrets.gcp.project_id' "$CONFIG_FILE")
+    local gcp_bigquery_dataset=$(yq eval '.secrets.gcp.bigquery_billing_dataset' "$CONFIG_FILE")
+    local gcp_billing_account=$(yq eval '.secrets.gcp.billing_account_id' "$CONFIG_FILE")
 
     if [ -f "$gcp_file" ]; then
         oc create secret generic gcp-credentials -n ${NAMESPACE} \
             --from-file=service-account.json="$gcp_file" \
             --from-literal=project-id="$gcp_project_id" \
+            --from-literal=bigquery-dataset="$gcp_bigquery_dataset" \
+            --from-literal=billing-account-id="$gcp_billing_account" \
             --dry-run=client -o yaml | oc apply -f -
     else
         echo -e "${YELLOW}⚠️  GCP service account file not found: $gcp_file${NC}"
@@ -253,6 +257,8 @@ create_secrets() {
         oc create secret generic gcp-credentials -n ${NAMESPACE} \
             --from-literal=service-account.json='{}' \
             --from-literal=project-id="${gcp_project_id:-}" \
+            --from-literal=bigquery-dataset="${gcp_bigquery_dataset:-}" \
+            --from-literal=billing-account-id="${gcp_billing_account:-}" \
             --dry-run=client -o yaml | oc apply -f -
     fi
 
@@ -644,10 +650,19 @@ else
 
     # Deploy all resources first (infrastructure and applications)
     echo -e "${BLUE}🚀 Deploying all resources...${NC}"
-    oc apply -k "$LOCAL_OVERLAY_DIR" || {
-        echo -e "${RED}❌ Configuration deployment failed${NC}"
-        exit 1
-    }
+
+    # Apply resources, using replace for deployments to handle immutable field changes
+    if ! oc apply -k "$LOCAL_OVERLAY_DIR"; then
+        echo -e "${YELLOW}⚠️  Initial apply failed (likely immutable field changes), trying replace strategy...${NC}"
+
+        # Extract and apply non-deployment resources first
+        oc kustomize "$LOCAL_OVERLAY_DIR" | oc apply -f - --selector='!app.kubernetes.io/component=data-service,!app.kubernetes.io/component=dashboard'
+
+        # Force replace deployments to handle spec changes
+        echo -e "${BLUE}🔄 Force replacing deployments with updated configurations...${NC}"
+        oc kustomize "$LOCAL_OVERLAY_DIR" | oc apply -f - --selector='app.kubernetes.io/component=data-service' --force
+        oc kustomize "$LOCAL_OVERLAY_DIR" | oc apply -f - --selector='app.kubernetes.io/component=dashboard' --force
+    fi
     echo -e "${GREEN}✅ All resources deployed${NC}"
 
     echo ""

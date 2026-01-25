@@ -110,6 +110,16 @@ spec:
             secretKeyRef:
               name: gcp-credentials
               key: project-id
+        - name: CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET
+          valueFrom:
+            secretKeyRef:
+              name: gcp-credentials
+              key: bigquery-dataset
+        - name: CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID
+          valueFrom:
+            secretKeyRef:
+              name: gcp-credentials
+              key: billing-account-id
 
         resources:
           requests:
