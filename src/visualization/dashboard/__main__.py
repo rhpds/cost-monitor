@@ -17,8 +17,8 @@ if project_root not in sys.path:
 def main_entry():
     """Main entry point for the dashboard."""
     try:
-        # Import after path setup to avoid import issues
-        from src.visualization.dashboard import main
+        # Import the main function from app.py in the same package
+        from .app import main
 
         # Run the async main function
         asyncio.run(main())

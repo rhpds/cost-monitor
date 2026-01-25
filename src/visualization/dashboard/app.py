@@ -6,10 +6,10 @@ the monolithic dashboard.py implementation.
 """
 
 # Import the main dashboard class from the modular implementation
-from .dashboard.core import CostMonitorDashboard
-from .dashboard.data_manager import CostDataManager
-from .dashboard.themes import DashboardTheme
-from .dashboard.utils import ChartMemoizer, DataWrapper, PerformanceMonitor
+from .core import CostMonitorDashboard
+from .data_manager import CostDataManager
+from .themes import DashboardTheme
+from .utils import ChartMemoizer, DataWrapper, PerformanceMonitor
 
 
 # For backward compatibility, export the main function

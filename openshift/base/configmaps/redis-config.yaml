@@ -14,18 +14,18 @@ data:
     port 6379
     timeout 0
     tcp-keepalive 300
-    
+
     # General
     daemonize no
     pidfile /var/run/redis.pid
     loglevel notice
     logfile ""
     databases 16
-    
+
     # Memory management
     maxmemory 768mb
     maxmemory-policy allkeys-lru
-    
+
     # Persistence
     save 900 1
     save 300 10
@@ -35,7 +35,7 @@ data:
     rdbchecksum yes
     dbfilename dump.rdb
     dir /data
-    
+
     # Append only file
     appendonly yes
     appendfilename "appendonly.aof"
@@ -44,21 +44,21 @@ data:
     auto-aof-rewrite-percentage 100
     auto-aof-rewrite-min-size 64mb
     aof-load-truncated yes
-    
+
     # Security
     # requirepass will be set via environment variable
-    
+
     # Clients
     tcp-backlog 511
     maxclients 10000
-    
+
     # Slow log
     slowlog-log-slower-than 10000
     slowlog-max-len 128
-    
+
     # Latency monitor
     latency-monitor-threshold 100
-    
+
     # Memory usage optimization for cost monitoring workload
     hash-max-ziplist-entries 512
     hash-max-ziplist-value 64

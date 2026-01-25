@@ -149,11 +149,11 @@ repos:
             \.secrets\.baseline$
           )
 
-  # Dockerfile linting (if Docker images are modified)
-  - repo: https://github.com/hadolint/hadolint
+  # Dockerfile linting (Python-based, no Docker required)
+  - repo: https://github.com/AleksaC/hadolint-py
     rev: v2.12.0
     hooks:
-      - id: hadolint-docker
+      - id: hadolint
         files: dockerfiles/.*
 
   # Spell checking for documentation

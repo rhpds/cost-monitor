@@ -15,13 +15,13 @@ data:
       pool_timeout: 30
       pool_recycle: 3600
       echo: false
-    
+
     redis:
       default_ttl: 3600
       max_connections: 100
       retry_on_timeout: true
       decode_responses: true
-    
+
     clouds:
       aws:
         enabled: true
@@ -41,18 +41,18 @@ data:
         enabled: true
         max_retries: 3
         project_filter: []  # Empty means all accessible projects
-    
+
     api:
       host: "0.0.0.0"
       port: 8000
       workers: 1
       timeout_keep_alive: 5
       access_log: false
-    
+
     logging:
       level: "INFO"
       format: "json"
-      
+
     monitoring:
       metrics_enabled: true
       health_check_interval: 30
@@ -75,22 +75,22 @@ data:
       debug: false
       host: "0.0.0.0"
       port: 8050
-      
+
     ui:
       theme: "bootstrap"
       charts:
         default_height: 400
         animation: false  # Disable for performance
-        
+
     cache:
       chart_cache_size: 50
       chart_cache_ttl: 1800  # 30 minutes
-      
+
     data_service:
       timeout: 30
       retry_attempts: 3
       retry_delay: 1
-      
+
     logging:
       level: "INFO"
       format: "json"
