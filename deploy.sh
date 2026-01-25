@@ -172,13 +172,17 @@ create_secrets() {
         --from-literal=admin-password="$pg_password" \
         --dry-run=client -o yaml | oc apply -f -
 
-    # Update PostgreSQL user password if it was regenerated
+    # Update PostgreSQL user password if it was regenerated and pod exists
     if [[ "$pg_password_raw" == *'$(openssl rand'* ]]; then
         echo -e "${BLUE}🔄 Updating PostgreSQL user password...${NC}"
-        oc exec postgresql-0 -n ${NAMESPACE} -- psql -U postgres -c "ALTER USER ${pg_user} WITH PASSWORD '${pg_password}';" 2>/dev/null || {
-            echo -e "${YELLOW}⚠️  Could not update PostgreSQL password - database may be initializing${NC}"
-        }
-        echo -e "${GREEN}✅ PostgreSQL password updated${NC}"
+        if oc get pod postgresql-0 -n ${NAMESPACE} &>/dev/null && oc get pod postgresql-0 -n ${NAMESPACE} -o jsonpath='{.status.phase}' | grep -q "Running"; then
+            oc exec postgresql-0 -n ${NAMESPACE} -- psql -U postgres -c "ALTER USER ${pg_user} WITH PASSWORD '${pg_password}';" 2>/dev/null || {
+                echo -e "${YELLOW}⚠️  Could not update PostgreSQL password - database may be initializing${NC}"
+            }
+            echo -e "${GREEN}✅ PostgreSQL password updated${NC}"
+        else
+            echo -e "${YELLOW}⚠️  PostgreSQL not yet running - will use new password on first start${NC}"
+        fi
     fi
 
     # Redis credentials
@@ -195,13 +199,15 @@ create_secrets() {
         --from-literal=password="$redis_password" \
         --dry-run=client -o yaml | oc apply -f -
 
-    # Restart Redis if password was regenerated (Redis reads password from secret on startup)
+    # Restart Redis if password was regenerated and deployment exists
     if [[ "$redis_password_raw" == *'$(openssl rand'* ]]; then
         echo -e "${BLUE}🔄 Restarting Redis with new password...${NC}"
-        oc rollout restart deployment/redis -n ${NAMESPACE} || {
-            echo -e "${YELLOW}⚠️  Could not restart Redis deployment${NC}"
-        }
-        echo -e "${GREEN}✅ Redis restart initiated${NC}"
+        if oc get deployment redis -n ${NAMESPACE} &>/dev/null; then
+            oc rollout restart deployment/redis -n ${NAMESPACE}
+            echo -e "${GREEN}✅ Redis restart initiated${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Redis deployment not yet created - will use new password on first start${NC}"
+        fi
     fi
 
     # AWS credentials
