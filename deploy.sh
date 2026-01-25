@@ -328,17 +328,24 @@ generate_oauth_secrets() {
         return
     fi
 
+    # Generate random OAuth client secret (secure random string)
+    local oauth_client_secret=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+
     # Generate cookie secret (exactly 32 characters for OpenShift oauth-proxy)
     local cookie_secret=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c32)
+
+    # Store the OAuth client secret for use in OAuthClient creation
+    export OAUTH_CLIENT_SECRET="$oauth_client_secret"
 
     # Create OAuth proxy secret with client and session secrets (for OpenShift oauth-proxy)
     oc create secret generic oauth-proxy-secret -n ${NAMESPACE} \
         --from-literal=client-id="cost-monitor-oauth-client" \
-        --from-literal=client-secret="" \
+        --from-literal=client-secret="$oauth_client_secret" \
+        --from-literal=cookie-secret="$cookie_secret" \
         --from-literal=session_secret="$cookie_secret" \
         --dry-run=client -o yaml | oc apply -f -
 
-    echo -e "${GREEN}✅ OAuth secrets generated with session secret${NC}"
+    echo -e "${GREEN}✅ OAuth secrets generated with random client secret${NC}"
 }
 
 configure_oauth_files() {
@@ -376,7 +383,19 @@ configure_oauth_files() {
     local oauth_rbac_base="openshift/base/auth/oauth-rbac.yaml"
     local oauth_rbac_patch="$LOCAL_OVERLAY_DIR/auth-patches/oauth-rbac-patch.yaml"
     if [ -f "$oauth_rbac_base" ]; then
+        # Determine the redirect URI based on environment
+        local redirect_uri
+        if [ "${ENVIRONMENT}" = "dev" ]; then
+            redirect_uri="https://dashboard-route-${NAMESPACE}.${CLUSTER_DOMAIN}/oauth/callback"
+        else
+            redirect_uri="https://cost-monitor.${CLUSTER_DOMAIN}/oauth/callback"
+        fi
+
+        # Update OAuth RBAC with correct redirect URI, namespace, and generated client secret
         sed -e "s|cost-monitor\\.apps\\.cluster\\.local|cost-monitor.${CLUSTER_DOMAIN}|g" \
+            -e "s|namespace: cost-monitor|namespace: ${NAMESPACE}|g" \
+            -e "s|\"https://cost-monitor.apps.cluster.local/oauth/callback\"|\"${redirect_uri}\"|g" \
+            -e "s|secret: cost-monitor-oauth-secret|secret: ${OAUTH_CLIENT_SECRET}|g" \
             "$oauth_rbac_base" > "$oauth_rbac_patch"
         echo "Created OAuth RBAC patch: $oauth_rbac_patch"
     fi
@@ -553,18 +572,7 @@ setup_oauth_client() {
     done
 
     if [ $attempt -lt $max_attempts ]; then
-        # Get the OAuth client secret and update the proxy secret
-        local client_secret=$(oc get oauthclient cost-monitor-oauth-client -o jsonpath='{.secret}' 2>/dev/null)
-        if [ -n "$client_secret" ]; then
-            echo -e "${BLUE}🔧 Updating OAuth proxy secret with client secret...${NC}"
-            oc patch secret oauth-proxy-secret -n ${NAMESPACE} \
-                -p "{\"stringData\":{\"client-secret\":\"$client_secret\"}}"
-            echo -e "${GREEN}✅ OAuth client secret updated${NC}"
-        fi
-
-        # Restart OAuth proxy pods to pick up updated secrets
-        echo -e "${BLUE}🔄 Restarting OAuth proxy...${NC}"
-        oc delete pods -l component=oauth-proxy -n ${NAMESPACE} --ignore-not-found=true
+        echo -e "${GREEN}✅ OAuth client configured with generated secret${NC}"
 
         # Wait a moment for new pods to start
         sleep 5
