@@ -233,11 +233,13 @@ class CostMonitorDashboard:
         from .callbacks.charts import setup_chart_callbacks
         from .callbacks.data_store import setup_data_store_callbacks
         from .callbacks.interactions import setup_interaction_callbacks
+        from .callbacks.tables import setup_table_callbacks
 
         # Setup callback modules
         setup_data_store_callbacks(self)
         setup_chart_callbacks(self)
         setup_interaction_callbacks(self)
+        setup_table_callbacks(self)
 
     async def run(self):
         """Start the dashboard server."""

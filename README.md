@@ -142,7 +142,7 @@ python -m src.main export-prometheus
 
 ### Development & Deployment
 - [Development Guide](docs/DEVELOPMENT.md) - Local development and testing
-- [Testing Strategy](TESTING.md) - Comprehensive testing approach and workflows
+- [Testing Strategy](docs/TESTING.md) - Comprehensive testing approach and workflows
 - [Deployment Guide](docs/DEPLOYMENT.md) - Production deployment options
 
 ## Architecture

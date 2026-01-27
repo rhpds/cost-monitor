@@ -38,7 +38,6 @@ def _setup_main_data_callback(dashboard):
         [
             Input("interval-component", "n_intervals"),
             Input("btn-apply-dates", "n_clicks"),
-            Input("btn-latest", "n_clicks"),
             Input("btn-this-month", "n_clicks"),
             Input("btn-last-month", "n_clicks"),
             Input("btn-this-week", "n_clicks"),
@@ -52,7 +51,6 @@ def _setup_main_data_callback(dashboard):
     def update_data_store(
         n_intervals,
         apply_clicks,
-        latest_clicks,
         this_month_clicks,
         last_month_clicks,
         this_week_clicks,
@@ -65,11 +63,15 @@ def _setup_main_data_callback(dashboard):
         """Update the main data store."""
         try:
             ctx = dash.callback_context
+            triggered_prop = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else None
+            logger.info(f"📊 DATA STORE: Starting data update - triggered by {triggered_prop}")
 
             # Determine date range based on button clicked
+            logger.info(f"📅 DATE PICKER VALUES: start={start_date_picker}, end={end_date_picker}")
             start_date_obj, end_date_obj = _determine_date_range(
                 ctx, dashboard, start_date_picker, end_date_picker
             )
+            logger.info(f"📅 FINAL DATE RANGE: {start_date_obj} to {end_date_obj}")
 
             # Start performance monitoring for data fetch
             dashboard.performance_monitor.start_operation("data_fetch")
@@ -115,29 +117,32 @@ def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
 
     logger.info(f"🔘 BUTTON DEBUG: Triggered by {triggered_prop}")
 
-    if triggered_prop == "btn-latest" or triggered_prop == "btn-this-month":
+    if triggered_prop == "btn-this-month":
         start_date_obj = dashboard._get_month_start(today)
         end_date_obj = safe_end_date
     elif triggered_prop == "btn-last-month":
         start_date_obj, end_date_obj = dashboard._get_last_month()
     elif triggered_prop == "btn-this-week":
-        start_date_obj = dashboard._get_week_start(today)
+        start_date_obj = dashboard._get_week_start(safe_end_date)  # Use safe_end_date instead of today
         end_date_obj = safe_end_date
     elif triggered_prop == "btn-last-week":
         start_date_obj, end_date_obj = dashboard._get_last_week()
     elif triggered_prop == "btn-last-30-days":
-        start_date_obj = today - timedelta(days=30)
+        start_date_obj = safe_end_date - timedelta(days=30)
         end_date_obj = safe_end_date
     elif triggered_prop == "btn-last-7-days":
-        start_date_obj = today - timedelta(days=7)
+        start_date_obj = safe_end_date - timedelta(days=7)
         end_date_obj = safe_end_date
     elif triggered_prop == "btn-apply-dates":
         # Use date picker values for Apply button
+        logger.info(f"🔘 APPLY DATES: start_date_picker={start_date_picker}, end_date_picker={end_date_picker}")
         if start_date_picker and end_date_picker:
             start_date_obj = datetime.strptime(start_date_picker, "%Y-%m-%d").date()
             end_date_obj = datetime.strptime(end_date_picker, "%Y-%m-%d").date()
+            logger.info(f"🔘 APPLY DATES: Using picker values: {start_date_obj} to {end_date_obj}")
         else:
             # Fallback if date picker values are missing
+            logger.warning(f"🔘 APPLY DATES: Picker values missing! Using fallback")
             start_date_obj = dashboard._get_month_start(today)
             end_date_obj = safe_end_date
     elif triggered_prop == "interval-component":
@@ -214,17 +219,25 @@ def _transform_cost_data(real_cost_data):
         provider_breakdown = getattr(real_cost_data, "provider_breakdown", {})
         daily_costs = getattr(real_cost_data, "combined_daily_costs", [])
         account_breakdown = getattr(real_cost_data, "account_breakdown", {})
+        provider_data = getattr(real_cost_data, "provider_data", {})
     else:
         total_cost = real_cost_data.get("total_cost", 0.0)
         provider_breakdown = real_cost_data.get("provider_breakdown", {})
         daily_costs = real_cost_data.get("combined_daily_costs", [])
         account_breakdown = real_cost_data.get("account_breakdown", {})
+        provider_data = real_cost_data.get("provider_data", {})
+
+    # Extract service breakdown from provider_data
+    service_breakdown = {}
+    for provider, data in provider_data.items():
+        if isinstance(data, dict) and "service_breakdown" in data:
+            service_breakdown[provider] = data["service_breakdown"]
 
     return {
         "total_cost": total_cost,
         "provider_breakdown": provider_breakdown,
         "daily_costs": daily_costs,
-        "service_breakdown": {},  # Will be populated by other callbacks
+        "service_breakdown": service_breakdown,
         "account_breakdown": account_breakdown,
     }
 
@@ -252,40 +265,94 @@ def _setup_key_metrics_callback(dashboard):
             Output("cost-trend-metric", "children"),
             Output("cost-trend-metric", "className"),
         ],
-        [Input("cost-data-store", "data"), Input("provider-selector", "value")],
+        [
+            Input("cost-data-store", "data"),
+            Input("provider-selector", "value"),
+        ],
     )
     def update_key_metrics(cost_data, selected_provider):
         """Update key metrics display."""
         if not cost_data:
             return "$0.00", "$0.00", "$0.00", "0.0%", "text-muted"
 
-        total_cost = cost_data.get("total_cost", 0)
         daily_costs = cost_data.get("daily_costs", [])
 
-        # Calculate daily average
-        daily_average = total_cost / len(daily_costs) if daily_costs else 0
+        # ALWAYS filter out savings plans for key metrics (regardless of chart toggle)
+        from ..callbacks.charts import _filter_savings_plans
+
+        daily_costs = _filter_savings_plans(daily_costs, cost_data)
+
+        # Calculate provider-specific metrics
+        if selected_provider == "all":
+            # Use total cost across all providers
+            total_cost = cost_data.get("total_cost", 0)
+            daily_values = [day.get("total_cost", 0) for day in daily_costs]
+        else:
+            # Filter to selected provider only
+            daily_values = [
+                day.get("provider_breakdown", {}).get(selected_provider, 0) for day in daily_costs
+            ]
+            total_cost = sum(daily_values)
+
+        # Calculate metrics based on filtered data
+        daily_average = total_cost / max(len(daily_costs), 1)
 
         # Calculate monthly projection (30 days)
         monthly_projection = daily_average * 30
 
-        # Calculate trend (simplified)
-        trend_percentage = 0.0
-        trend_class = "text-success"
+        # Calculate linear trend over entire period
+        # This shows the overall direction regardless of daily fluctuations
+        trend_text = "N/A"
+        trend_class = "text-muted"
 
-        if len(daily_costs) > 1:
-            recent_avg = sum(day.get("total", 0) for day in daily_costs[-7:]) / min(
-                7, len(daily_costs)
-            )
-            earlier_avg = sum(day.get("total", 0) for day in daily_costs[:-7]) / max(
-                1, len(daily_costs) - 7
-            )
-            if earlier_avg > 0:
-                trend_percentage = ((recent_avg - earlier_avg) / earlier_avg) * 100
-                trend_class = "text-danger" if trend_percentage > 0 else "text-success"
+        if len(daily_values) >= 7:
+            # Note: daily_costs may be in reverse chronological order (newest first)
+            # We need to reverse for proper trend calculation (oldest to newest)
+            # Check by looking at dates in daily_costs
+            values_ordered = daily_values.copy()
+            if len(daily_costs) >= 2:
+                # If first date is later than last date, reverse the values
+                first_date = daily_costs[0].get("date", "")
+                last_date = daily_costs[-1].get("date", "")
+                if first_date > last_date:  # Descending order, need to reverse
+                    values_ordered = list(reversed(daily_values))
 
-        trend_text = (
-            f"+{trend_percentage:.1f}%" if trend_percentage > 0 else f"{trend_percentage:.1f}%"
-        )
+            # Simple linear regression to find trend
+            n = len(values_ordered)
+            x_values = list(range(n))  # Day indices: 0, 1, 2, ...
+
+            # Calculate means
+            x_mean = sum(x_values) / n
+            y_mean = sum(values_ordered) / n
+
+            # Calculate slope (trend direction)
+            numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_values, values_ordered))
+            denominator = sum((x - x_mean) ** 2 for x in x_values)
+
+            if denominator > 0:
+                slope = numerator / denominator
+
+                # Use actual average of first/last few days for more stable percentage
+                # (avoids negative extrapolated values for rapidly growing costs)
+                first_avg = sum(values_ordered[:3]) / 3 if len(values_ordered) >= 3 else values_ordered[0]
+                last_avg = sum(values_ordered[-3:]) / 3 if len(values_ordered) >= 3 else values_ordered[-1]
+
+                if first_avg > 0:
+                    trend_percentage = ((last_avg - first_avg) / first_avg) * 100
+
+                    # Show direction based on trend
+                    if abs(trend_percentage) < 2:
+                        # Less than 2% change = stable
+                        trend_text = "Stable"
+                        trend_class = "text-muted"
+                    elif trend_percentage > 0:
+                        # Costs increasing
+                        trend_text = f"↗ +{trend_percentage:.1f}%"
+                        trend_class = "text-danger"
+                    else:
+                        # Costs decreasing
+                        trend_text = f"↘ {trend_percentage:.1f}%"
+                        trend_class = "text-success"
 
         return (
             f"${total_cost:,.2f}",

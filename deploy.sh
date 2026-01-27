@@ -95,6 +95,15 @@ echo -e "${GREEN}✅ OpenShift CLI ready${NC}"
 echo -e "${GREEN}✅ Logged in as: $(oc whoami)${NC}"
 echo ""
 
+# Detect sed command (use gsed if available, otherwise platform-specific sed)
+if command -v gsed &> /dev/null; then
+    SED_CMD="gsed -i"
+elif [[ "$OSTYPE" == "darwin"* ]]; then
+    SED_CMD="sed -i ''"
+else
+    SED_CMD="sed -i"
+fi
+
 # Generate local overlay from template
 echo -e "${BLUE}🔧 Generating local overlay...${NC}"
 
@@ -107,14 +116,14 @@ cp "$TEMPLATE_OVERLAY_DIR/routes-patch.yaml" "$LOCAL_OVERLAY_DIR/"
 
 # Replace placeholders in kustomization.yaml
 # Replace registry and namespace in image paths, but preserve image names
-sed -i "s|YOUR_REGISTRY_URL/cost-monitor/|${IMAGE_REGISTRY}/${NAMESPACE}/|g" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
+eval $SED_CMD "\"s|YOUR_REGISTRY_URL/cost-monitor/|${IMAGE_REGISTRY}/${NAMESPACE}/|g\"" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
 # Replace remaining YOUR_REGISTRY_URL instances (if any)
-sed -i "s|YOUR_REGISTRY_URL|${IMAGE_REGISTRY}|g" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
+eval $SED_CMD "\"s|YOUR_REGISTRY_URL|${IMAGE_REGISTRY}|g\"" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
 # Replace namespace field
-sed -i "s|^namespace: cost-monitor|namespace: ${NAMESPACE}|g" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
+eval $SED_CMD "\"s|^namespace: cost-monitor|namespace: ${NAMESPACE}|g\"" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
 
 # Replace placeholders in routes-patch.yaml
-sed -i "s|YOUR_CLUSTER_DOMAIN|${CLUSTER_DOMAIN}|g" "$LOCAL_OVERLAY_DIR/routes-patch.yaml"
+eval $SED_CMD "\"s|YOUR_CLUSTER_DOMAIN|${CLUSTER_DOMAIN}|g\"" "$LOCAL_OVERLAY_DIR/routes-patch.yaml"
 
 echo -e "${GREEN}✅ Local overlay generated${NC}"
 
@@ -348,7 +357,8 @@ generate_oauth_secrets() {
     local oauth_client_secret=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
 
     # Generate cookie secret (exactly 32 characters for OpenShift oauth-proxy)
-    local cookie_secret=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c32)
+    # Use openssl for cross-platform compatibility (macOS and RHEL)
+    local cookie_secret=$(openssl rand -hex 16)
 
     # Store the OAuth client secret for use in OAuthClient creation
     export OAUTH_CLIENT_SECRET="$oauth_client_secret"

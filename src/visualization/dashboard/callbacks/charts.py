@@ -17,10 +17,58 @@ from ..themes import DashboardTheme
 logger = logging.getLogger(__name__)
 
 
+def _filter_savings_plans(daily_costs, cost_data):
+    """Filter out Savings Plans and Reserved Instances from daily costs.
+
+    This function identifies days with anomalous spikes (likely Savings Plan payments)
+    and removes those costs to show operational spending trends.
+    """
+    # Calculate average AWS daily cost to identify spikes
+    aws_costs = [day.get("provider_breakdown", {}).get("aws", 0) for day in daily_costs]
+
+    if not aws_costs:
+        return daily_costs
+
+    # Sort to find median (more robust than mean for spike detection)
+    sorted_costs = sorted(aws_costs)
+    median_cost = sorted_costs[len(sorted_costs) // 2]
+
+    # Calculate threshold: costs > 2x median are likely savings plan payments
+    spike_threshold = median_cost * 2
+
+    logger.info(f"💰 AWS median daily cost: ${median_cost:,.2f}, spike threshold: ${spike_threshold:,.2f}")
+
+    # Create a copy of daily_costs and cap spikes at threshold
+    filtered_costs = []
+    for day in daily_costs:
+        day_copy = day.copy()
+        day_copy["provider_breakdown"] = day["provider_breakdown"].copy()
+
+        aws_cost = day_copy["provider_breakdown"].get("aws", 0)
+
+        if aws_cost > spike_threshold:
+            # Cap AWS cost at threshold (removes the savings plan spike)
+            adjusted_aws = spike_threshold
+            day_copy["provider_breakdown"]["aws"] = adjusted_aws
+
+            # Recalculate total_cost
+            day_copy["total_cost"] = sum(day_copy["provider_breakdown"].values())
+
+            logger.info(
+                f"📅 Adjusted {day['date']}: AWS ${aws_cost:,.2f} -> ${adjusted_aws:,.2f} "
+                f"(removed ${aws_cost - adjusted_aws:,.2f} spike)"
+            )
+
+        filtered_costs.append(day_copy)
+
+    return filtered_costs
+
+
 def setup_chart_callbacks(dashboard):
     """Set up all chart-related callbacks."""
     _setup_cost_trend_chart_callback(dashboard)
     _setup_provider_breakdown_callback(dashboard)
+    _setup_service_provider_selector_callback(dashboard)
     _setup_service_breakdown_callback(dashboard)
 
 
@@ -29,11 +77,19 @@ def _setup_cost_trend_chart_callback(dashboard):
 
     @dashboard.app.callback(
         Output("cost-trend-chart", "figure"),
-        [Input("cost-data-store", "data"), Input("provider-selector", "value")],
+        [
+            Input("cost-data-store", "data"),
+            Input("provider-selector", "value"),
+            Input("include-savings-plans-toggle", "value"),
+            Input("log-scale-toggle", "value"),
+        ],
     )
-    def update_cost_trend_chart(cost_data, selected_provider):
+    def update_cost_trend_chart(cost_data, selected_provider, include_savings_plans, log_scale):
         """Update the cost trend chart."""
-        logger.info(f"📊 CHART CALLBACK: Cost trend chart triggered - provider: {selected_provider}")
+        logger.info(
+            f"📊 CHART CALLBACK: Cost trend chart triggered - provider: {selected_provider}, "
+            f"include_savings_plans: {include_savings_plans}, log_scale: {log_scale}"
+        )
         chart_start_time = time.time()
 
         # Return loading chart if no data
@@ -45,6 +101,14 @@ def _setup_cost_trend_chart_callback(dashboard):
         daily_costs = cost_data["daily_costs"]
         if not daily_costs:
             return _create_loading_chart("Daily Costs by Provider")
+
+        # Filter out savings plans if toggle is unchecked
+        include_sp = "include" in (include_savings_plans or [])
+        if not include_sp:
+            daily_costs = _filter_savings_plans(daily_costs, cost_data)
+
+        # Check if log scale is enabled
+        use_log_scale = "log" in (log_scale or [])
 
         # Create the chart figure
         fig = go.Figure()
@@ -63,7 +127,7 @@ def _setup_cost_trend_chart_callback(dashboard):
             )
 
         # Update layout
-        _update_chart_layout(fig, selected_provider)
+        _update_chart_layout(fig, selected_provider, use_log_scale)
 
         chart_time = time.time() - chart_start_time
         logger.info(f"📊 Cost trend chart updated in {chart_time:.3f}s")
@@ -101,7 +165,7 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
     # Pre-calculate if we'll need log scale
     all_values = []
     for provider in providers:
-        values = [item.get(provider, 0) for item in daily_costs]
+        values = [item.get("provider_breakdown", {}).get(provider, 0) for item in daily_costs]
         all_values.extend([v for v in values if v > 0])
 
     # Determine if log scale is needed
@@ -111,7 +175,7 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
         will_use_log_scale = ratio > 50
 
     for provider in providers:
-        values = [item.get(provider, 0) for item in daily_costs]
+        values = [item.get("provider_breakdown", {}).get(provider, 0) for item in daily_costs]
 
         # Prepare display values and text labels
         display_values = []
@@ -150,7 +214,7 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
 
 def _add_single_provider_trace(fig, daily_costs, dates, selected_provider, today_str, dashboard):
     """Add trace for a single selected provider."""
-    values = [item.get(selected_provider, 0) for item in daily_costs]
+    values = [item.get("provider_breakdown", {}).get(selected_provider, 0) for item in daily_costs]
 
     # Handle AWS specially when it's the selected provider
     if selected_provider == "aws":
@@ -199,7 +263,7 @@ def _add_single_provider_trace(fig, daily_costs, dates, selected_provider, today
         )
 
 
-def _update_chart_layout(fig, selected_provider):
+def _update_chart_layout(fig, selected_provider, use_log_scale=False):
     """Update the chart layout with appropriate styling."""
     title = (
         f"Daily Costs - {selected_provider.upper()}"
@@ -207,10 +271,21 @@ def _update_chart_layout(fig, selected_provider):
         else "Daily Costs by Provider"
     )
 
+    if use_log_scale:
+        title += " (Log Scale)"
+
+    yaxis_config = dict(
+        tickformat="$,.0f",
+        gridcolor="rgba(200,200,200,0.3)",
+    )
+
+    if use_log_scale:
+        yaxis_config["type"] = "log"
+
     fig.update_layout(
         title=title,
         xaxis_title="Date",
-        yaxis_title="Cost ($)",
+        yaxis_title="Cost ($)" + (" - Logarithmic" if use_log_scale else ""),
         **DashboardTheme.LAYOUT,
         hovermode="x unified",
         showlegend=selected_provider == "all",
@@ -220,10 +295,7 @@ def _update_chart_layout(fig, selected_provider):
             dtick="D1" if len(fig.data[0].x if fig.data else []) <= 31 else "D7",
             tickangle=-45,
         ),
-        yaxis=dict(
-            tickformat="$,.0f",
-            gridcolor="rgba(200,200,200,0.3)",
-        ),
+        yaxis=yaxis_config,
     )
 
 
@@ -283,6 +355,24 @@ def _setup_provider_breakdown_callback(dashboard):
         return fig
 
 
+def _setup_service_provider_selector_callback(dashboard):
+    """Set up service provider selector dropdown callback."""
+
+    @dashboard.app.callback(
+        [Output("service-provider-selector", "options"), Output("service-provider-selector", "value")],
+        [Input("cost-data-store", "data")],
+    )
+    def update_service_provider_selector(cost_data):
+        """Update service provider selector options."""
+        if not cost_data or "service_breakdown" not in cost_data:
+            return [], None
+
+        providers = list(cost_data["service_breakdown"].keys())
+        options = [{"label": p.upper(), "value": p} for p in providers]
+
+        return options, providers[0] if providers else None
+
+
 def _setup_service_breakdown_callback(dashboard):
     """Set up service breakdown chart callback."""
 
@@ -292,9 +382,51 @@ def _setup_service_breakdown_callback(dashboard):
     )
     def update_service_breakdown_chart(cost_data, selected_provider):
         """Update the service breakdown chart."""
-        if not cost_data or not selected_provider:
-            return _create_loading_chart("Service Breakdown")
+        # Return loading chart if no data
+        if (
+            not cost_data
+            or "service_breakdown" not in cost_data
+            or not selected_provider
+            or selected_provider not in cost_data["service_breakdown"]
+        ):
+            title = f"Service Breakdown - {selected_provider.upper() if selected_provider else 'Loading...'}"
+            return _create_loading_chart(title)
 
-        # For now, return a placeholder
-        # This would be populated with actual service data
-        return _create_loading_chart(f"{selected_provider.upper()} Services")
+        fig = go.Figure()
+
+        service_data = cost_data["service_breakdown"][selected_provider]
+        # Filter out services with costs less than $100 and sort by cost (highest to lowest)
+        filtered_services = [(k, v) for k, v in service_data.items() if v >= 100.0]
+        sorted_services = sorted(filtered_services, key=lambda x: x[1], reverse=True)
+
+        if not sorted_services:
+            return _create_loading_chart(f"{selected_provider.upper()} Services (No services ≥$100)")
+
+        services = [s[0] for s in sorted_services]
+        values = [s[1] for s in sorted_services]
+        # Replace zero values with small positive number for log scale
+        log_values = [max(v, 0.01) for v in values]
+
+        fig.add_trace(
+            go.Bar(
+                x=log_values,  # Log-safe values on x-axis (horizontal bars)
+                y=services,  # Service names on y-axis
+                orientation="h",  # Horizontal orientation
+                marker_color=DashboardTheme.COLORS.get(selected_provider, "#000000"),
+                text=[dashboard._format_currency_compact(v) if v > 0 else "$0.00" for v in values],
+                textposition="outside",
+                hovertemplate="<b>%{y}</b><br>Cost: $%{customdata:.2f}<extra></extra>",
+                customdata=values,  # Store original values for hover
+            )
+        )
+
+        fig.update_layout(
+            title=f"Service Breakdown - {selected_provider.upper()} (Log Scale, ≥$100)",
+            xaxis_title="Cost (USD) - Logarithmic Scale",
+            xaxis_type="log",  # Use logarithmic scale for cost differences
+            yaxis_title="Service",
+            height=400,
+            **DashboardTheme.LAYOUT,
+        )
+
+        return fig

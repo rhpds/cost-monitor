@@ -55,16 +55,16 @@ show_help() {
     echo "  all-pods         - Both database pods (OpenShift)"
     echo ""
     echo "Examples:"
-    echo "  $0 start all               # Start everything"
-    echo "  $0 start api               # Start just API"
-    echo "  $0 stop dashboard          # Stop just dashboard"
-    echo "  $0 restart postgres-tunnel # Restart just PostgreSQL tunnel"
-    echo "  $0 restart all-tunnels     # Restart both tunnels"
-    echo "  $0 status all              # Status of everything"
-    echo "  $0 logs redis-tunnel       # Show Redis tunnel logs"
-    echo "  $0 logs postgres-pod       # Show PostgreSQL pod logs from OpenShift"
-    echo "  $0 logs all-pods           # Show all database pod logs"
-    echo "  $0 cost-monitor-dev start all  # Start everything in specific namespace"
+    echo "  $0 <namespace> start all               # Start everything"
+    echo "  $0 <namespace> start api               # Start just API"
+    echo "  $0 <namespace> stop dashboard          # Stop just dashboard"
+    echo "  $0 <namespace> restart postgres-tunnel # Restart just PostgreSQL tunnel"
+    echo "  $0 <namespace> restart all-tunnels     # Restart both tunnels"
+    echo "  $0 <namespace> status all              # Status of everything"
+    echo "  $0 <namespace> logs redis-tunnel       # Show Redis tunnel logs"
+    echo "  $0 <namespace> logs postgres-pod       # Show PostgreSQL pod logs from OpenShift"
+    echo "  $0 <namespace> logs all-pods           # Show all database pod logs"
+    echo "  $0 my-custom-namespace start all       # Example with specific namespace"
 }
 
 get_secret() {
@@ -249,7 +249,7 @@ start_all() {
 # Helper function to start API without duplicating logic
 start_api_process() {
     setup_service_env
-    uvicorn src.api.data_service:app --host $API_HOST --port $API_PORT > "$TMP_DIR/api.log" 2>&1 &
+    python3 -m uvicorn src.api.data_service:app --host $API_HOST --port $API_PORT > "$TMP_DIR/api.log" 2>&1 &
     echo $! > "$TMP_DIR/api.pid"
     sleep $SERVICE_STARTUP_DELAY
     if curl -s http://localhost:$API_PORT/api/health/ready > /dev/null 2>&1; then
@@ -263,7 +263,7 @@ start_api_process() {
 start_dashboard_process() {
     setup_service_env
     export DASHBOARD_PORT=$DASHBOARD_PORT
-    python -m src.visualization.dashboard > "$TMP_DIR/dashboard.log" 2>&1 &
+    python3 -m src.visualization.dashboard > "$TMP_DIR/dashboard.log" 2>&1 &
     echo $! > "$TMP_DIR/dashboard.pid"
     sleep $SERVICE_STARTUP_DELAY
     if curl -s http://localhost:$DASHBOARD_PORT > /dev/null 2>&1; then
@@ -286,9 +286,9 @@ show_status() {
     fi
 
     if [ -n "$DEV_POSTGRES_USER" ] && [ -n "$DEV_POSTGRES_DATABASE" ] && [ -n "$DEV_POSTGRES_PASSWORD" ] && [ -n "$DEV_REDIS_PASSWORD" ]; then
-        echo -e "  Environment: ${GREEN}OK: Credentials cached${NC}"
+        echo -e "  Environment: ${GREEN}OK: Credentials loaded${NC}"
     else
-        echo -e "  Environment: ${RED}ERROR: Not set up${NC} (run setup)"
+        echo -e "  Environment: ${YELLOW}INFO: Credentials will load on service start${NC}"
     fi
 
     echo ""

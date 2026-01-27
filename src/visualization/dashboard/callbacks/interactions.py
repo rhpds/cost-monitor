@@ -27,7 +27,6 @@ def _setup_loading_callbacks(dashboard):
         Output("loading-store", "data", allow_duplicate=True),
         [
             Input("btn-apply-dates", "n_clicks"),
-            Input("btn-latest", "n_clicks"),
             Input("btn-this-month", "n_clicks"),
             Input("btn-last-month", "n_clicks"),
             Input("btn-this-week", "n_clicks"),
@@ -38,28 +37,60 @@ def _setup_loading_callbacks(dashboard):
         prevent_initial_call=True,
     )
     def trigger_loading_state(*args):
-        """Trigger loading state when buttons are clicked."""
+        """Trigger loading state when any data refresh is initiated."""
+        import dash
+
+        ctx = dash.callback_context
+
+        if ctx.triggered:
+            trigger_prop = ctx.triggered[0]["prop_id"]
+            logger.info(f"🔄 LOADING TRIGGERED by: {trigger_prop}")
+        else:
+            logger.info("🔄 LOADING TRIGGERED but no context")
+
         return {"loading": True}
 
     @dashboard.app.callback(
         Output("loading-banner", "children"),
-        [
-            Input("loading-store", "data"),
-            Input("cost-data-store", "data"),
-            State("date-range-picker", "start_date"),
-            State("date-range-picker", "end_date"),
-        ],
+        [Input("loading-store", "data"), Input("cost-data-store", "data")],
+        [State("date-range-picker", "start_date"), State("date-range-picker", "end_date")],
     )
     def update_loading_banner(loading_data, cost_data, start_date, end_date):
-        """Update loading banner display."""
-        if loading_data and loading_data.get("loading"):
-            return html.Div(
+        """Update loading banner display based on loading state."""
+        logger.info(f"⏳ LOADING BANNER CALLBACK: loading_data={loading_data}")
+
+        # Show loading banner when loading state is True
+        if loading_data and loading_data.get("loading", False):
+            from dash import dbc
+
+            logger.info("⏳ LOADING BANNER: Showing loading banner")
+
+            return dbc.Alert(
                 [
-                    html.I(className="fa fa-spinner fa-spin me-2"),
-                    f"Loading cost data for {start_date or 'current month'} to {end_date or 'today'}...",
+                    dbc.Spinner(size="lg", color="primary", spinner_class_name="me-3"),
+                    html.Div(
+                        [
+                            html.H5(
+                                "🔄 Loading Cost Data",
+                                className="mb-1",
+                                style={"color": "#004085"},
+                            ),
+                            html.P(
+                                f"Fetching data for {start_date} to {end_date}..."
+                                if start_date and end_date
+                                else "Loading cost information...",
+                                className="mb-0",
+                                style={"fontSize": "0.9rem", "color": "#004085"},
+                            ),
+                        ]
+                    ),
                 ],
-                className="alert alert-info mb-3",
+                color="info",
+                className="mb-3 py-3 text-center",
+                style={"fontSize": "1.05rem", "boxShadow": "0 4px 6px rgba(0,0,0,0.1)"},
             )
+
+        logger.info("⏳ LOADING BANNER: Hiding loading banner")
         return ""
 
 
@@ -68,7 +99,6 @@ def _setup_button_style_callbacks(dashboard):
 
     @dashboard.app.callback(
         [
-            Output("btn-latest", "color"),
             Output("btn-this-month", "color"),
             Output("btn-last-month", "color"),
             Output("btn-this-week", "color"),
@@ -77,7 +107,6 @@ def _setup_button_style_callbacks(dashboard):
             Output("btn-last-7-days", "color"),
         ],
         [
-            Input("btn-latest", "n_clicks"),
             Input("btn-this-month", "n_clicks"),
             Input("btn-last-month", "n_clicks"),
             Input("btn-this-week", "n_clicks"),
@@ -97,17 +126,16 @@ def _setup_button_style_callbacks(dashboard):
         triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
 
         # Reset all buttons to outline style
-        styles = ["outline-secondary"] * 7
+        styles = ["outline-secondary"] * 6
 
         # Highlight the active button
         button_map = {
-            "btn-latest": 0,
-            "btn-this-month": 1,
-            "btn-last-month": 2,
-            "btn-this-week": 3,
-            "btn-last-week": 4,
-            "btn-last-30-days": 5,
-            "btn-last-7-days": 6,
+            "btn-this-month": 0,
+            "btn-last-month": 1,
+            "btn-this-week": 2,
+            "btn-last-week": 3,
+            "btn-last-30-days": 4,
+            "btn-last-7-days": 5,
         }
 
         if triggered_id in button_map:
@@ -118,8 +146,8 @@ def _setup_button_style_callbacks(dashboard):
 
 def _get_initial_button_styles():
     """Get initial button styles with 'This Month' highlighted."""
-    styles = ["outline-secondary"] * 7
-    styles[1] = "primary"  # This Month button
+    styles = ["outline-secondary"] * 6
+    styles[0] = "primary"  # This Month button
     return styles
 
 

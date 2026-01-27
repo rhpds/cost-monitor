@@ -48,31 +48,52 @@ def create_dashboard_layout(dashboard):
                                                 [
                                                     dbc.Col(
                                                         [
-                                                            dcc.DatePickerRange(
-                                                                id="date-range-picker",
-                                                                start_date=date.today().replace(
-                                                                    day=1
-                                                                ),
-                                                                end_date=date.today()
-                                                                - timedelta(days=2),
-                                                                display_format="YYYY-MM-DD",
-                                                                style={"width": "100%"},
+                                                            html.Div(
+                                                                [
+                                                                    dcc.DatePickerRange(
+                                                                        id="date-range-picker",
+                                                                        start_date=date.today().replace(
+                                                                            day=1
+                                                                        ),
+                                                                        end_date=date.today()
+                                                                        - timedelta(days=2),
+                                                                        display_format="YYYY-MM-DD",
+                                                                        style={"width": "auto"},
+                                                                    ),
+                                                                    dbc.Button(
+                                                                        "Apply",
+                                                                        id="btn-apply-dates",
+                                                                        color="success",
+                                                                        size="sm",
+                                                                        style={"marginLeft": "8px"},
+                                                                    ),
+                                                                ],
+                                                                style={
+                                                                    "alignItems": "center",
+                                                                    "display": "flex",
+                                                                },
                                                             )
                                                         ],
-                                                        md=6,
+                                                        md=12,
                                                     ),
+                                                ]
+                                            ),
+                                            dbc.Row(
+                                                [
                                                     dbc.Col(
                                                         [
-                                                            dbc.Button(
-                                                                "Apply Dates",
-                                                                id="btn-apply-dates",
-                                                                color="primary",
-                                                                className="me-2",
-                                                            ),
-                                                            # Quick date buttons will be added here
-                                                            _create_quick_date_buttons(),
+                                                            html.Div(
+                                                                [
+                                                                    html.Small(
+                                                                        "Quick ranges: ",
+                                                                        className="text-muted me-2",
+                                                                    ),
+                                                                    _create_quick_date_buttons(),
+                                                                ],
+                                                                className="d-flex align-items-center mt-2",
+                                                            )
                                                         ],
-                                                        md=6,
+                                                        md=12,
                                                     ),
                                                 ]
                                             )
@@ -166,7 +187,7 @@ def create_dashboard_layout(dashboard):
                 ],
                 className="mb-4",
             ),
-            # Charts section
+            # Daily cost trends chart - full width row
             dbc.Row(
                 [
                     dbc.Col(
@@ -176,16 +197,45 @@ def create_dashboard_layout(dashboard):
                                     dbc.CardHeader(
                                         [
                                             html.H5("💹 Daily Cost Trends", className="mb-0"),
-                                            dbc.Select(
-                                                id="provider-selector",
-                                                options=[
-                                                    {"label": "All Providers", "value": "all"},
-                                                    {"label": "AWS", "value": "aws"},
-                                                    {"label": "Azure", "value": "azure"},
-                                                    {"label": "GCP", "value": "gcp"},
+                                            html.Div(
+                                                [
+                                                    dbc.Checklist(
+                                                        id="include-savings-plans-toggle",
+                                                        options=[
+                                                            {
+                                                                "label": "Include Savings Plans",
+                                                                "value": "include",
+                                                            }
+                                                        ],
+                                                        value=[],  # Default unchecked
+                                                        switch=True,
+                                                        className="me-3",
+                                                    ),
+                                                    dbc.Checklist(
+                                                        id="log-scale-toggle",
+                                                        options=[
+                                                            {
+                                                                "label": "Logarithmic Scale",
+                                                                "value": "log",
+                                                            }
+                                                        ],
+                                                        value=["log"],  # Default checked (log scale)
+                                                        switch=True,
+                                                        className="me-3",
+                                                    ),
+                                                    dbc.Select(
+                                                        id="provider-selector",
+                                                        options=[
+                                                            {"label": "All Providers", "value": "all"},
+                                                            {"label": "AWS", "value": "aws"},
+                                                            {"label": "Azure", "value": "azure"},
+                                                            {"label": "GCP", "value": "gcp"},
+                                                        ],
+                                                        value="all",
+                                                        style={"minWidth": "150px"},
+                                                    ),
                                                 ],
-                                                value="all",
-                                                className="w-25",
+                                                className="d-flex align-items-center",
                                             ),
                                         ],
                                         className="d-flex justify-content-between align-items-center",
@@ -200,8 +250,14 @@ def create_dashboard_layout(dashboard):
                                 ]
                             )
                         ],
-                        lg=8,
+                        lg=12,
                     ),
+                ],
+                className="mb-4",
+            ),
+            # Provider breakdown chart
+            dbc.Row(
+                [
                     dbc.Col(
                         [
                             dbc.Card(
@@ -220,7 +276,7 @@ def create_dashboard_layout(dashboard):
                                 ]
                             )
                         ],
-                        lg=4,
+                        lg=12,
                     ),
                 ],
                 className="mb-4",
@@ -325,7 +381,7 @@ def create_dashboard_layout(dashboard):
             # Hidden components for state management
             dcc.Store(id="cost-data-store"),
             dcc.Store(id="alert-data-store"),
-            dcc.Store(id="loading-store"),
+            dcc.Store(id="loading-store", data={"loading": True}),  # Start with loading=True
             dcc.Interval(
                 id="interval-component",
                 interval=dashboard.refresh_interval,
@@ -341,7 +397,6 @@ def create_dashboard_layout(dashboard):
 def _create_quick_date_buttons():
     """Create quick date selection buttons."""
     buttons = [
-        ("Latest", "btn-latest"),
         ("This Month", "btn-this-month"),
         ("Last Month", "btn-last-month"),
         ("This Week", "btn-this-week"),
