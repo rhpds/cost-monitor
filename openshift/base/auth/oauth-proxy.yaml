@@ -37,13 +37,19 @@ spec:
         - containerPort: 8443
           name: https
           protocol: TCP
+        env:
+        - name: OAUTH_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: oauth-proxy-secret
+              key: client-id
         args:
         - -provider=openshift
         - -http-address=:8080
         - -https-address=
         - -email-domain=*
         - -upstream=http://dashboard-service:8050/
-        - -client-id=cost-monitor-oauth-client
+        - -client-id=$(OAUTH_CLIENT_ID)
         - -client-secret-file=/etc/proxy/secrets/client-secret
         - -cookie-secret-file=/etc/proxy/secrets/session_secret
         - -openshift-service-account=cost-monitor-oauth
