@@ -14,12 +14,17 @@ from dynaconf import Dynaconf, Validator
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
 
+# Determine environment-specific config files
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+environment_config = CONFIG_DIR / f"{ENVIRONMENT}.yaml"
+
 # Initialize dynaconf with multiple configuration sources
 settings = Dynaconf(
     envvar_prefix="CLOUDCOST",
     settings_files=[
         str(CONFIG_DIR / "config.yaml"),  # Base configuration
-        str(CONFIG_DIR / "development.yaml"),  # Development-specific settings (overrides base)
+        str(environment_config),  # Environment-specific settings (production.yaml or development.yaml)
+        str(CONFIG_DIR / "dashboard.yaml"),  # Dashboard-specific settings (from configmap in k8s)
         str(CONFIG_DIR / "config.local.yaml"),  # Local overrides (git-ignored)
         str(CONFIG_DIR / ".secrets.yaml"),  # Secrets file (git-ignored)
     ],
