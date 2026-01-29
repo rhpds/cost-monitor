@@ -462,8 +462,9 @@ patchesStrategicMerge:
 EOF
         fi
 
-        # For dev environment, add JSON patch to rename OAuth client
+        # For dev environment, add JSON patches
         # OAuthClient is cluster-scoped, so dev needs a unique name
+        # Dashboard needs ENVIRONMENT=development for correct config loading
         if [ "${ENVIRONMENT}" = "dev" ]; then
             if ! grep -q "patches:" "$kustomization_file" || ! grep -q "oauth-client-rename" "$kustomization_file"; then
                 cat >> "$kustomization_file" << EOF
@@ -477,6 +478,16 @@ patches:
     - op: replace
       path: /metadata/name
       value: cost-monitor-oauth-client-dev
+- target:
+    kind: Deployment
+    name: dashboard-service
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/env/0/value
+      value: development
+    - op: replace
+      path: /spec/template/spec/containers/0/env/4/value
+      value: "true"
 EOF
             fi
         fi
