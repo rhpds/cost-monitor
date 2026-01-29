@@ -10,15 +10,26 @@ from datetime import date, timedelta
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-# Global Plotly configuration to hide logo and unnecessary buttons
-PLOTLY_CONFIG = {
-    'displaylogo': False,
-    'modeBarButtonsToRemove': ['lasso2d', 'select2d']
-}
+
+def _get_plotly_config(debug_mode=False):
+    """Get Plotly configuration based on environment."""
+    if debug_mode:
+        # Dev/Debug mode: Show modebar but hide logo
+        return {
+            'displaylogo': False,
+        }
+    else:
+        # Production mode: Hide logo and unnecessary buttons for clean UI
+        return {
+            'displaylogo': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d']
+        }
 
 
 def create_dashboard_layout(dashboard):
     """Create the main dashboard layout."""
+    # Get environment-specific Plotly config
+    plotly_config = _get_plotly_config(debug_mode=dashboard.debug)
     return dbc.Container(
         [
             # Header
@@ -251,7 +262,7 @@ def create_dashboard_layout(dashboard):
                                             dcc.Graph(
                                                 id="cost-trend-chart",
                                                 style={"height": "400px"},
-                                                config=PLOTLY_CONFIG
+                                                config=plotly_config
                                             )
                                         ]
                                     ),
@@ -278,7 +289,7 @@ def create_dashboard_layout(dashboard):
                                             dcc.Graph(
                                                 id="provider-breakdown-chart",
                                                 style={"height": "400px"},
-                                                config=PLOTLY_CONFIG
+                                                config=plotly_config
                                             )
                                         ]
                                     ),
@@ -314,7 +325,7 @@ def create_dashboard_layout(dashboard):
                                             dcc.Graph(
                                                 id="service-breakdown-chart",
                                                 style={"height": "400px"},
-                                                config=PLOTLY_CONFIG
+                                                config=plotly_config
                                             )
                                         ]
                                     ),
