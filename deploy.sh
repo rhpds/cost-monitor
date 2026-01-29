@@ -247,13 +247,31 @@ create_secrets() {
         --from-literal=container="$azure_container" \
         --dry-run=client -o yaml | oc apply -f -
 
-    # GCP credentials (if service account file exists)
+    # GCP credentials (supports both file path and inline JSON)
     local gcp_file=$(yq eval '.secrets.gcp.service_account_file' "$CONFIG_FILE")
+    local gcp_credentials_json=$(yq eval '.secrets.gcp.credentials_json' "$CONFIG_FILE")
     local gcp_project_id=$(yq eval '.secrets.gcp.project_id' "$CONFIG_FILE")
     local gcp_bigquery_dataset=$(yq eval '.secrets.gcp.bigquery_billing_dataset' "$CONFIG_FILE")
     local gcp_billing_account=$(yq eval '.secrets.gcp.billing_account_id' "$CONFIG_FILE")
 
-    if [ -f "$gcp_file" ]; then
+    # Check if we have inline JSON credentials (preferred for config files)
+    if [ -n "$gcp_credentials_json" ] && [ "$gcp_credentials_json" != "null" ]; then
+        echo -e "${GREEN}✅ Using inline GCP credentials from config${NC}"
+        # Create temp file for inline JSON
+        local temp_gcp_file="/tmp/gcp-sa-$$.json"
+        echo "$gcp_credentials_json" > "$temp_gcp_file"
+
+        oc create secret generic gcp-credentials -n ${NAMESPACE} \
+            --from-file=service-account.json="$temp_gcp_file" \
+            --from-literal=project-id="$gcp_project_id" \
+            --from-literal=bigquery-dataset="$gcp_bigquery_dataset" \
+            --from-literal=billing-account-id="$gcp_billing_account" \
+            --dry-run=client -o yaml | oc apply -f -
+
+        rm -f "$temp_gcp_file"
+    # Fall back to file-based credentials
+    elif [ -f "$gcp_file" ]; then
+        echo -e "${GREEN}✅ Using GCP credentials from file: $gcp_file${NC}"
         oc create secret generic gcp-credentials -n ${NAMESPACE} \
             --from-file=service-account.json="$gcp_file" \
             --from-literal=project-id="$gcp_project_id" \
@@ -261,13 +279,13 @@ create_secrets() {
             --from-literal=billing-account-id="$gcp_billing_account" \
             --dry-run=client -o yaml | oc apply -f -
     else
-        echo -e "${YELLOW}⚠️  GCP service account file not found: $gcp_file${NC}"
+        echo -e "${YELLOW}⚠️  No GCP credentials found (neither inline JSON nor file)${NC}"
         echo -e "${YELLOW}   Creating placeholder GCP secret${NC}"
         oc create secret generic gcp-credentials -n ${NAMESPACE} \
             --from-literal=service-account.json='{}' \
-            --from-literal=project-id="${gcp_project_id:-}" \
-            --from-literal=bigquery-dataset="${gcp_bigquery_dataset:-}" \
-            --from-literal=billing-account-id="${gcp_billing_account:-}" \
+            --from-literal=project-id="${gcp_project_id:-null}" \
+            --from-literal=bigquery-dataset="${gcp_bigquery_dataset:-null}" \
+            --from-literal=billing-account-id="${gcp_billing_account:-null}" \
             --dry-run=client -o yaml | oc apply -f -
     fi
 
@@ -353,6 +371,13 @@ generate_oauth_secrets() {
         return
     fi
 
+    # Determine OAuth client name based on environment (cluster-scoped resource)
+    # Dev will have the name changed via JSON patch in kustomization
+    local oauth_client_name="cost-monitor-oauth-client"
+    if [ "${ENVIRONMENT}" = "dev" ]; then
+        oauth_client_name="cost-monitor-oauth-client-dev"
+    fi
+
     # Generate random OAuth client secret (secure random string)
     local oauth_client_secret=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
 
@@ -365,13 +390,13 @@ generate_oauth_secrets() {
 
     # Create OAuth proxy secret with client and session secrets (for OpenShift oauth-proxy)
     oc create secret generic oauth-proxy-secret -n ${NAMESPACE} \
-        --from-literal=client-id="cost-monitor-oauth-client" \
+        --from-literal=client-id="$oauth_client_name" \
         --from-literal=client-secret="$oauth_client_secret" \
         --from-literal=cookie-secret="$cookie_secret" \
         --from-literal=session_secret="$cookie_secret" \
         --dry-run=client -o yaml | oc apply -f -
 
-    echo -e "${GREEN}✅ OAuth secrets generated with random client secret${NC}"
+    echo -e "${GREEN}✅ OAuth secrets generated for client: ${oauth_client_name}${NC}"
 }
 
 configure_oauth_files() {
@@ -410,19 +435,16 @@ configure_oauth_files() {
     local oauth_rbac_patch="$LOCAL_OVERLAY_DIR/auth-patches/oauth-rbac-patch.yaml"
     if [ -f "$oauth_rbac_base" ]; then
         # Determine the redirect URI based on environment
-        local redirect_uri
-        if [ "${ENVIRONMENT}" = "dev" ]; then
-            redirect_uri="https://dashboard-route-${NAMESPACE}.${CLUSTER_DOMAIN}/oauth/callback"
-        else
-            redirect_uri="https://cost-monitor.${CLUSTER_DOMAIN}/oauth/callback"
-        fi
+        # Match the auto-generated route name pattern: <route-name>-<namespace>.<domain>
+        local redirect_uri="https://dashboard-route-${NAMESPACE}.${CLUSTER_DOMAIN}/oauth/callback"
 
         # Update OAuth RBAC with correct redirect URI and generated client secret
-        # Note: namespace changes are handled automatically by kustomize
+        # Keep the original names - dev environment will use JSON patch to rename OAuth client
         sed -e "s|https://cost-monitor\\.apps\\.cluster\\.local/oauth/callback|${redirect_uri}|g" \
             -e "s|secret: cost-monitor-oauth-secret|secret: ${OAUTH_CLIENT_SECRET}|g" \
             "$oauth_rbac_base" > "$oauth_rbac_patch"
         echo "Created OAuth RBAC patch: $oauth_rbac_patch"
+        echo "  Redirect URI: ${redirect_uri}"
     fi
 
     # Update local overlay kustomization.yaml to include OAuth patches
@@ -438,6 +460,25 @@ patchesStrategicMerge:
 - auth-patches/oauth-routes-patch.yaml
 - auth-patches/oauth-rbac-patch.yaml
 EOF
+        fi
+
+        # For dev environment, add JSON patch to rename OAuth client
+        # OAuthClient is cluster-scoped, so dev needs a unique name
+        if [ "${ENVIRONMENT}" = "dev" ]; then
+            if ! grep -q "patches:" "$kustomization_file" || ! grep -q "oauth-client-rename" "$kustomization_file"; then
+                cat >> "$kustomization_file" << EOF
+
+# JSON patches for dev environment
+patches:
+- target:
+    kind: OAuthClient
+    name: cost-monitor-oauth-client
+  patch: |-
+    - op: replace
+      path: /metadata/name
+      value: cost-monitor-oauth-client-dev
+EOF
+            fi
         fi
     fi
 
@@ -510,7 +551,7 @@ deploy_services_ordered() {
     sleep 10  # Allow containers to fully initialize
     DASHBOARD_POD=$(oc get pods -l component=dashboard -n ${NAMESPACE} -o name --no-headers | head -1 2>/dev/null || echo "")
     if [ -n "$DASHBOARD_POD" ]; then
-        PROCESS_COUNT=$(oc exec "$DASHBOARD_POD" -n ${NAMESPACE} -- ps aux 2>/dev/null | grep -c "python.*dashboard" || echo "0")
+        PROCESS_COUNT=$(oc exec "$DASHBOARD_POD" -n ${NAMESPACE} -- ps aux 2>/dev/null | grep "python.*dashboard" | grep -v grep | wc -l || echo "0")
         echo -e "${BLUE}   Dashboard processes detected: ${PROCESS_COUNT}${NC}"
 
         if [ "$PROCESS_COUNT" -gt 1 ]; then
@@ -580,13 +621,19 @@ setup_oauth_client() {
     oc delete pods -l component=oauth-proxy --field-selector=status.phase=Failed -n ${NAMESPACE} --ignore-not-found=true
 
     # Wait for OAuth client to be created by the deployment
+    # Dev environment uses a different OAuth client name to avoid conflicts
+    local oauth_client_name="cost-monitor-oauth-client"
+    if [ "${ENVIRONMENT}" = "dev" ]; then
+        oauth_client_name="cost-monitor-oauth-client-dev"
+    fi
+
     local max_attempts=30
     local attempt=0
 
     echo -e "${YELLOW}⏳ Waiting for OAuth client to be created...${NC}"
     while [ $attempt -lt $max_attempts ]; do
-        if oc get oauthclient cost-monitor-oauth-client &> /dev/null; then
-            echo -e "${GREEN}✅ OAuth client found${NC}"
+        if oc get oauthclient "$oauth_client_name" &> /dev/null; then
+            echo -e "${GREEN}✅ OAuth client found: $oauth_client_name${NC}"
             break
         fi
         attempt=$((attempt + 1))

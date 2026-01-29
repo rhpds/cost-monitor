@@ -10,6 +10,12 @@ from datetime import date, timedelta
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+# Global Plotly configuration to hide logo and unnecessary buttons
+PLOTLY_CONFIG = {
+    'displaylogo': False,
+    'modeBarButtonsToRemove': ['lasso2d', 'select2d']
+}
+
 
 def create_dashboard_layout(dashboard):
     """Create the main dashboard layout."""
@@ -243,7 +249,9 @@ def create_dashboard_layout(dashboard):
                                     dbc.CardBody(
                                         [
                                             dcc.Graph(
-                                                id="cost-trend-chart", style={"height": "400px"}
+                                                id="cost-trend-chart",
+                                                style={"height": "400px"},
+                                                config=PLOTLY_CONFIG
                                             )
                                         ]
                                     ),
@@ -270,6 +278,7 @@ def create_dashboard_layout(dashboard):
                                             dcc.Graph(
                                                 id="provider-breakdown-chart",
                                                 style={"height": "400px"},
+                                                config=PLOTLY_CONFIG
                                             )
                                         ]
                                     ),
@@ -305,6 +314,7 @@ def create_dashboard_layout(dashboard):
                                             dcc.Graph(
                                                 id="service-breakdown-chart",
                                                 style={"height": "400px"},
+                                                config=PLOTLY_CONFIG
                                             )
                                         ]
                                     ),
