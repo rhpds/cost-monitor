@@ -11,10 +11,13 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 
-def _get_plotly_config(debug_mode=False):
+def _get_plotly_config():
     """Get Plotly configuration based on environment."""
-    if debug_mode:
-        # Dev/Debug mode: Show modebar but hide logo
+    import os
+    environment = os.getenv('ENVIRONMENT', 'production')
+
+    if environment == 'development':
+        # Dev mode: Show modebar but hide logo
         return {
             'displaylogo': False,
         }
@@ -29,7 +32,7 @@ def _get_plotly_config(debug_mode=False):
 def create_dashboard_layout(dashboard):
     """Create the main dashboard layout."""
     # Get environment-specific Plotly config
-    plotly_config = _get_plotly_config(debug_mode=dashboard.debug)
+    plotly_config = _get_plotly_config()
     return dbc.Container(
         [
             # Header
