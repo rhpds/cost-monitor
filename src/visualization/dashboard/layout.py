@@ -17,9 +17,9 @@ def _get_plotly_config():
     environment = os.getenv('ENVIRONMENT', 'production')
 
     if environment == 'development':
-        # Dev mode: Show modebar but hide logo
+        # Dev mode: Show modebar for debugging
         return {
-            'displaylogo': False,
+            'displayModeBar': True,
         }
     else:
         # Production mode: Hide logo and unnecessary buttons for clean UI
