@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 
 import dash
 from dash import Input, Output, State, html
+from dash.exceptions import PreventUpdate
 
 from ..utils import DataWrapper
 
@@ -23,6 +24,7 @@ def setup_data_store_callbacks(dashboard):
     _setup_main_data_callback(dashboard)
     _setup_key_metrics_callback(dashboard)
     _setup_alert_banner_callback(dashboard)
+    _setup_date_picker_update_callback(dashboard)
 
 
 def _setup_main_data_callback(dashboard):
@@ -111,8 +113,6 @@ def _setup_main_data_callback(dashboard):
 def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
     """Determine the date range based on the triggered button."""
     today = date.today()
-    # Use 2 days ago as safe end date since AWS Cost Explorer data has 1-2 day delay
-    safe_end_date = today - timedelta(days=2)
     triggered_prop = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else None
 
     logger.info(f"🔘 BUTTON DEBUG: Triggered by {triggered_prop}")
@@ -124,18 +124,16 @@ def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
     elif triggered_prop == "btn-last-month":
         start_date_obj, end_date_obj = dashboard._get_last_month()
     elif triggered_prop == "btn-this-week":
-        start_date_obj = dashboard._get_week_start(
-            safe_end_date
-        )  # Use safe_end_date instead of today
-        end_date_obj = safe_end_date
+        start_date_obj = dashboard._get_week_start(today)  # Use today for current week
+        end_date_obj = today
     elif triggered_prop == "btn-last-week":
         start_date_obj, end_date_obj = dashboard._get_last_week()
     elif triggered_prop == "btn-last-30-days":
-        start_date_obj = safe_end_date - timedelta(days=30)
-        end_date_obj = safe_end_date
+        start_date_obj = today - timedelta(days=30)
+        end_date_obj = today
     elif triggered_prop == "btn-last-7-days":
-        start_date_obj = safe_end_date - timedelta(days=7)
-        end_date_obj = safe_end_date
+        start_date_obj = today - timedelta(days=7)
+        end_date_obj = today
     elif triggered_prop == "btn-apply-dates":
         # Use date picker values for Apply button
         logger.info(
@@ -379,3 +377,63 @@ def _setup_alert_banner_callback(dashboard):
             ],
             className=f"alert alert-{alert_type} mb-3",
         )
+
+
+def _setup_date_picker_update_callback(dashboard):
+    """Set up date picker update callback to sync with quick range buttons."""
+
+    @dashboard.app.callback(
+        [
+            Output("date-range-picker", "start_date"),
+            Output("date-range-picker", "end_date"),
+        ],
+        [
+            Input("btn-this-month", "n_clicks"),
+            Input("btn-last-month", "n_clicks"),
+            Input("btn-this-week", "n_clicks"),
+            Input("btn-last-week", "n_clicks"),
+            Input("btn-last-30-days", "n_clicks"),
+            Input("btn-last-7-days", "n_clicks"),
+        ],
+        prevent_initial_call=True,
+    )
+    def update_date_picker(
+        this_month_clicks,
+        last_month_clicks,
+        this_week_clicks,
+        last_week_clicks,
+        last_30_clicks,
+        last_7_clicks,
+    ):
+        """Update date range picker when quick range buttons are clicked."""
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            raise PreventUpdate
+
+        today = date.today()
+        triggered_prop = ctx.triggered[0]["prop_id"].split(".")[0]
+
+        if triggered_prop == "btn-this-month":
+            start_date_obj = dashboard._get_month_start(today)
+            end_date_obj = today
+        elif triggered_prop == "btn-last-month":
+            start_date_obj, end_date_obj = dashboard._get_last_month()
+        elif triggered_prop == "btn-this-week":
+            start_date_obj = dashboard._get_week_start(today)
+            end_date_obj = today
+        elif triggered_prop == "btn-last-week":
+            start_date_obj, end_date_obj = dashboard._get_last_week()
+        elif triggered_prop == "btn-last-30-days":
+            start_date_obj = today - timedelta(days=30)
+            end_date_obj = today
+        elif triggered_prop == "btn-last-7-days":
+            start_date_obj = today - timedelta(days=7)
+            end_date_obj = today
+        else:
+            raise PreventUpdate
+
+        # Convert to string format for date picker
+        start_date_str = start_date_obj.isoformat()
+        end_date_str = end_date_obj.isoformat()
+
+        return start_date_str, end_date_str
