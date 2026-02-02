@@ -36,7 +36,9 @@ def _filter_savings_plans(daily_costs, cost_data):
     # Calculate threshold: costs > 2x median are likely savings plan payments
     spike_threshold = median_cost * 2
 
-    logger.info(f"💰 AWS median daily cost: ${median_cost:,.2f}, spike threshold: ${spike_threshold:,.2f}")
+    logger.info(
+        f"💰 AWS median daily cost: ${median_cost:,.2f}, spike threshold: ${spike_threshold:,.2f}"
+    )
 
     # Create a copy of daily_costs and cap spikes at threshold
     filtered_costs = []
@@ -194,7 +196,10 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
                 display_value = max(value, 0.01) if will_use_log_scale and value <= 0 else value
                 display_values.append(display_value)
                 hover_values.append(value)
-                text_labels.append(f"${value:.0f}" if value >= 1 else f"${value:.2f}")
+                if value == 0:
+                    text_labels.append("N/C/Y")
+                else:
+                    text_labels.append(f"${value:.0f}" if value >= 1 else f"${value:.2f}")
 
         fig.add_trace(
             go.Bar(
@@ -233,7 +238,7 @@ def _add_single_provider_trace(fig, daily_costs, dates, selected_provider, today
                 display_values.append(max(value, 0.01))  # Normal handling
                 hover_values.append(value)
                 text_labels.append(
-                    dashboard._format_currency_compact(value) if value > 0 else "$0.00"
+                    dashboard._format_currency_compact(value) if value > 0 else "N/C/Y"
                 )
 
         fig.add_trace(
@@ -256,7 +261,7 @@ def _add_single_provider_trace(fig, daily_costs, dates, selected_provider, today
                 y=values,
                 name=selected_provider.upper(),
                 marker_color=DashboardTheme.COLORS.get(selected_provider, "#007bff"),
-                text=[dashboard._format_currency_compact(v) for v in values],
+                text=["N/C/Y" if v == 0 else dashboard._format_currency_compact(v) for v in values],
                 textposition="outside",
                 hovertemplate=f"<b>{selected_provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{y:.2f}}<extra></extra>",
             )
@@ -359,7 +364,10 @@ def _setup_service_provider_selector_callback(dashboard):
     """Set up service provider selector dropdown callback."""
 
     @dashboard.app.callback(
-        [Output("service-provider-selector", "options"), Output("service-provider-selector", "value")],
+        [
+            Output("service-provider-selector", "options"),
+            Output("service-provider-selector", "value"),
+        ],
         [Input("cost-data-store", "data")],
     )
     def update_service_provider_selector(cost_data):
@@ -400,7 +408,9 @@ def _setup_service_breakdown_callback(dashboard):
         sorted_services = sorted(filtered_services, key=lambda x: x[1], reverse=True)
 
         if not sorted_services:
-            return _create_loading_chart(f"{selected_provider.upper()} Services (No services ≥$100)")
+            return _create_loading_chart(
+                f"{selected_provider.upper()} Services (No services ≥$100)"
+            )
 
         services = [s[0] for s in sorted_services]
         values = [s[1] for s in sorted_services]
