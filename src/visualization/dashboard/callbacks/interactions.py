@@ -7,6 +7,7 @@ and other user interface interactions.
 
 import logging
 
+import dash_bootstrap_components as dbc
 from dash import Input, Output, State, html
 
 logger = logging.getLogger(__name__)
@@ -61,8 +62,6 @@ def _setup_loading_callbacks(dashboard):
 
         # Show loading banner when loading state is True
         if loading_data and loading_data.get("loading", False):
-            from dash import dbc
-
             logger.info("⏳ LOADING BANNER: Showing loading banner")
 
             return dbc.Alert(
