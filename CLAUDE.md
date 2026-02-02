@@ -151,6 +151,82 @@ python -m src.main test-auth
 python -m src.main export-prometheus
 ```
 
+## Code Quality Standards
+
+This project enforces strict code quality standards through automated pre-commit hooks. All code must pass these standards before being committed.
+
+### Python Code Standards
+
+**Formatting (Black)**:
+- Maximum line length: 88 characters
+- Use double quotes for strings
+- Consistent indentation (4 spaces)
+- Proper spacing around operators and commas
+- Function arguments wrapped appropriately for readability
+
+**Import Organization (isort)**:
+- Imports grouped in order: standard library, third-party, local
+- Alphabetical sorting within each group
+- Proper spacing between import groups
+- Multi-line imports formatted consistently
+
+**Linting (Ruff)**:
+- No unused variables or imports
+- No undefined names
+- Proper exception handling
+- PEP 8 compliance
+- No dead code
+
+**Type Checking (mypy)**:
+- Type hints for function parameters and return values
+- Proper typing for complex data structures
+- No type errors or inconsistencies
+
+### Pre-Commit Hook Process
+
+The project uses automated pre-commit hooks that will:
+1. **Check and fix formatting issues** (Black, isort)
+2. **Identify and fix linting problems** (Ruff)
+3. **Validate type annotations** (mypy)
+4. **Detect security issues** (secrets detection)
+5. **Run basic smoke tests** (API endpoints)
+
+**Important**: If any tool modifies your code during commit:
+1. The commit will fail (this is intentional)
+2. Re-stage the modified files: `git add .`
+3. Commit again: `git commit -m "message"`
+
+### Development Best Practices
+
+**Code Structure**:
+- Clean up unused variables immediately after code changes
+- Remove debugging statements before committing
+- Maintain consistent indentation within files
+- Write self-documenting code with clear variable names
+
+**File Modifications**:
+- When editing existing files, preserve the existing style
+- Don't mix formatting changes with functional changes
+- Remove any temporary/debugging code before committing
+
+**Error Prevention**:
+- Run `pre-commit run --all-files` before committing to catch issues early
+- Use proper line length to avoid Black reformatting
+- Clean up all unused imports and variables
+- Follow existing patterns in the codebase
+
+### Quality Gates
+
+All code must pass:
+- ✅ **Formatting**: Black, isort compliance
+- ✅ **Linting**: Ruff error-free
+- ✅ **Type Safety**: mypy validation
+- ✅ **Security**: No hardcoded secrets
+- ✅ **Functionality**: Basic smoke tests
+- ✅ **Standards**: Consistent with existing codebase
+
+These standards ensure code quality, maintainability, and team collaboration effectiveness.
+
 ## Support and Contributing
 
 - **Issues**: Report bugs and feature requests via GitHub Issues
