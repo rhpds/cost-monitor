@@ -13,11 +13,43 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-NAMESPACE="${1:-cost-monitor-dev}"
 API_PORT=8000
 DASHBOARD_PORT=8050
 REDIS_PORT=6379
 POSTGRES_PORT=5432
+
+# Smart parameter parsing to handle both formats:
+# Format 1: ./script action component (namespace defaults to cost-monitor-dev)
+# Format 2: ./script namespace action component
+if [ $# -eq 2 ]; then
+    # Two arguments: assume action component, use default namespace
+    NAMESPACE="cost-monitor-dev"
+    ACTION="$1"
+    COMPONENT="$2"
+elif [ $# -eq 3 ]; then
+    # Three arguments: namespace action component
+    NAMESPACE="$1"
+    ACTION="$2"
+    COMPONENT="$3"
+elif [ $# -eq 1 ]; then
+    # One argument: could be action (help) or namespace only
+    if [ "$1" = "help" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+        NAMESPACE="cost-monitor-dev"
+        ACTION="help"
+        COMPONENT=""
+    else
+        # Single argument that's not help - show error
+        echo -e "${RED}ERROR: Invalid arguments. See usage below:${NC}"
+        echo ""
+        show_help
+        exit 1
+    fi
+else
+    # Zero or more than 3 arguments
+    NAMESPACE="cost-monitor-dev"
+    ACTION="help"
+    COMPONENT=""
+fi
 
 # Service configuration
 API_HOST="0.0.0.0"
@@ -33,7 +65,9 @@ mkdir -p "$TMP_DIR"
 show_help() {
     echo "Local Development Environment Manager"
     echo ""
-    echo "Usage: $0 [NAMESPACE] [ACTION] [COMPONENT]"
+    echo "Usage:"
+    echo "  $0 [ACTION] [COMPONENT]                 # Uses default namespace: cost-monitor-dev"
+    echo "  $0 [NAMESPACE] [ACTION] [COMPONENT]     # Uses custom namespace"
     echo ""
     echo "Actions:"
     echo "  start           - Start services/tunnels"
@@ -43,7 +77,7 @@ show_help() {
     echo "  logs            - Show logs for services/tunnels"
     echo "  clear-redis-cache - Clear Redis cache"
     echo ""
-    echo "Components (required):"
+    echo "Components (required for most actions):"
     echo "  all              - All components"
     echo "  api              - API service"
     echo "  dashboard        - Dashboard service"
@@ -54,17 +88,17 @@ show_help() {
     echo "  redis-pod        - Redis pod (OpenShift)"
     echo "  all-pods         - Both database pods (OpenShift)"
     echo ""
-    echo "Examples:"
-    echo "  $0 <namespace> start all               # Start everything"
-    echo "  $0 <namespace> start api               # Start just API"
-    echo "  $0 <namespace> stop dashboard          # Stop just dashboard"
-    echo "  $0 <namespace> restart postgres-tunnel # Restart just PostgreSQL tunnel"
-    echo "  $0 <namespace> restart all-tunnels     # Restart both tunnels"
-    echo "  $0 <namespace> status all              # Status of everything"
-    echo "  $0 <namespace> logs redis-tunnel       # Show Redis tunnel logs"
-    echo "  $0 <namespace> logs postgres-pod       # Show PostgreSQL pod logs from OpenShift"
-    echo "  $0 <namespace> logs all-pods           # Show all database pod logs"
-    echo "  $0 my-custom-namespace start all       # Example with specific namespace"
+    echo "Simple Examples (default namespace):"
+    echo "  $0 start all               # Start everything in cost-monitor-dev"
+    echo "  $0 start api               # Start just API in cost-monitor-dev"
+    echo "  $0 stop dashboard          # Stop just dashboard"
+    echo "  $0 restart postgres-tunnel # Restart PostgreSQL tunnel"
+    echo "  $0 status all              # Status of everything"
+    echo "  $0 logs api                # Show API logs"
+    echo ""
+    echo "Custom Namespace Examples:"
+    echo "  $0 my-namespace start all       # Start everything in custom namespace"
+    echo "  $0 prod-monitor logs redis-pod  # Show Redis pod logs from prod-monitor namespace"
 }
 
 get_secret() {
@@ -958,15 +992,20 @@ show_all_logs() {
 }
 
 # Main command processing
-ACTION="${2:-help}"
-COMPONENT="${3}"
+# (ACTION and COMPONENT are already set by the smart parameter parsing above)
 
 # Validate component is provided for actions that need it
-if [ "$ACTION" != "help" ] && [ -z "$COMPONENT" ]; then
-    echo -e "${RED}ERROR: Component required. Use: all, api, dashboard, postgres-tunnel, redis-tunnel, all-tunnels, postgres-pod, redis-pod, or all-pods${NC}"
+if [ "$ACTION" != "help" ] && [ "$ACTION" != "clear-redis-cache" ] && [ -z "$COMPONENT" ]; then
+    echo -e "${RED}ERROR: Component required for action '$ACTION'.${NC}"
+    echo -e "${YELLOW}Valid components: all, api, dashboard, postgres-tunnel, redis-tunnel, all-tunnels, postgres-pod, redis-pod, all-pods${NC}"
     echo ""
     show_help
     exit 1
+fi
+
+# Debug output to show what namespace is being used
+if [ "$ACTION" != "help" ]; then
+    echo -e "${BLUE}Using namespace: ${GREEN}$NAMESPACE${NC}"
 fi
 
 # Commands that need prerequisites check

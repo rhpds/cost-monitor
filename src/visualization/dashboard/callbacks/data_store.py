@@ -119,11 +119,14 @@ def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
 
     if triggered_prop == "btn-this-month":
         start_date_obj = dashboard._get_month_start(today)
-        end_date_obj = safe_end_date
+        # For "This Month", use today as end date (users expect current month data)
+        end_date_obj = today
     elif triggered_prop == "btn-last-month":
         start_date_obj, end_date_obj = dashboard._get_last_month()
     elif triggered_prop == "btn-this-week":
-        start_date_obj = dashboard._get_week_start(safe_end_date)  # Use safe_end_date instead of today
+        start_date_obj = dashboard._get_week_start(
+            safe_end_date
+        )  # Use safe_end_date instead of today
         end_date_obj = safe_end_date
     elif triggered_prop == "btn-last-week":
         start_date_obj, end_date_obj = dashboard._get_last_week()
@@ -135,24 +138,26 @@ def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
         end_date_obj = safe_end_date
     elif triggered_prop == "btn-apply-dates":
         # Use date picker values for Apply button
-        logger.info(f"🔘 APPLY DATES: start_date_picker={start_date_picker}, end_date_picker={end_date_picker}")
+        logger.info(
+            f"🔘 APPLY DATES: start_date_picker={start_date_picker}, end_date_picker={end_date_picker}"
+        )
         if start_date_picker and end_date_picker:
             start_date_obj = datetime.strptime(start_date_picker, "%Y-%m-%d").date()
             end_date_obj = datetime.strptime(end_date_picker, "%Y-%m-%d").date()
             logger.info(f"🔘 APPLY DATES: Using picker values: {start_date_obj} to {end_date_obj}")
         else:
             # Fallback if date picker values are missing
-            logger.warning(f"🔘 APPLY DATES: Picker values missing! Using fallback")
+            logger.warning("🔘 APPLY DATES: Picker values missing! Using fallback")
             start_date_obj = dashboard._get_month_start(today)
-            end_date_obj = safe_end_date
+            end_date_obj = today
     elif triggered_prop == "interval-component":
         # Auto-refresh: use This Month for consistency
         start_date_obj = dashboard._get_month_start(today)
-        end_date_obj = safe_end_date
+        end_date_obj = today
     else:
         # Default case or initial load
         start_date_obj = dashboard._get_month_start(today)
-        end_date_obj = safe_end_date
+        end_date_obj = today
 
     return start_date_obj, end_date_obj
 
@@ -317,42 +322,31 @@ def _setup_key_metrics_callback(dashboard):
                 if first_date > last_date:  # Descending order, need to reverse
                     values_ordered = list(reversed(daily_values))
 
-            # Simple linear regression to find trend
-            n = len(values_ordered)
-            x_values = list(range(n))  # Day indices: 0, 1, 2, ...
+            # Use actual average of first/last few days for trend analysis
+            # (avoids negative extrapolated values for rapidly growing costs)
+            first_avg = (
+                sum(values_ordered[:3]) / 3 if len(values_ordered) >= 3 else values_ordered[0]
+            )
+            last_avg = (
+                sum(values_ordered[-3:]) / 3 if len(values_ordered) >= 3 else values_ordered[-1]
+            )
 
-            # Calculate means
-            x_mean = sum(x_values) / n
-            y_mean = sum(values_ordered) / n
+            if first_avg > 0:
+                trend_percentage = ((last_avg - first_avg) / first_avg) * 100
 
-            # Calculate slope (trend direction)
-            numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_values, values_ordered))
-            denominator = sum((x - x_mean) ** 2 for x in x_values)
-
-            if denominator > 0:
-                slope = numerator / denominator
-
-                # Use actual average of first/last few days for more stable percentage
-                # (avoids negative extrapolated values for rapidly growing costs)
-                first_avg = sum(values_ordered[:3]) / 3 if len(values_ordered) >= 3 else values_ordered[0]
-                last_avg = sum(values_ordered[-3:]) / 3 if len(values_ordered) >= 3 else values_ordered[-1]
-
-                if first_avg > 0:
-                    trend_percentage = ((last_avg - first_avg) / first_avg) * 100
-
-                    # Show direction based on trend
-                    if abs(trend_percentage) < 2:
-                        # Less than 2% change = stable
-                        trend_text = "Stable"
-                        trend_class = "text-muted"
-                    elif trend_percentage > 0:
-                        # Costs increasing
-                        trend_text = f"↗ +{trend_percentage:.1f}%"
-                        trend_class = "text-danger"
-                    else:
-                        # Costs decreasing
-                        trend_text = f"↘ {trend_percentage:.1f}%"
-                        trend_class = "text-success"
+                # Show direction based on trend
+                if abs(trend_percentage) < 2:
+                    # Less than 2% change = stable
+                    trend_text = "Stable"
+                    trend_class = "text-muted"
+                elif trend_percentage > 0:
+                    # Costs increasing
+                    trend_text = f"↗ +{trend_percentage:.1f}%"
+                    trend_class = "text-danger"
+                else:
+                    # Costs decreasing
+                    trend_text = f"↘ {trend_percentage:.1f}%"
+                    trend_class = "text-success"
 
         return (
             f"${total_cost:,.2f}",

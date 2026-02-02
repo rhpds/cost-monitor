@@ -5,28 +5,28 @@ Contains the main layout function and component definitions
 for the dashboard UI structure.
 """
 
-from datetime import date, timedelta
+from datetime import date
 
 import dash_bootstrap_components as dbc
 from dash import dcc, html
+
+# Remove the helper function since we're now using today directly
 
 
 def _get_plotly_config():
     """Get Plotly configuration based on environment."""
     import os
-    environment = os.getenv('ENVIRONMENT', 'production')
 
-    if environment == 'development':
+    environment = os.getenv("ENVIRONMENT", "production")
+
+    if environment == "development":
         # Dev mode: Show modebar for debugging
         return {
-            'displayModeBar': True,
+            "displayModeBar": True,
         }
     else:
         # Production mode: Hide logo and unnecessary buttons for clean UI
-        return {
-            'displaylogo': False,
-            'modeBarButtonsToRemove': ['lasso2d', 'select2d']
-        }
+        return {"displaylogo": False, "modeBarButtonsToRemove": ["lasso2d", "select2d"]}
 
 
 def create_dashboard_layout(dashboard):
@@ -75,8 +75,7 @@ def create_dashboard_layout(dashboard):
                                                                         start_date=date.today().replace(
                                                                             day=1
                                                                         ),
-                                                                        end_date=date.today()
-                                                                        - timedelta(days=2),
+                                                                        end_date=date.today(),
                                                                         display_format="YYYY-MM-DD",
                                                                         style={"width": "auto"},
                                                                     ),
@@ -116,7 +115,7 @@ def create_dashboard_layout(dashboard):
                                                         md=12,
                                                     ),
                                                 ]
-                                            )
+                                            ),
                                         ]
                                     )
                                 ]
@@ -239,14 +238,19 @@ def create_dashboard_layout(dashboard):
                                                                 "value": "log",
                                                             }
                                                         ],
-                                                        value=["log"],  # Default checked (log scale)
+                                                        value=[
+                                                            "log"
+                                                        ],  # Default checked (log scale)
                                                         switch=True,
                                                         className="me-3",
                                                     ),
                                                     dbc.Select(
                                                         id="provider-selector",
                                                         options=[
-                                                            {"label": "All Providers", "value": "all"},
+                                                            {
+                                                                "label": "All Providers",
+                                                                "value": "all",
+                                                            },
                                                             {"label": "AWS", "value": "aws"},
                                                             {"label": "Azure", "value": "azure"},
                                                             {"label": "GCP", "value": "gcp"},
@@ -265,7 +269,7 @@ def create_dashboard_layout(dashboard):
                                             dcc.Graph(
                                                 id="cost-trend-chart",
                                                 style={"height": "400px"},
-                                                config=plotly_config
+                                                config=plotly_config,
                                             )
                                         ]
                                     ),
@@ -292,7 +296,7 @@ def create_dashboard_layout(dashboard):
                                             dcc.Graph(
                                                 id="provider-breakdown-chart",
                                                 style={"height": "400px"},
-                                                config=plotly_config
+                                                config=plotly_config,
                                             )
                                         ]
                                     ),
@@ -328,7 +332,7 @@ def create_dashboard_layout(dashboard):
                                             dcc.Graph(
                                                 id="service-breakdown-chart",
                                                 style={"height": "400px"},
-                                                config=plotly_config
+                                                config=plotly_config,
                                             )
                                         ]
                                     ),

@@ -157,6 +157,8 @@ class CostMonitorDashboard:
             target_date = date.today()
         return target_date.replace(day=1)
 
+    # Removed _get_month_end helper method since we now use today directly for "This Month"
+
     def _get_last_month_range(self) -> tuple[date, date]:
         """Get the first and last day of last month."""
         today = date.today()
