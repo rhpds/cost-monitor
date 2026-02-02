@@ -303,6 +303,23 @@ def _update_chart_layout(fig, selected_provider, use_log_scale=False):
         yaxis=yaxis_config,
     )
 
+    # Add explanation for N/C/Y when showing all providers (legend is visible)
+    if selected_provider == "all":
+        fig.add_annotation(
+            text="N/C/Y = No Cost Yet",
+            xref="paper",
+            yref="paper",
+            x=1.02,
+            y=0.02,  # Position to the right, near bottom
+            xanchor="left",
+            yanchor="bottom",
+            showarrow=False,
+            font=dict(size=10, color="gray"),
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="rgba(200,200,200,0.5)",
+            borderwidth=1,
+        )
+
 
 def _setup_provider_breakdown_callback(dashboard):
     """Set up provider breakdown chart callback."""
