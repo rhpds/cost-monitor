@@ -52,6 +52,8 @@ def create_dashboard_layout(dashboard):
             ),
             # Alert banner
             dbc.Row([dbc.Col([html.Div(id="alert-banner")])], className="mb-3"),
+            # Authentication warning banner
+            dbc.Row([dbc.Col([html.Div(id="auth-warning-banner")])], className="mb-3"),
             # Loading banner
             dbc.Row([dbc.Col([html.Div(id="loading-banner")])], className="mb-3"),
             # Date range controls
@@ -410,6 +412,7 @@ def create_dashboard_layout(dashboard):
             dcc.Store(id="cost-data-store"),
             dcc.Store(id="alert-data-store"),
             dcc.Store(id="loading-store", data={"loading": True}),  # Start with loading=True
+            dcc.Store(id="auth-status-store"),
             dcc.Interval(
                 id="interval-component",
                 interval=dashboard.refresh_interval,

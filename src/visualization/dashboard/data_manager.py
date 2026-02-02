@@ -9,6 +9,7 @@ import logging
 import os
 import time
 from datetime import date
+from typing import Any
 
 import requests
 
@@ -194,3 +195,18 @@ class CostDataManager:
         if cost_data:
             return getattr(cost_data, "account_breakdown", {})
         return {}
+
+    def get_auth_status(self) -> dict[str, Any]:
+        """Get authentication status from the data service API."""
+        try:
+            url = f"{self.data_service_url}/api/v1/auth/status"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            auth_status: dict[str, Any] = response.json()
+            logger.info("📡 AUTH STATUS: Retrieved authentication status from API")
+            return auth_status
+
+        except Exception as e:
+            logger.error(f"📡 AUTH STATUS: Failed to get auth status from API: {e}")
+            return {"providers": {}, "error": str(e)}

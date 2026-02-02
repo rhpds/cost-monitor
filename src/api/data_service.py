@@ -17,11 +17,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Import provider implementations to register them
 from ..config.settings import get_config
-from ..providers import aws, azure, gcp  # noqa: F401
+from ..providers import aws  # noqa: F401
 
 # Import provider system for on-demand data collection
-from ..providers.base import CostDataPoint as ProviderCostDataPoint
-from ..providers.base import ProviderFactory, TimeGranularity
+from ..providers.base import (
+    ConfigurationError,
+    CostDataPoint as ProviderCostDataPoint,
+    ProviderFactory,
+    TimeGranularity,
+)
 from ..utils.auth import MultiCloudAuthManager
 
 # Import AWS account management utilities
@@ -38,6 +42,74 @@ db_pool = None
 redis_client = None
 auth_manager = None
 config = None
+
+
+async def validate_enabled_provider_configs(config):
+    """Validate configuration for all enabled cloud providers at startup."""
+
+    # Check each provider that might be enabled
+    enabled_providers = config.enabled_providers
+    logger.info(f"Validating configuration for enabled providers: {enabled_providers}")
+
+    for provider_name in enabled_providers:
+        try:
+            if provider_name == "gcp":
+                # Validate GCP-specific required fields
+                gcp_config = config.gcp
+                required_fields = {
+                    "project_id": gcp_config.get("project_id"),
+                    "credentials_path": gcp_config.get("credentials_path"),
+                    "billing_account_id": gcp_config.get("billing_account_id"),
+                    "bigquery_billing_dataset": gcp_config.get("bigquery_billing_dataset"),
+                }
+
+                missing_fields = [field for field, value in required_fields.items() if not value]
+
+                if missing_fields:
+                    missing_list = ", ".join(missing_fields)
+                    raise ConfigurationError(
+                        f"GCP provider is enabled but missing required configuration fields: {missing_list}. "
+                        f"Please configure these in your .secrets.yaml file:\n"
+                        f"  clouds:\n"
+                        f"    gcp:\n"
+                        f"      project_id: 'your-project-id'\n"
+                        f"      credentials_path: '/path/to/service-account.json'\n"
+                        f"      billing_account_id: '123456-ABCDEF-789012'\n"
+                        f"      bigquery_billing_dataset: 'your_billing_dataset'"
+                    )
+
+                logger.info(f"✅ {provider_name.upper()} configuration validated")
+
+            elif provider_name == "aws":
+                # Validate AWS required fields
+                aws_config = config.aws
+                required_fields = ["access_key_id", "secret_access_key"]
+                missing_fields = [field for field in required_fields if not aws_config.get(field)]
+
+                if missing_fields:
+                    raise ConfigurationError(
+                        f"AWS provider is enabled but missing: {', '.join(missing_fields)}"
+                    )
+                logger.info(f"✅ {provider_name.upper()} configuration validated")
+
+            elif provider_name == "azure":
+                # Validate Azure required fields
+                azure_config = config.azure
+                required_fields = ["client_id", "client_secret", "tenant_id"]
+                missing_fields = [field for field in required_fields if not azure_config.get(field)]
+
+                if missing_fields:
+                    raise ConfigurationError(
+                        f"Azure provider is enabled but missing: {', '.join(missing_fields)}"
+                    )
+                logger.info(f"✅ {provider_name.upper()} configuration validated")
+
+        except ConfigurationError as e:
+            logger.error(f"❌ Configuration validation failed for {provider_name}: {e}")
+            raise  # This will cause the API to fail to start
+        except Exception as e:
+            logger.error(f"❌ Unexpected error validating {provider_name} config: {e}")
+            raise ConfigurationError(f"Failed to validate {provider_name} configuration: {str(e)}")
 
 
 @asynccontextmanager
@@ -65,6 +137,10 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing provider system...")
     auth_manager = MultiCloudAuthManager()
     config = get_config()  # Load provider configurations
+
+    # Validate configuration for all enabled providers at startup
+    logger.info("Validating provider configurations...")
+    await validate_enabled_provider_configs(config)
 
     logger.info("✅ Cost Data Service started successfully")
     yield
@@ -229,9 +305,13 @@ async def collect_provider_data(
         auth_result = await auth_manager.authenticate_provider(provider_name, provider_config)
         if not auth_result.success:
             logger.error(
-                f"Failed to authenticate with {provider_name}: {auth_result.error_message}"
+                f"❌ Authentication failed for {provider_name}: {auth_result.error_message}"
             )
-            return []
+            # Mark provider as authentication failed (don't store any data)
+            await update_provider_sync_status(provider_name, "auth_failed", datetime.now())
+            raise ValueError(
+                f"Authentication failed for {provider_name}: {auth_result.error_message}"
+            )
 
         # Get cost data
         logger.info(f"Collecting {provider_name} data for {start_date} to {end_date}")
@@ -239,11 +319,66 @@ async def collect_provider_data(
             start_date, end_date, TimeGranularity.DAILY
         )
 
+        # CRITICAL: Validate that we got actual data vs empty response due to auth issues
+        if not cost_summary.data_points:
+            logger.warning(
+                f"⚠️  Empty data returned for {provider_name} - re-verifying authentication"
+            )
+            # Re-authenticate to distinguish between "no data" and "auth failed"
+            auth_recheck = await auth_manager.authenticate_provider(provider_name, provider_config)
+            if not auth_recheck.success:
+                logger.error(
+                    f"🔐 AUTHENTICATION EXPIRED during data collection for {provider_name}: {auth_recheck.error_message}"
+                )
+                await update_provider_sync_status(provider_name, "auth_expired", datetime.now())
+                raise ValueError(
+                    f"Authentication expired for {provider_name}: {auth_recheck.error_message}"
+                )
+            else:
+                logger.info(
+                    f"✅ Authentication confirmed for {provider_name} - empty data is legitimate"
+                )
+
         return cost_summary.data_points
 
     except Exception as e:
-        logger.error(f"Error collecting data from {provider_name}: {e}")
-        return []
+        # Check if this is an authentication-related error
+        error_str = str(e).lower()
+        auth_indicators = [
+            "unauthorized",
+            "authentication",
+            "credentials",
+            "token",
+            "access denied",
+            "permission denied",
+            "forbidden",
+            "invalid_grant",
+            "token_expired",
+            "unauthorized_operation",
+            "invalid credentials",
+            "access key",
+            "secret key",
+            "service account",
+            "billing",
+            "quota",
+            "payment",
+            "disabled",
+        ]
+
+        is_auth_error = any(indicator in error_str for indicator in auth_indicators)
+
+        if is_auth_error:
+            # This is an authentication failure - fail fast
+            logger.error(f"🔐 AUTHENTICATION FAILURE for {provider_name}: {e}")
+            await update_provider_sync_status(provider_name, "auth_failed", datetime.now())
+            raise ValueError(f"Authentication failed for {provider_name}: {str(e)}")
+        else:
+            # Non-auth error - still fail instead of returning empty data
+            logger.error(f"❌ DATA COLLECTION ERROR for {provider_name}: {e}")
+            await update_provider_sync_status(provider_name, "error", datetime.now())
+            raise ValueError(f"Data collection failed for {provider_name}: {str(e)}")
+
+        # REMOVED: return [] - This was the bug that allowed empty data to be marked as successful
 
 
 async def store_cost_data(provider_name: str, cost_points: list[ProviderCostDataPoint]):
@@ -331,14 +466,30 @@ async def collect_missing_data(
         for range_start, range_end in ranges:
             logger.info(f"Collecting missing {provider_name} data for {range_start} to {range_end}")
 
-            # Collect data from provider
-            cost_points = await collect_provider_data(provider_name, range_start, range_end)
+            try:
+                # Collect data from provider
+                cost_points = await collect_provider_data(provider_name, range_start, range_end)
 
-            # Store in database
-            await store_cost_data(provider_name, cost_points)
+                # Store in database
+                await store_cost_data(provider_name, cost_points)
 
-            # Update sync status
-            await update_provider_sync_status(provider_name, "success", datetime.now())
+                # Update sync status
+                await update_provider_sync_status(provider_name, "success", datetime.now())
+
+            except ValueError as e:
+                error_msg = str(e)
+                if "Authentication failed" in error_msg or "Authentication expired" in error_msg:
+                    logger.warning(
+                        f"⚠️  Skipping {provider_name} data collection due to authentication failure: {e}"
+                    )
+                    # Sync status already updated in collect_provider_data() - don't store any data
+                    continue
+                else:
+                    logger.error(f"❌ Data collection error for {provider_name}: {e}")
+                    await update_provider_sync_status(provider_name, "error", datetime.now())
+            except Exception as e:
+                logger.error(f"❌ Unexpected error collecting {provider_name} data: {e}")
+                await update_provider_sync_status(provider_name, "error", datetime.now())
 
 
 # Health endpoints
@@ -387,6 +538,59 @@ async def health_redis():
     except Exception as e:
         logger.error(f"Redis health check failed: {e}")
         raise HTTPException(status_code=503, detail="Redis not available")
+
+
+@app.get("/api/v1/auth/status")
+async def get_auth_status():
+    """Get authentication status for all cloud providers"""
+    global auth_manager, config
+
+    try:
+        # Attempt authentication for all enabled providers
+        auth_results = {}
+
+        for provider in ["aws", "azure", "gcp"]:
+            try:
+                provider_config = config.settings.get(f"clouds.{provider}", {})
+            except Exception:
+                provider_config = (
+                    getattr(config.settings.clouds, provider, {})
+                    if hasattr(config.settings, "clouds")
+                    else {}
+                )
+
+            # Only check enabled providers
+            if not provider_config.get("enabled", True):
+                auth_results[provider] = {
+                    "authenticated": False,
+                    "method": None,
+                    "error": "Provider disabled in configuration",
+                    "enabled": False,
+                }
+                continue
+
+            try:
+                auth_result = await auth_manager.authenticate_provider(provider, provider_config)
+                auth_results[provider] = {
+                    "authenticated": auth_result.success,
+                    "method": auth_result.method,
+                    "error": auth_result.error_message,
+                    "enabled": True,
+                }
+            except Exception as e:
+                logger.error(f"Authentication check failed for {provider}: {e}")
+                auth_results[provider] = {
+                    "authenticated": False,
+                    "method": None,
+                    "error": f"Authentication check failed: {str(e)}",
+                    "enabled": True,
+                }
+
+        return {"providers": auth_results, "timestamp": datetime.now().isoformat()}
+
+    except Exception as e:
+        logger.error(f"Auth status check failed: {e}")
+        raise HTTPException(status_code=500, detail="Authentication status check failed")
 
 
 # Cost data endpoints

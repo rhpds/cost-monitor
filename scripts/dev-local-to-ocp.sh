@@ -32,10 +32,14 @@ elif [ $# -eq 3 ]; then
     ACTION="$2"
     COMPONENT="$3"
 elif [ $# -eq 1 ]; then
-    # One argument: could be action (help) or namespace only
+    # One argument: could be action (help, clear-redis-cache) or namespace only
     if [ "$1" = "help" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
         NAMESPACE="cost-monitor-dev"
         ACTION="help"
+        COMPONENT=""
+    elif [ "$1" = "clear-redis-cache" ]; then
+        NAMESPACE="cost-monitor-dev"
+        ACTION="clear-redis-cache"
         COMPONENT=""
     else
         # Single argument that's not help - show error

@@ -57,12 +57,7 @@ repos:
         language_version: python3
         args: ["--config", "pyproject.toml"]
 
-  # Python import sorting with isort
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        args: ["--settings-path", "pyproject.toml"]
+  # Python import sorting handled by ruff (see ruff configuration below)
 
   # Python linting with Ruff (modern flake8 replacement)
   - repo: https://github.com/astral-sh/ruff-pre-commit

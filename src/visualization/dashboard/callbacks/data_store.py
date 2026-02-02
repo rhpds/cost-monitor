@@ -25,6 +25,8 @@ def setup_data_store_callbacks(dashboard):
     _setup_key_metrics_callback(dashboard)
     _setup_alert_banner_callback(dashboard)
     _setup_date_picker_update_callback(dashboard)
+    _setup_auth_status_callback(dashboard)
+    _setup_auth_warning_banner_callback(dashboard)
 
 
 def _setup_main_data_callback(dashboard):
@@ -69,11 +71,14 @@ def _setup_main_data_callback(dashboard):
             logger.info(f"📊 DATA STORE: Starting data update - triggered by {triggered_prop}")
 
             # Determine date range based on button clicked
-            logger.info(f"📅 DATE PICKER VALUES: start={start_date_picker}, end={end_date_picker}")
+            # Note: For buttons, date is calculated from button logic, not date picker state
+            if triggered_prop == "btn-apply-dates":
+                logger.info(
+                    f"📅 DATE PICKER VALUES: start={start_date_picker}, end={end_date_picker}"
+                )
             start_date_obj, end_date_obj = _determine_date_range(
                 ctx, dashboard, start_date_picker, end_date_picker
             )
-            logger.info(f"📅 FINAL DATE RANGE: {start_date_obj} to {end_date_obj}")
 
             # Start performance monitoring for data fetch
             dashboard.performance_monitor.start_operation("data_fetch")
@@ -121,19 +126,25 @@ def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
         start_date_obj = dashboard._get_month_start(today)
         # For "This Month", use today as end date (users expect current month data)
         end_date_obj = today
+        logger.info(f"🔘 THIS MONTH: {start_date_obj} to {end_date_obj}")
     elif triggered_prop == "btn-last-month":
         start_date_obj, end_date_obj = dashboard._get_last_month()
+        logger.info(f"🔘 LAST MONTH: {start_date_obj} to {end_date_obj}")
     elif triggered_prop == "btn-this-week":
         start_date_obj = dashboard._get_week_start(today)  # Use today for current week
         end_date_obj = today
+        logger.info(f"🔘 THIS WEEK: {start_date_obj} to {end_date_obj}")
     elif triggered_prop == "btn-last-week":
         start_date_obj, end_date_obj = dashboard._get_last_week()
+        logger.info(f"🔘 LAST WEEK: {start_date_obj} to {end_date_obj}")
     elif triggered_prop == "btn-last-30-days":
         start_date_obj = today - timedelta(days=30)
         end_date_obj = today
+        logger.info(f"🔘 LAST 30 DAYS: {start_date_obj} to {end_date_obj}")
     elif triggered_prop == "btn-last-7-days":
         start_date_obj = today - timedelta(days=7)
         end_date_obj = today
+        logger.info(f"🔘 LAST 7 DAYS: {start_date_obj} to {end_date_obj}")
     elif triggered_prop == "btn-apply-dates":
         # Use date picker values for Apply button
         logger.info(
@@ -437,3 +448,71 @@ def _setup_date_picker_update_callback(dashboard):
         end_date_str = end_date_obj.isoformat()
 
         return start_date_str, end_date_str
+
+
+def _setup_auth_status_callback(dashboard):
+    """Set up authentication status callback."""
+
+    @dashboard.app.callback(
+        Output("auth-status-store", "data"),
+        [Input("auth-status-store", "id")],  # Only trigger once on startup
+        prevent_initial_call=False,
+    )
+    def update_auth_status(_):
+        """Check authentication status for all providers on startup only."""
+        try:
+            # Call the auth status endpoint using dashboard's data manager
+            auth_status = dashboard.data_manager.get_auth_status()
+            logger.info("📡 AUTH STATUS: Retrieved authentication status on startup")
+            return auth_status
+
+        except Exception as e:
+            logger.error(f"📡 AUTH STATUS: Error checking authentication: {e}")
+            return {"providers": {}, "error": str(e)}
+
+
+def _setup_auth_warning_banner_callback(dashboard):
+    """Set up authentication warning banner callback."""
+
+    @dashboard.app.callback(
+        Output("auth-warning-banner", "children"),
+        [Input("auth-status-store", "data")],
+        prevent_initial_call=True,
+    )
+    def update_auth_warning_banner(auth_status):
+        """Update authentication warning banner based on auth status."""
+        if not auth_status:
+            return ""
+
+        providers = auth_status.get("providers", {})
+        failed_providers = []
+
+        for provider, status in providers.items():
+            if status.get("enabled", True) and not status.get("authenticated", False):
+                failed_providers.append(provider.upper())
+
+        if not failed_providers:
+            return ""
+
+        # Show warning banner for failed authentication
+        error_message = f"Authentication failed for: {', '.join(failed_providers)}"
+
+        import dash_bootstrap_components as dbc
+        from dash import html
+
+        return dbc.Alert(
+            [
+                html.I(className="fa fa-exclamation-triangle me-2"),
+                html.Strong("⚠️ Cloud Authentication Issues"),
+                html.Br(),
+                error_message,
+                html.Br(),
+                html.Small(
+                    "Some cloud providers cannot be accessed. Check your credentials configuration.",
+                    className="text-muted",
+                ),
+            ],
+            color="warning",
+            className="mb-3",
+            style={"fontSize": "0.9rem"},
+        )

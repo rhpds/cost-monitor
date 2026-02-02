@@ -102,7 +102,8 @@ def _setup_cost_trend_chart_callback(dashboard):
         # Get daily costs data
         daily_costs = cost_data["daily_costs"]
         if not daily_costs:
-            return _create_loading_chart("Daily Costs by Provider")
+            logger.info("📊 CHART: No daily costs data - creating N/C/Y chart")
+            return _create_no_data_chart("Daily Costs by Provider")
 
         # Filter out savings plans if toggle is unchecked
         include_sp = "include" in (include_savings_plans or [])
@@ -160,6 +161,55 @@ def _create_loading_chart(title):
     return loading_fig
 
 
+def _create_no_data_chart(title):
+    """Create a chart showing N/C/Y for all providers when no data is available."""
+    from datetime import date
+
+    no_data_fig = go.Figure()
+
+    # Show N/C/Y bars for all providers
+    providers = ["AWS", "Azure", "GCP"]
+    colors = ["#ff9800", "#00bcd4", "#4caf50"]  # AWS orange, Azure cyan, GCP green
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    for _, (provider, color) in enumerate(zip(providers, colors, strict=False)):
+        no_data_fig.add_trace(
+            go.Bar(
+                x=[today_str],
+                y=[0.5],  # Give it some height so text is visible
+                name=provider,
+                marker=dict(color=color, opacity=0.3),
+                text=["N/C/Y"],
+                textposition="inside",
+                textfont=dict(size=14, color="gray"),
+                hovertemplate=f"<b>{provider}</b><br>Date: %{{x}}<br>Cost: No Cost Yet<extra></extra>",
+            )
+        )
+
+    no_data_fig.update_layout(
+        title=title,
+        xaxis_title="Date",
+        barmode="group",
+        **DashboardTheme.LAYOUT,
+        yaxis=dict(range=[0, 1], title="Cost ($)"),  # Small range to show the N/C/Y text clearly
+        annotations=[
+            dict(
+                text="N/C/Y = No Cost Yet",
+                xref="paper",
+                yref="paper",
+                x=1.02,
+                y=0.02,
+                xanchor="left",
+                yanchor="bottom",
+                showarrow=False,
+                font=dict(size=12, color="gray"),
+            )
+        ],
+    )
+
+    return no_data_fig
+
+
 def _add_all_providers_traces(fig, daily_costs, dates, today_str):
     """Add traces for all providers to the chart."""
     providers = ["aws", "azure", "gcp"]
@@ -184,22 +234,18 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
         hover_values = []
         text_labels = []
 
-        for _, (item, value) in enumerate(zip(daily_costs, values, strict=False)):
-            is_today = item["date"] == today_str
-
-            if provider == "aws" and is_today:
-                # Special handling for AWS today's data
-                display_values.append(0.01 if will_use_log_scale else 0)
+        for _, (_, value) in enumerate(zip(daily_costs, values, strict=False)):
+            if value == 0:
+                # Show N/C/Y for any provider with zero cost
+                display_values.append(0.5)  # Small visible height for N/C/Y
                 hover_values.append(0)
-                text_labels.append("N/A")
+                text_labels.append("N/C/Y")
             else:
+                # Show actual cost data
                 display_value = max(value, 0.01) if will_use_log_scale and value <= 0 else value
                 display_values.append(display_value)
                 hover_values.append(value)
-                if value == 0:
-                    text_labels.append("N/C/Y")
-                else:
-                    text_labels.append(f"${value:.0f}" if value >= 1 else f"${value:.2f}")
+                text_labels.append(f"${value:.0f}" if value >= 1 else f"${value:.2f}")
 
         fig.add_trace(
             go.Bar(
@@ -209,8 +255,8 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
                 marker_color=DashboardTheme.COLORS.get(provider, "#000000"),
                 marker_line=dict(width=1, color="rgba(0,0,0,0.3)"),
                 text=text_labels,
-                textposition="outside",
-                textfont=dict(size=14, color="black"),
+                textposition="auto",  # Let Plotly decide best position
+                textfont=dict(size=12, color="black"),
                 hovertemplate=f"<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{customdata:.2f}}<extra></extra>",
                 customdata=hover_values,
             )
