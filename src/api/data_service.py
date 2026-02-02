@@ -135,6 +135,14 @@ async def get_missing_date_ranges(
 ) -> dict[str, list[tuple]]:
     """Identify missing date ranges that need to be collected"""
     missing_ranges = {}
+    today = date.today()
+
+    # Define data freshness rules for each provider (days to wait before data is available)
+    provider_delays = {
+        "aws": 2,  # AWS Cost Explorer has 1-2 day delay
+        "azure": 1,  # Azure typically has 1 day delay
+        "gcp": 1,  # GCP can have up to 1 day delay
+    }
 
     # Generate all dates in the requested range
     current_date = start_date
@@ -145,7 +153,21 @@ async def get_missing_date_ranges(
 
     for provider in providers:
         existing_dates = set(existing_data.get(provider, []))
-        missing_dates = [d for d in all_dates if d not in existing_dates]
+
+        # Filter out dates that are too recent for this provider
+        provider_delay = provider_delays.get(provider, 0)
+        earliest_available_date = today - timedelta(days=provider_delay)
+
+        # Only include dates that are not too recent and not already in database
+        available_dates = [d for d in all_dates if d <= earliest_available_date]
+        missing_dates = [d for d in available_dates if d not in existing_dates]
+
+        # Log when dates are excluded due to data freshness
+        excluded_dates = [d for d in all_dates if d > earliest_available_date]
+        if excluded_dates:
+            logger.info(
+                f"🕐 {provider.upper()}: Excluding {len(excluded_dates)} recent dates due to {provider_delay}-day delay (will show N/C/Y): {excluded_dates}"
+            )
 
         if missing_dates:
             # Group consecutive missing dates into ranges

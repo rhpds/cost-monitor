@@ -318,16 +318,10 @@ async def process_account_data(
     # Trigger background AWS account name resolution
     await _trigger_aws_account_resolution(account_rows, db_pool, auth_manager)
 
-    # Get GCP account breakdown separately
-    gcp_account_rows = await _get_gcp_account_breakdown(start_date, end_date)
-
-    # Legacy AWS account collection removed - using database-driven approach
-    aws_account_rows: list[dict[str, Any]] = []
-
-    # Combine account data
-    filtered_account_rows = [row for row in account_rows if row["provider"] not in ["aws", "gcp"]]
-
-    all_account_rows = filtered_account_rows + aws_account_rows + gcp_account_rows
+    # Use only database-driven account data (no live API calls)
+    # GCP and other provider data should be collected via normal data collection pipeline
+    # Only return account data that already exists in database
+    all_account_rows = account_rows
     logger.info(f"Combined account data: {len(all_account_rows)} total accounts")
 
     return all_account_rows
