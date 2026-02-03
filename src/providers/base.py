@@ -174,9 +174,9 @@ class CostSummary(BaseModel):
         start = self.start_date.date() if isinstance(self.start_date, datetime) else self.start_date
         end = self.end_date.date() if isinstance(self.end_date, datetime) else self.end_date
 
-        # Validate date range
-        if start >= end:
-            raise ValueError(f"Start date {start} must be before end date {end}")
+        # Validate date range (allow single-day queries where start == end)
+        if start > end:
+            raise ValueError(f"Start date {start} must be before or equal to end date {end}")
 
         # Check for reasonable time ranges (not more than 10 years)
         if (end - start).days > 3650:
@@ -457,9 +457,9 @@ class CloudCostProvider(ABC):
 
             end_date = datetime.combine(end_date.date() + timedelta(days=1), datetime.min.time())
 
-        # Validate range
-        if start_date >= end_date:
-            raise ValueError("Start date must be before end date")
+        # Validate range (allow single-day queries where start == end)
+        if start_date > end_date:
+            raise ValueError("Start date must be before or equal to end date")
 
         # Check if dates are too far in the future
         now = datetime.now()

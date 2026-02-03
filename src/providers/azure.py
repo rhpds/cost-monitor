@@ -12,7 +12,6 @@ VALIDATION STATUS (January 2026):
 
 import json
 import logging
-import os
 import re
 from datetime import date, datetime
 from typing import Any, Optional
@@ -42,6 +41,7 @@ class AzureCostProvider(CloudCostProvider):
     """Azure Cost Management provider using billing exports."""
 
     blob_service_client: Optional["BlobServiceClient"]
+    db_pool: Any  # Database connection pool for PostgreSQL metadata storage
 
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
@@ -71,54 +71,11 @@ class AzureCostProvider(CloudCostProvider):
         # Initialize blob service client
         self.blob_service_client = None
 
-        # Initialize persistent cache for cost data
-        self._init_cache()
+        # Azure provider initialization complete - using PostgreSQL for all metadata storage
+        logger.info("🗂️  Azure provider using PostgreSQL for all metadata storage")
 
     def _get_provider_name(self) -> str:
         return "azure"
-
-    def _init_cache(self):
-        """Initialize persistent cache for cost data."""
-        self.cache_dir = os.path.expanduser("~/.cache/cost-monitor/azure")
-        self.csv_cache_dir = os.path.join(self.cache_dir, "csv_files")
-        os.makedirs(self.cache_dir, exist_ok=True)
-        os.makedirs(self.csv_cache_dir, exist_ok=True)
-        # Cache files for 30 days, older files will be cleaned up
-        self.cache_max_age_days = 30
-        logger.debug(f"Azure cache initialized at: {self.cache_dir}")
-
-    def _get_csv_cache_path(self, blob_name: str) -> str:
-        """Get cache file path for a CSV blob."""
-        # Create a safe filename from the blob path
-        safe_filename = blob_name.replace("/", "_").replace("\\", "_")
-        return os.path.join(self.csv_cache_dir, f"{safe_filename}.csv")
-
-    def _is_csv_cached(self, blob_name: str) -> bool:
-        """Check if CSV file is already cached."""
-        cache_path = self._get_csv_cache_path(blob_name)
-        return os.path.exists(cache_path)
-
-    def _load_cached_csv(self, blob_name: str) -> str | None:
-        """Load CSV content from cache."""
-        try:
-            cache_path = self._get_csv_cache_path(blob_name)
-            if os.path.exists(cache_path):
-                with open(cache_path, encoding="utf-8") as f:
-                    return f.read()
-            return None
-        except Exception as e:
-            logger.warning(f"Failed to load cached CSV: {e}")
-            return None
-
-    def _save_csv_to_cache(self, blob_name: str, csv_content: str) -> None:
-        """Save CSV content to cache."""
-        try:
-            cache_path = self._get_csv_cache_path(blob_name)
-            with open(cache_path, "w", encoding="utf-8") as f:
-                f.write(csv_content)
-            logger.debug(f"Cached CSV file: {cache_path}")
-        except Exception as e:
-            logger.warning(f"Failed to cache CSV: {e}")
 
     async def ensure_authenticated(self):
         """Ensure we have valid authentication to Azure."""
@@ -494,65 +451,58 @@ class AzureCostProvider(CloudCostProvider):
             )
             return None
 
-    def _download_and_parse_csv(
+    async def _download_and_parse_csv(
         self, blob_name: str, container_name: str | None = None, target_date: date | None = None
     ) -> list[CostDataPoint]:
-        """Download and parse CSV data from blob storage with caching and download deduplication."""
+        """Download and parse CSV data from blob storage (no caching)."""
         try:
-            # Get or validate cached CSV content
-            csv_content = self._get_or_validate_cached_csv(blob_name)
-
-            if not csv_content:
-                # Download CSV content with appropriate strategy
-                csv_content = self._download_csv_with_strategy(blob_name, container_name)
+            # Download CSV content directly (no caching)
+            csv_content = await self._download_csv_with_strategy(blob_name, container_name)
 
             if not csv_content:
                 logger.warning(f"No CSV content available for {blob_name}")
                 return []
 
             # Parse CSV data using service function
-            from .azure_csv_service import parse_csv_content_to_cost_points
+            from .azure_csv_service import parse_csv_content_to_cost_points, save_csv_metadata_to_db
 
             cost_points = parse_csv_content_to_cost_points(csv_content, target_date)
+            logger.info(
+                f"📊 Azure: Downloaded and parsed {len(cost_points)} cost points from {blob_name}"
+            )
+
+            # Update PostgreSQL metadata with parsing completion
+            if cost_points:
+                date_range_start = min(point.date for point in cost_points)
+                date_range_end = max(point.date for point in cost_points)
+                await save_csv_metadata_to_db(
+                    self.db_pool,
+                    blob_name,
+                    parse_status="completed",
+                    record_count=len(cost_points),
+                    date_range_start=date_range_start,
+                    date_range_end=date_range_end,
+                )
+
             return cost_points
 
         except Exception as e:
             logger.error(f"Error downloading/parsing CSV data: {e}")
             return []
 
-    def _get_or_validate_cached_csv(self, blob_name: str) -> str | None:
-        """Check for cached CSV content and validate age for current month."""
-        from .azure_csv_service import check_current_month_cache_age, validate_cache_and_setup_lock
-
-        # Validate cache settings and setup download lock
-        _, is_current_month, _ = validate_cache_and_setup_lock(blob_name)
-
-        # Check if CSV is already cached and validate age for current month
-        csv_content = self._load_cached_csv(blob_name)
-        if csv_content:
-            csv_content = check_current_month_cache_age(
-                blob_name, csv_content, is_current_month, self._get_csv_cache_path
-            )
-
-        if csv_content:
-            logger.info(f"Using cached CSV data: {blob_name}")
-            return csv_content
-
-        return None
-
-    def _download_csv_with_strategy(
+    async def _download_csv_with_strategy(
         self, blob_name: str, container_name: str | None = None
     ) -> str | None:
         """Download CSV using locking strategy with fallback."""
         try:
             # Try download with locking
-            return self._download_csv_with_locking(blob_name, container_name)
+            return await self._download_csv_with_locking(blob_name, container_name)
         except (ImportError, Exception) as e:
             logger.warning(f"Redis lock failed, proceeding without lock: {e}")
             # Fallback to simple download
-            return self._download_csv_fallback(blob_name, container_name)
+            return await self._download_csv_fallback(blob_name, container_name)
 
-    def _download_csv_with_locking(
+    async def _download_csv_with_locking(
         self, blob_name: str, container_name: str | None = None
     ) -> str | None:
         """Download CSV with Redis locking for deduplication."""
@@ -570,26 +520,26 @@ class AzureCostProvider(CloudCostProvider):
 
         if not lock_acquired:
             # Another process is downloading, wait for completion
-            return wait_for_concurrent_download(blob_name, self._load_cached_csv)
+            return wait_for_concurrent_download(blob_name, None)
 
         try:
-            csv_content = self._perform_blob_download(blob_name, container_name, is_current_month)
+            csv_content = await self._perform_blob_download(
+                blob_name, container_name, is_current_month
+            )
 
-            # Cache the downloaded content
+            # Log downloaded content
             if csv_content:
-                self._save_csv_to_cache(blob_name, csv_content)
-                cache_msg = "1h TTL" if is_current_month else "for future use"
-                logger.info(f"Cached CSV data ({cache_msg}): {len(csv_content):,} characters")
+                logger.info(f"Downloaded CSV data: {len(csv_content):,} characters")
         finally:
             # Always release the lock
             release_download_lock(lock_acquired, redis_client, lock_key)
 
         return csv_content
 
-    def _perform_blob_download(
+    async def _perform_blob_download(
         self, blob_name: str, container_name: str | None, is_current_month: bool
     ) -> str | None:
-        """Perform the actual blob download with ETag support."""
+        """Perform the actual blob download with ETag support using PostgreSQL metadata."""
         from .azure_csv_service import (
             download_blob_with_etag_check,
             handle_etag_conditional_download,
@@ -598,7 +548,7 @@ class AzureCostProvider(CloudCostProvider):
         if is_current_month:
             logger.info(f"Current month detected - checking for updates: {blob_name}")
         else:
-            logger.info(f"No cache found - downloading data: {blob_name}")
+            logger.info(f"Historical data - downloading: {blob_name}")
 
         container = container_name or self.container_name
         if not self.blob_service_client:
@@ -606,33 +556,27 @@ class AzureCostProvider(CloudCostProvider):
 
         blob_client = self.blob_service_client.get_blob_client(container=container, blob=blob_name)
 
-        # Handle ETag conditional download
-        cached_etag, etag_cache_path = handle_etag_conditional_download(
-            blob_client, blob_name, is_current_month, self._get_csv_cache_path
+        # Handle ETag conditional download using PostgreSQL
+        cached_etag, needs_download = await handle_etag_conditional_download(
+            self.db_pool, blob_name, is_current_month
         )
 
         logger.info(f"Downloading export data: {blob_name}")
 
         try:
-            return download_blob_with_etag_check(
+            return await download_blob_with_etag_check(
+                self.db_pool,
                 blob_client,
                 cached_etag,
                 is_current_month,
                 blob_name,
-                etag_cache_path,
-                self._load_cached_csv,
             )
         except Exception as download_error:
             logger.error(f"Download failed: {download_error}")
-            # Try to use cached version as fallback
-            csv_content = self._load_cached_csv(blob_name)
-            if csv_content:
-                logger.info(f"Using cached data as fallback after download error: {blob_name}")
-                return csv_content
-            else:
-                raise download_error
+            # No fallback available without cache
+            raise download_error
 
-    def _download_csv_fallback(
+    async def _download_csv_fallback(
         self, blob_name: str, container_name: str | None = None
     ) -> str | None:
         """Simple CSV download without locking as fallback."""
@@ -645,8 +589,7 @@ class AzureCostProvider(CloudCostProvider):
 
         blob_data = blob_client.download_blob()
         csv_content: str = blob_data.readall().decode("utf-8")
-        self._save_csv_to_cache(blob_name, csv_content)
-        logger.info(f"Cached CSV data: {len(csv_content):,} characters")
+        logger.info(f"Downloaded CSV data: {len(csv_content):,} characters")
 
         return csv_content
 
@@ -697,7 +640,7 @@ class AzureCostProvider(CloudCostProvider):
                     logger.info(
                         f"Processing: {csv_file_name.split('/')[-1]} ({file_size_mb:.1f}MB, {expected_rows:,} rows expected)"
                     )
-                    csv_points = self._download_and_parse_csv(csv_file_name, container)
+                    csv_points = await self._download_and_parse_csv(csv_file_name, container)
                     month_cost_points.extend(csv_points)
                     csv_files_processed += 1
                     logger.info(

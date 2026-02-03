@@ -147,10 +147,10 @@ class NormalizedCostData(BaseModel):
     @model_validator(mode="after")
     def validate_normalized_cost_data(self):
         """Validate data consistency and business rules."""
-        # Validate date range
-        if self.start_date >= self.end_date:
+        # Validate date range (allow single-day queries where start == end)
+        if self.start_date > self.end_date:
             raise ValueError(
-                f"Start date {self.start_date} must be before end date {self.end_date}"
+                f"Start date {self.start_date} must be before or equal to end date {self.end_date}"
             )
 
         # Check for reasonable date ranges
@@ -380,10 +380,10 @@ class MultiCloudCostSummary(BaseModel):
         return validated
 
     def _validate_date_range(self) -> None:
-        """Validate that start date is before end date."""
-        if self.start_date >= self.end_date:
+        """Validate that start date is before or equal to end date (allows single-day queries)."""
+        if self.start_date > self.end_date:
             raise ValueError(
-                f"Start date {self.start_date} must be before end date {self.end_date}"
+                f"Start date {self.start_date} must be before or equal to end date {self.end_date}"
             )
 
     def _validate_cost_breakdown_consistency(self) -> None:

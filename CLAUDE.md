@@ -151,6 +151,177 @@ python -m src.main test-auth
 python -m src.main export-prometheus
 ```
 
+## Local Development Environment
+
+### Prerequisites for Local Development
+
+- Access to an OpenShift cluster with the cost-monitor application deployed
+- OpenShift CLI (`oc`) installed and logged in
+- `config/.secrets.yaml` file with cloud provider credentials
+
+### Development Environment Setup
+
+The project includes `scripts/dev-local-to-ocp.sh` for local development that connects to OpenShift services:
+
+```bash
+# Start all development services (API, Dashboard, and tunnels)
+./scripts/dev-local-to-ocp.sh cost-monitor-dev start all
+
+# Start individual components
+./scripts/dev-local-to-ocp.sh cost-monitor-dev start api
+./scripts/dev-local-to-ocp.sh cost-monitor-dev start dashboard
+./scripts/dev-local-to-ocp.sh cost-monitor-dev start postgres-tunnel
+./scripts/dev-local-to-ocp.sh cost-monitor-dev start redis-tunnel
+
+# Check status of all services
+./scripts/dev-local-to-ocp.sh cost-monitor-dev status all
+
+# Stop all services
+./scripts/dev-local-to-ocp.sh cost-monitor-dev stop all
+```
+
+### Accessing PostgreSQL Database
+
+#### Method 1: Via Tunnel (Recommended)
+```bash
+# Start PostgreSQL tunnel
+./scripts/dev-local-to-ocp.sh cost-monitor-dev start postgres-tunnel
+
+# Connect via tunnel (if you have psql installed locally)
+export PGPASSWORD=$(oc get secret postgresql-credentials -n cost-monitor-dev -o jsonpath='{.data.password}' | base64 -d)
+psql -h localhost -p 5432 -U $(oc get secret postgresql-credentials -n cost-monitor-dev -o jsonpath='{.data.username}' | base64 -d) -d $(oc get secret postgresql-credentials -n cost-monitor-dev -o jsonpath='{.data.database}' | base64 -d)
+```
+
+#### Method 2: Direct Pod Access
+```bash
+# Get credentials
+export PGUSER=$(oc get secret postgresql-credentials -n cost-monitor-dev -o jsonpath='{.data.username}' | base64 -d)
+export PGDATABASE=$(oc get secret postgresql-credentials -n cost-monitor-dev -o jsonpath='{.data.database}' | base64 -d)
+
+# Execute SQL directly on the pod
+oc exec postgresql-0 -n cost-monitor-dev -- psql -U "$PGUSER" -d "$PGDATABASE" -c "
+SELECT
+    date,
+    COUNT(*) as records,
+    SUM(cost::numeric) as total_cost
+FROM cost_data_points
+WHERE provider_id = 1 AND date >= '2026-02-01'
+GROUP BY date ORDER BY date DESC LIMIT 5;
+"
+```
+
+### Common Database Queries
+
+```sql
+-- Check provider IDs (1=AWS, 2=Azure, 3=GCP)
+SELECT provider_id, COUNT(*) as records FROM cost_data_points GROUP BY provider_id;
+
+-- Check recent AWS cost data
+SELECT date, COUNT(*) as services, SUM(cost::numeric) as total_cost
+FROM cost_data_points
+WHERE provider_id = 1 AND date >= CURRENT_DATE - INTERVAL '7 days'
+GROUP BY date ORDER BY date;
+
+-- Find top cost services for specific date
+SELECT service_name, SUM(cost::numeric) as total_cost
+FROM cost_data_points
+WHERE provider_id = 1 AND date = '2026-02-01'
+GROUP BY service_name ORDER BY total_cost DESC LIMIT 10;
+
+-- Check data collection timestamps
+SELECT date, MIN(collected_at), MAX(collected_at), COUNT(*)
+FROM cost_data_points
+WHERE provider_id = 1 AND date = '2026-02-01'
+GROUP BY date;
+```
+
+### Caching Architecture
+
+The application uses a **simplified caching architecture** with PostgreSQL as the single source of truth:
+
+#### 1. PostgreSQL Database (Primary Storage)
+- **Location**: PostgreSQL database with `cost_data_points` table
+- **Function**: Single source of truth for all cost data with collection timestamps
+- **Persistence**: All collected data is permanently stored with `collected_at` metadata
+- **Optimization**: Indexed by date, provider, and collection timestamp for fast queries
+
+#### 2. Redis Cache (API Performance)
+- **Location**: Redis server (configured via `REDIS_URL`)
+- **Function**: Caches API responses for dashboard performance
+- **TTL**: 30 minutes for API responses
+- **Auto-Clear**: Automatically cleared on `force_refresh=true` API calls
+- **Clear manually**:
+  ```bash
+  oc exec redis-<pod-name> -n cost-monitor-dev -- redis-cli -a "<password>" flushall
+  ```
+
+#### 3. Async Background Refresh
+- **Strategy**: Serve data immediately, refresh in background if stale
+- **Trigger**: Automatic when data is older than 24 hours
+- **User Awareness**: API responses include freshness metadata:
+  ```json
+  {
+    "data_freshness": "stale_data_refreshing",
+    "background_refresh_triggered": true,
+    "refresh_status": "Background refresh started for aws, azure, gcp",
+    "freshness_metadata": {
+      "aws": {
+        "status": "stale",
+        "last_collected": "2026-01-30T00:21:54.786092+00:00",
+        "data_age_hours": 113.7,
+        "is_stale": true
+      }
+    }
+  }
+  ```
+
+#### Cache Troubleshooting
+```bash
+# Force refresh with automatic cache clearing
+curl "http://localhost:8000/api/v1/costs/summary?force_refresh=true&start_date=2026-02-01&end_date=2026-02-01&provider=aws"
+
+# Clear Redis cache manually
+oc exec redis-<pod-name> -n cost-monitor-dev -- redis-cli -a "$(oc get secret redis-credentials -n cost-monitor-dev -o jsonpath='{.data.password}' | base64 -d)" flushall
+
+# Check data freshness without cache
+curl "http://localhost:8000/api/v1/costs/summary?start_date=2026-02-01&end_date=2026-02-01" | jq '.data_freshness, .freshness_metadata'
+```
+
+### Data Collection Behavior
+
+**Important**: The cost monitor uses **hybrid data collection** with async background refresh:
+
+- **Immediate response**: API serves existing data from PostgreSQL immediately for fast response
+- **Background refresh**: Automatically triggered when data is older than 24 hours
+- **User awareness**: API responses include freshness status and collection timestamps
+- **Provider delays** (affects refresh timing):
+  - AWS: 2-day delay before data is considered complete
+  - Azure/GCP: 1-day delay
+- **Force refresh**: Use `force_refresh=true` to bypass cache and trigger immediate collection
+- **Data persistence**: All collected data permanently stored in PostgreSQL with collection metadata
+
+### Troubleshooting Common Issues
+
+#### Missing/Incomplete Cost Data
+1. Check if data exists in database: Use SQL queries above
+2. Verify collection timestamps: Look for gaps in `collected_at` field
+3. Force refresh: Use API endpoint with `force_refresh=true`
+4. Clear caches: Remove cached data and trigger re-collection
+5. Check provider authentication: `python -m src.main test-auth`
+
+#### Development Environment Issues
+```bash
+# Check all services status
+./scripts/dev-local-to-ocp.sh cost-monitor-dev status all
+
+# View service logs
+./scripts/dev-local-to-ocp.sh cost-monitor-dev logs api
+./scripts/dev-local-to-ocp.sh cost-monitor-dev logs dashboard
+
+# Restart problematic services
+./scripts/dev-local-to-ocp.sh cost-monitor-dev restart api
+```
+
 ## Code Quality Standards
 
 This project enforces strict code quality standards through automated pre-commit hooks. All code must pass these standards before being committed.

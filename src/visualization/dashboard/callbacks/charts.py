@@ -96,7 +96,7 @@ def _setup_cost_trend_chart_callback(dashboard):
 
         # Return loading chart if no data
         if not cost_data or "daily_costs" not in cost_data:
-            logger.warning("📊 CHART DEBUG: Returning loading chart - no data or no daily_costs")
+            logger.warning("Returning loading chart - no data or no daily_costs")
             return _create_loading_chart("Daily Costs by Provider")
 
         # Get daily costs data

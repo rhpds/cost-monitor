@@ -88,7 +88,7 @@ class CostMonitorDashboard:
         )  # Convert to ms
 
         # Initialize Dash app
-        logger.debug("🚀 DEBUG: Creating Dash app with styling...")
+        logger.debug("Creating Dash app with styling...")
         self.app = dash.Dash(
             __name__,
             external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],

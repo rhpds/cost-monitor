@@ -7,7 +7,8 @@ Provides REST API for cost data collection and retrieval
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import asyncpg
 import redis.asyncio as redis
@@ -176,11 +177,33 @@ async def check_existing_data(
     start_date: date, end_date: date, provider_name: str | None = None
 ) -> dict[str, list[date]]:
     """Check what data already exists in database for the given date range"""
+    # Also return collection timestamps for checking data freshness
+    existing_data_with_timestamps = await check_existing_data_with_timestamps(
+        start_date, end_date, provider_name
+    )
+
+    # Convert to old format for backward compatibility
+    existing_data: dict[str, list[date]] = {}
+    for provider, date_info in existing_data_with_timestamps.items():
+        existing_data[provider] = [info["date"] for info in date_info]
+
+    return existing_data
+
+
+async def check_existing_data_with_timestamps(
+    start_date: date, end_date: date, provider_name: str | None = None
+) -> dict[str, list[dict]]:
+    """Check what data already exists in database with collection timestamps"""
     if not db_pool:
         raise ValueError("Database pool not initialized")
     async with db_pool.acquire() as conn:
         query = """
-            SELECT p.name as provider, cdp.date
+            SELECT
+                p.name as provider,
+                cdp.date,
+                MIN(cdp.collected_at) as first_collected_at,
+                MAX(cdp.collected_at) as last_collected_at,
+                COUNT(DISTINCT cdp.service_name) as service_count
             FROM cost_data_points cdp
             JOIN providers p ON cdp.provider_id = p.id
             WHERE cdp.date BETWEEN $1 AND $2
@@ -191,17 +214,27 @@ async def check_existing_data(
             query += " AND p.name = $3"
             params.append(provider_name)
 
-        query += " ORDER BY p.name, cdp.date"
+        query += """
+            GROUP BY p.name, cdp.date
+            ORDER BY p.name, cdp.date
+        """
 
         rows = await conn.fetch(query, *params)
 
-        # Group existing dates by provider
-        existing_data: dict[str, list[date]] = {}
+        # Group existing data by provider with timestamps
+        existing_data: dict[str, list[dict]] = {}
         for row in rows:
             provider = row["provider"]
             if provider not in existing_data:
                 existing_data[provider] = []
-            existing_data[provider].append(row["date"])
+            existing_data[provider].append(
+                {
+                    "date": row["date"],
+                    "first_collected_at": row["first_collected_at"],
+                    "last_collected_at": row["last_collected_at"],
+                    "service_count": row["service_count"],
+                }
+            )
 
         return existing_data
 
@@ -262,7 +295,301 @@ async def get_missing_date_ranges(
             ranges.append((range_start, range_end))
             missing_ranges[provider] = ranges
 
+    # Note: Stale data refresh is now handled by async background refresh strategy
+
     return missing_ranges
+
+
+async def check_data_freshness_and_trigger_refresh(  # noqa: C901
+    start_date: date, end_date: date, providers: list[str] | None, force_refresh: bool = False
+) -> dict[str, Any]:
+    """Check data freshness and trigger background refresh if needed. Return freshness metadata."""
+    import asyncio
+    from datetime import datetime, timedelta
+
+    if force_refresh:
+        # Skip freshness check if user explicitly requested refresh
+        return {
+            "data_freshness": "force_refresh_requested",
+            "background_refresh_triggered": False,
+            "refresh_status": "Not needed - force refresh already processed",
+            "freshness_metadata": {},
+        }
+
+    try:
+        # Get existing data with timestamps
+        existing_data_with_timestamps = await check_existing_data_with_timestamps(
+            start_date, end_date, None
+        )
+
+        refresh_cutoff = datetime.now(UTC) - timedelta(hours=24)
+        today = date.today()
+
+        # Provider delays for determining what data can be refreshed
+        provider_delays = {
+            "aws": 2,  # AWS Cost Explorer has 1-2 day delay
+            "azure": 1,  # Azure typically has 1 day delay
+            "gcp": 1,  # GCP can have up to 1 day delay
+        }
+
+        freshness_info = {}
+        stale_providers = []
+        refresh_triggered = False
+
+        # Check if providers is valid
+        if providers is None:
+            providers = ["aws", "azure", "gcp"]  # Default providers
+
+        for provider in providers:
+            provider_data = existing_data_with_timestamps.get(provider, [])
+
+            if not provider_data:
+                freshness_info[provider] = {
+                    "status": "no_data",
+                    "last_collected": None,
+                    "data_age_hours": None,
+                    "is_stale": False,
+                }
+                continue
+
+            # Find most recent collection timestamp for this provider
+            # Filter out any None values for last_collected_at
+            valid_timestamps = [
+                data_info["last_collected_at"]
+                for data_info in provider_data
+                if data_info.get("last_collected_at") is not None
+            ]
+
+            if not valid_timestamps:
+                freshness_info[provider] = {
+                    "status": "no_timestamps",
+                    "last_collected": None,
+                    "data_age_hours": None,
+                    "is_stale": False,
+                }
+                continue
+
+            latest_collection = max(valid_timestamps)
+
+            data_age = datetime.now(UTC) - latest_collection
+            data_age_hours = data_age.total_seconds() / 3600
+
+            # Check if data is stale and within refresh window
+            provider_delay = provider_delays.get(provider, 0)
+            earliest_refresh_date = today - timedelta(days=provider_delay)
+
+            # Check if we have valid data and date information
+            has_recent_data = False
+            if earliest_refresh_date and provider_data:
+                try:
+                    has_recent_data = any(
+                        data_info.get("date") and data_info["date"] <= earliest_refresh_date
+                        for data_info in provider_data
+                    )
+                except (KeyError, TypeError) as e:
+                    logger.warning(f"Error checking recent data for {provider}: {e}")
+                    has_recent_data = False
+
+            is_stale = latest_collection < refresh_cutoff and has_recent_data
+
+            freshness_info[provider] = {
+                "status": "stale" if is_stale else "fresh",
+                "last_collected": latest_collection.isoformat(),
+                "data_age_hours": round(data_age_hours, 1),
+                "is_stale": is_stale,
+            }
+
+            if is_stale:
+                stale_providers.append(provider)
+
+        # Trigger background refresh for stale providers
+        if stale_providers:
+            logger.info(f"🔄 Triggering background refresh for stale providers: {stale_providers}")
+
+            # Start background task (don't wait for it)
+            asyncio.create_task(
+                _background_refresh_stale_data(start_date, end_date, stale_providers)
+            )
+            refresh_triggered = True
+
+            refresh_status = f"Background refresh started for {', '.join(stale_providers)}"
+        else:
+            refresh_status = "All data is fresh"
+
+        # Determine overall freshness status
+        if stale_providers:
+            overall_freshness = "stale_data_refreshing"
+        elif not freshness_info:
+            overall_freshness = "no_data"
+        else:
+            overall_freshness = "fresh"
+
+        return {
+            "data_freshness": overall_freshness,
+            "background_refresh_triggered": refresh_triggered,
+            "refresh_status": refresh_status,
+            "freshness_metadata": freshness_info,
+        }
+
+    except Exception as e:
+        logger.error(f"Error checking data freshness: {e}")
+        return {
+            "data_freshness": "error_checking_freshness",
+            "background_refresh_triggered": False,
+            "refresh_status": f"Error: {e}",
+            "freshness_metadata": {},
+        }
+
+
+async def _background_refresh_stale_data(
+    start_date: date, end_date: date, stale_providers: list[str]
+) -> None:
+    """Background task to refresh stale data without blocking the API response."""
+    try:
+        logger.info(f"🔄 Starting background refresh for {stale_providers}")
+
+        # Re-enable the stale data refresh logic for background use
+        existing_data = await check_existing_data(start_date, end_date)
+        missing_ranges = await get_missing_date_ranges(
+            start_date, end_date, existing_data, stale_providers
+        )
+
+        # Add stale data to missing ranges
+        await _add_stale_data_for_refresh_background(
+            missing_ranges, start_date, end_date, stale_providers
+        )
+
+        if missing_ranges:
+            # Collect fresh data for stale providers
+            await collect_missing_data(start_date, end_date, stale_providers)
+            logger.info(f"✅ Background refresh completed for {stale_providers}")
+
+            # Invalidate cache entries for refreshed data to ensure fresh data is served
+            await _invalidate_cache_for_date_range(start_date, end_date, stale_providers)
+        else:
+            logger.info(f"🔄 No stale data found during background refresh for {stale_providers}")
+
+    except Exception as e:
+        logger.error(f"❌ Background refresh failed for {stale_providers}: {e}")
+
+
+async def _invalidate_cache_for_date_range(
+    start_date: date, end_date: date, providers: list[str]
+) -> None:
+    """Invalidate Redis cache entries for the specified date range and providers."""
+    from datetime import timedelta
+
+    try:
+        # Get the Redis client from the global scope
+        if not redis_client:
+            logger.warning("🔄 Redis client not available for cache invalidation")
+            return
+
+        # Generate cache patterns to clear
+        current_date = start_date
+        cache_keys_deleted = 0
+
+        while current_date <= end_date:
+            # Clear cache for different provider combinations that might be cached
+            provider_combinations: list[list[str]] = [
+                [],  # All providers
+                ["aws"],
+                ["azure"],
+                ["gcp"],
+                ["aws", "azure"],
+                ["aws", "gcp"],
+                ["azure", "gcp"],
+                ["aws", "azure", "gcp"],
+            ]
+
+            for provider_combo in provider_combinations:
+                # Only clear if the combo includes any of our updated providers
+                if not provider_combo or any(p in provider_combo for p in providers):
+                    provider_str = ",".join(sorted(provider_combo))
+                    cache_key = f"cost_summary:{current_date}:{current_date}:{provider_str}"
+
+                    try:
+                        result = await redis_client.delete(cache_key)
+                        if result > 0:
+                            cache_keys_deleted += 1
+                            logger.info(f"🗑️  Cleared cache key: {cache_key}")
+                    except Exception as e:
+                        logger.warning(f"🔄 Error clearing cache key {cache_key}: {e}")
+
+            current_date += timedelta(days=1)
+
+        if cache_keys_deleted > 0:
+            logger.info(
+                f"✅ Cache invalidation completed: {cache_keys_deleted} entries cleared for {providers}"
+            )
+        else:
+            logger.info(f"🔄 No cache entries found to clear for {providers}")
+
+    except Exception as e:
+        logger.error(f"❌ Error during cache invalidation: {e}")
+
+
+async def _add_stale_data_for_refresh_background(
+    missing_ranges: dict[str, list[tuple]], start_date: date, end_date: date, providers: list[str]
+) -> None:
+    """Add stale data for background refresh (copy of the disabled function)."""
+    from datetime import datetime, timedelta
+
+    refresh_cutoff = datetime.now(UTC) - timedelta(hours=24)
+    today = date.today()
+
+    provider_delays = {
+        "aws": 2,
+        "azure": 1,
+        "gcp": 1,
+    }
+
+    existing_data_with_timestamps = await check_existing_data_with_timestamps(
+        start_date, end_date, None
+    )
+
+    for provider in providers:
+        provider_data = existing_data_with_timestamps.get(provider, [])
+        if not provider_data:
+            continue
+
+        provider_delay = provider_delays.get(provider, 0)
+        earliest_refresh_date = today - timedelta(days=provider_delay)
+
+        stale_dates = []
+        for data_info in provider_data:
+            data_date = data_info["date"]
+            last_collected = data_info["last_collected_at"]
+
+            if (
+                last_collected < refresh_cutoff
+                and data_date <= earliest_refresh_date
+                and start_date <= data_date <= end_date
+            ):
+                stale_dates.append(data_date)
+
+        if stale_dates:
+            stale_dates.sort()
+            ranges = []
+            range_start = stale_dates[0]
+            range_end = stale_dates[0]
+
+            for i in range(1, len(stale_dates)):
+                if stale_dates[i] == range_end + timedelta(days=1):
+                    range_end = stale_dates[i]
+                else:
+                    ranges.append((range_start, range_end))
+                    range_start = stale_dates[i]
+                    range_end = stale_dates[i]
+
+            ranges.append((range_start, range_end))
+
+            if provider in missing_ranges:
+                missing_ranges[provider].extend(ranges)
+            else:
+                missing_ranges[provider] = ranges
+
+            logger.info(f"🔄 Background: Added {len(ranges)} stale ranges for {provider}: {ranges}")
 
 
 async def collect_provider_data(
@@ -636,23 +963,52 @@ async def get_cost_summary(
         # Step 3: Query all required data from database
         db_results = await query_cost_data(start_date, end_date, providers, db_pool)
 
+        # Step 3.5: Check data freshness and trigger background refresh if needed (async)
+        freshness_info = await check_data_freshness_and_trigger_refresh(
+            start_date, end_date, providers, force_refresh
+        )
+
         # Step 4: Process account data with background tasks
         all_account_rows = await process_account_data(
             db_results["account_rows"], start_date, end_date, db_pool, auth_manager
         )
 
-        # Step 5: Build final response
+        # Step 5: Build final response with freshness info
         result_dict = build_response(
             db_results, all_account_rows, start_date, end_date, data_collection_complete
         )
 
+        # Add freshness metadata to response
+        result_dict.update(freshness_info)
+
         # Convert to CostSummary model and cache the result
         result = CostSummary(**result_dict)
-        # Cache for 30 minutes
+
+        # Smart TTL based on data recency
         import json
 
         if redis_client:
-            await redis_client.setex(cache_key, 1800, json.dumps(result_dict, default=str))
+            # Calculate smart TTL based on how recent the data is
+            days_ago = (date.today() - end_date).days
+
+            if days_ago <= 7:
+                # Recent data (last 7 days): cache for 5 minutes
+                ttl = 300
+                logger.info(f"🔄 Caching recent data ({days_ago} days old) with short TTL: {ttl}s")
+            elif days_ago <= 30:
+                # Medium-age data (7-30 days): cache for 15 minutes
+                ttl = 900
+                logger.info(
+                    f"🔄 Caching medium-age data ({days_ago} days old) with medium TTL: {ttl}s"
+                )
+            else:
+                # Historical data (>30 days): cache for 60 minutes
+                ttl = 3600
+                logger.info(
+                    f"🔄 Caching historical data ({days_ago} days old) with long TTL: {ttl}s"
+                )
+
+            await redis_client.setex(cache_key, ttl, json.dumps(result_dict, default=str))
         return result
 
     except Exception as e:

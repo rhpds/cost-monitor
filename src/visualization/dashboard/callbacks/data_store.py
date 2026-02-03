@@ -120,8 +120,6 @@ def _determine_date_range(ctx, dashboard, start_date_picker, end_date_picker):
     today = date.today()
     triggered_prop = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else None
 
-    logger.info(f"🔘 BUTTON DEBUG: Triggered by {triggered_prop}")
-
     if triggered_prop == "btn-this-month":
         start_date_obj = dashboard._get_month_start(today)
         # For "This Month", use today as end date (users expect current month data)

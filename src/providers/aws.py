@@ -5,10 +5,7 @@ Provides AWS-specific cost monitoring functionality using the AWS Cost Explorer 
 """
 
 import asyncio
-import hashlib
 import logging
-import os
-import pickle
 import random
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -67,14 +64,8 @@ class AWSCostProvider(CloudCostProvider):
             TimeGranularity.MONTHLY: "MONTHLY",
         }
 
-        # Initialize persistent cache (must be done before loading account names cache)
-        self._init_cache()
-
-        # Cache for account names to avoid repeated API calls
+        # Cache for account names to avoid repeated API calls (in-memory only)
         self.account_names_cache: dict[str, str] = {}
-
-        # Load persistent account name cache (after cache directory is initialized)
-        self._load_account_names_cache()
 
         # Cost Explorer configuration
         self.ce_config = config.get("cost_explorer", {})
@@ -163,236 +154,6 @@ class AWSCostProvider(CloudCostProvider):
 
         return start_date, end_date
 
-    def _init_cache(self):
-        """Initialize persistent cache for AWS cost data."""
-        # Get cache directory from config, with fallback to default
-        from ..config.settings import get_config
-
-        config = get_config()
-        base_cache_dir = config.cache.get("directory", "~/.cache/cost-monitor")
-        self.cache_dir = os.path.join(os.path.expanduser(base_cache_dir), "aws")
-        os.makedirs(self.cache_dir, exist_ok=True)
-        # Cache files for 24 hours (Cost Explorer data updates 3-4 times daily)
-        self.cache_max_age_hours: int = 24
-        logger.debug(f"AWS cache initialized at: {self.cache_dir}")
-
-    def _get_cache_key_for_date(
-        self, target_date: date, granularity: str, metrics: list[str], group_by: list[str]
-    ) -> str:
-        """Generate a unique cache key for a single date's cost data."""
-        key_data = f"{target_date.isoformat()}:{granularity}:{':'.join(sorted(metrics))}:{':'.join(sorted(group_by))}"
-        cache_key = hashlib.md5(key_data.encode()).hexdigest()
-        logger.debug(f"🔵 AWS: Daily cache key: {target_date} -> {cache_key}")
-        return cache_key
-
-    def _get_cache_file_path(self, cache_key: str) -> str:
-        """Get the full path for a cache file."""
-        return os.path.join(self.cache_dir, f"{cache_key}.pkl")
-
-    def _get_cache_data_date(self, cache_file_path: str) -> date | None:
-        """Extract the data date from cached cost data."""
-        try:
-            with open(cache_file_path, "rb") as f:
-                cached_data = pickle.load(f)
-
-            # If cached data contains cost data points, extract the first date
-            if cached_data and len(cached_data) > 0:
-                first_point = cached_data[0]
-                if hasattr(first_point, "date") and isinstance(first_point.date, date):
-                    return first_point.date
-                elif isinstance(first_point, dict) and "date" in first_point:
-                    if isinstance(first_point["date"], date):
-                        return first_point["date"]
-                    elif isinstance(first_point["date"], str):
-                        return datetime.strptime(first_point["date"], "%Y-%m-%d").date()
-            return None
-        except (FileNotFoundError, pickle.PickleError, ValueError, AttributeError) as e:
-            logger.debug(f"💾 AWS: Could not extract date from cache file {cache_file_path}: {e}")
-            return None
-
-    def _is_cache_valid(self, cache_file_path: str) -> bool:
-        """Check if cache file exists and is not too old."""
-        if not os.path.exists(cache_file_path):
-            return False
-
-        # Extract date from cache file to determine data age
-        data_date = self._get_cache_data_date(cache_file_path)
-
-        if data_date:
-            # Calculate how old the data is (not the cache file age)
-            data_age_hours = (datetime.now().date() - data_date).total_seconds() / 3600
-
-            # PERMANENT CACHING: Historical data (>48 hours old) never expires
-            if data_age_hours >= 48:
-                logger.debug(f"💾 AWS: Permanent cache for {data_date} ({data_age_hours:.1f}h old)")
-                return True
-
-            # Extended cache for day-old data (24-48 hours)
-            elif data_age_hours >= 24:
-                logger.debug(f"💾 AWS: Extended cache for {data_date} ({data_age_hours:.1f}h old)")
-                return True
-
-        # For recent data (<24 hours) or if we can't extract date, use original logic
-        file_age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(cache_file_path))
-        is_valid = file_age.total_seconds() < (self.cache_max_age_hours * 3600)
-        logger.debug(
-            f"💾 AWS: Recent data cache valid: {is_valid} (age: {file_age.total_seconds()/3600:.1f}h)"
-        )
-        return is_valid
-
-    def _save_daily_cache(
-        self,
-        target_date: date,
-        granularity: str,
-        metrics: list[str],
-        group_by: list[str],
-        data: list[CostDataPoint],
-    ) -> None:
-        """Save daily cost data to cache."""
-        try:
-            # Ensure cache directory exists before saving
-            os.makedirs(self.cache_dir, exist_ok=True)
-
-            cache_key = self._get_cache_key_for_date(target_date, granularity, metrics, group_by)
-            cache_file_path = self._get_cache_file_path(cache_key)
-            logger.debug(f"🔵 AWS: Saving daily cache for {target_date}: {len(data)} data points")
-
-            # Convert to serializable format
-            serializable_data = [
-                {
-                    "date": point.date.isoformat(),
-                    "amount": point.amount,
-                    "currency": point.currency,
-                    "service_name": point.service_name,
-                    "account_id": point.account_id,
-                    "resource_id": point.resource_id,
-                    "region": point.region,
-                    "tags": point.tags or {},
-                }
-                for point in data
-            ]
-            with open(cache_file_path, "wb") as f:
-                pickle.dump(serializable_data, f)
-            logger.debug(
-                f"✅ AWS: Saved {len(data)} cost data points for {target_date}: {cache_key}"
-            )
-        except Exception as e:
-            logger.error(f"❌ AWS: Failed to save daily cache for {target_date}: {e}")
-
-    def _load_daily_cache(
-        self, target_date: date, granularity: str, metrics: list[str], group_by: list[str]
-    ) -> list[CostDataPoint] | None:
-        """Load daily cost data from cache."""
-        try:
-            cache_key = self._get_cache_key_for_date(target_date, granularity, metrics, group_by)
-            cache_file_path = self._get_cache_file_path(cache_key)
-            if self._is_cache_valid(cache_file_path):
-                with open(cache_file_path, "rb") as f:
-                    serializable_data = pickle.load(f)
-
-                # Convert back to CostDataPoint objects
-                data_points = []
-                for item in serializable_data:
-                    data_points.append(
-                        CostDataPoint(
-                            date=datetime.fromisoformat(item["date"]).date(),
-                            amount=item["amount"],
-                            currency=item["currency"],
-                            service_name=item.get("service_name"),
-                            account_id=item.get("account_id"),
-                            resource_id=item.get("resource_id"),
-                            region=item.get("region"),
-                            tags=item.get("tags", {}),
-                        )
-                    )
-
-                logger.debug(
-                    f"📖 AWS: Loaded {len(data_points)} cached data points for {target_date}"
-                )
-                return data_points
-        except Exception as e:
-            logger.debug(f"❌ AWS: Failed to load daily cache for {target_date}: {e}")
-        return None
-
-    def _cleanup_old_cache_files(self):
-        """Clean up cache files older than max age, but preserve historical data."""
-        try:
-            now = datetime.now()
-            for filename in os.listdir(self.cache_dir):
-                if filename.endswith(".pkl") and filename != "account_names_cache.pkl":
-                    file_path = os.path.join(self.cache_dir, filename)
-
-                    # Check if this is historical data that should be preserved
-                    data_date = self._get_cache_data_date(file_path)
-                    if data_date:
-                        data_age_hours = (datetime.now().date() - data_date).total_seconds() / 3600
-
-                        # Never delete historical data (>48 hours old)
-                        if data_age_hours >= 48:
-                            logger.debug(
-                                f"💾 AWS: Preserving permanent cache for {data_date} ({filename})"
-                            )
-                            continue
-
-                    # For recent data or files we can't parse, use original cleanup logic
-                    file_age = now - datetime.fromtimestamp(os.path.getmtime(file_path))
-                    if file_age.total_seconds() > (self.cache_max_age_hours * 3600):
-                        os.remove(file_path)
-                        logger.debug(f"Removed old AWS cache file: {filename}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup old AWS cache files: {e}")
-
-    def _get_account_names_cache_path(self) -> str:
-        """Get the path for the persistent account names cache file."""
-        return os.path.join(self.cache_dir, "account_names_cache.pkl")
-
-    def _load_account_names_cache(self) -> None:
-        """Load account names from persistent cache file."""
-        cache_file_path = self._get_account_names_cache_path()
-        try:
-            if os.path.exists(cache_file_path):
-                # Check if cache file is not too old (30 days max for account names)
-                file_age = datetime.now() - datetime.fromtimestamp(
-                    os.path.getmtime(cache_file_path)
-                )
-                if file_age.days < 30:
-                    with open(cache_file_path, "rb") as f:
-                        cached_names = pickle.load(f)
-                        self.account_names_cache.update(cached_names)
-                        logger.info(
-                            f"🔵 AWS: Loaded {len(cached_names)} account names from persistent cache"
-                        )
-                else:
-                    logger.info(
-                        f"🔵 AWS: Account names cache file is {file_age.days} days old, skipping"
-                    )
-                    # Remove old cache file
-                    os.remove(cache_file_path)
-        except Exception as e:
-            logger.warning(f"🔵 AWS: Failed to load account names cache: {e}")
-
-    def _save_account_names_cache(self) -> None:
-        """Save account names to persistent cache file."""
-        cache_file_path = self._get_account_names_cache_path()
-        try:
-            # Only save if we have actual resolved names (not just account IDs)
-            names_to_save = {
-                account_id: account_name
-                for account_id, account_name in self.account_names_cache.items()
-                if account_name != account_id  # Skip entries where resolution failed
-            }
-
-            if names_to_save:
-                with open(cache_file_path, "wb") as f:
-                    pickle.dump(names_to_save, f)
-                    logger.debug(
-                        f"🔵 AWS: Saved {len(names_to_save)} account names to persistent cache"
-                    )
-            else:
-                logger.debug("🔵 AWS: No resolved account names to save to cache")
-        except Exception as e:
-            logger.warning(f"🔵 AWS: Failed to save account names cache: {e}")
-
     async def authenticate(self) -> bool:
         """Authenticate with AWS using various methods."""
         try:
@@ -404,8 +165,7 @@ class AWSCostProvider(CloudCostProvider):
                 self._authenticated = True
                 logger.info(f"AWS authentication successful using {auth_result.method}")
 
-                # Clean up old cache files on successful authentication
-                self._cleanup_old_cache_files()
+                # Cache cleanup removed - using PostgreSQL instead
 
                 return True
             else:
@@ -513,117 +273,6 @@ class AWSCostProvider(CloudCostProvider):
 
         return date_list
 
-    def _check_cache_for_dates(
-        self, date_list: list[date], granularity_str: str, group_dimensions: list[str] | None
-    ) -> tuple[list[CostDataPoint], list[date]]:
-        """Check cache for each date and return cached data and missing dates."""
-        all_cached_data = []
-        missing_dates = []
-
-        for target_date in date_list:
-            cached_data_for_date = self._load_daily_cache(
-                target_date, granularity_str, self.default_metrics, group_dimensions or []
-            )
-            if cached_data_for_date:
-                all_cached_data.extend(cached_data_for_date)
-                logger.debug(f"🔵 AWS: Cache HIT for {target_date}")
-            else:
-                missing_dates.append(target_date)
-                logger.debug(f"🔵 AWS: Cache MISS for {target_date}")
-
-        return all_cached_data, missing_dates
-
-    async def _handle_fully_cached_data(
-        self,
-        all_cached_data: list[CostDataPoint],
-        start_date: datetime | date,
-        end_date: datetime | date,
-        granularity: TimeGranularity,
-    ) -> CostSummary:
-        """Handle scenario where all data is available from cache."""
-        start_date_obj = start_date.date() if isinstance(start_date, datetime) else start_date
-        end_date_obj = end_date.date() if isinstance(end_date, datetime) else end_date
-        logger.info(f"🔵 AWS: Using fully cached data for {start_date_obj} to {end_date_obj}")
-
-        # Resolve account names for uncached accounts only
-        unique_account_ids = {
-            point.account_id
-            for point in all_cached_data
-            if point.account_id and point.account_id not in self.account_names_cache
-        }
-        if unique_account_ids:
-            logger.info(
-                f"🔵 AWS: Resolving {len(unique_account_ids)} uncached account names (cached data)"
-            )
-            await self._resolve_selective_account_names(unique_account_ids)
-
-        return CostSummary(
-            provider=self._get_provider_name(),
-            start_date=start_date,
-            end_date=end_date,
-            granularity=granularity,
-            total_cost=sum(point.amount for point in all_cached_data),
-            currency="USD",
-            data_points=all_cached_data,
-            last_updated=datetime.now(),
-        )
-
-    async def _fetch_and_cache_fresh_data(
-        self,
-        start_date: datetime | date,
-        end_date: datetime | date,
-        granularity: TimeGranularity,
-        group_dimensions: list[str] | None,
-        filter_by: dict[str, Any] | None,
-        missing_dates_count: int,
-    ) -> CostSummary:
-        """Fetch fresh data from API and cache it."""
-        logger.info(
-            f"🔵 AWS: Cache PARTIAL - missing {missing_dates_count} dates, fetching fresh data"
-        )
-
-        # Get fresh data from API
-        # Convert date objects to datetime if needed
-        start_datetime = (
-            datetime.combine(start_date, datetime.min.time())
-            if isinstance(start_date, date)
-            else start_date
-        )
-        end_datetime = (
-            datetime.combine(end_date, datetime.min.time())
-            if isinstance(end_date, date)
-            else end_date
-        )
-        cost_summary = await self._get_cost_data_with_chunking(
-            start_datetime, end_datetime, granularity, group_dimensions or [], filter_by
-        )
-
-        logger.info(
-            f"🔵 AWS: Parsed {len(cost_summary.data_points)} data points, total cost: ${cost_summary.total_cost}"
-        )
-
-        # Save daily cache - group data points by date
-        granularity_str = self.granularity_mapping.get(granularity, "DAILY")
-        daily_data: dict[date, list[CostDataPoint]] = {}
-        for point in cost_summary.data_points:
-            point_date = point.date
-            if point_date not in daily_data:
-                daily_data[point_date] = []
-            daily_data[point_date].append(point)
-
-        # Save each day's data to its own cache file
-        for day_date, day_data_points in daily_data.items():
-            self._save_daily_cache(
-                day_date,
-                granularity_str,
-                self.default_metrics,
-                group_dimensions or [],
-                day_data_points,
-            )
-
-        logger.info(f"🔵 AWS: Saved daily cache for {len(daily_data)} dates")
-        return cost_summary
-
     async def get_cost_data(
         self,
         start_date: datetime | date,
@@ -638,28 +287,35 @@ class AWSCostProvider(CloudCostProvider):
         # Validate and normalize dates
         start_date, end_date = self.validate_date_range(start_date, end_date)
 
-        # Prepare request parameters (for potential API call)
+        # Prepare request parameters
         self._prepare_cost_request_params(start_date, end_date, granularity, group_by, filter_by)
 
-        # Check cache first
-        granularity_str = self.granularity_mapping.get(granularity, "DAILY")
-        group_dimensions = group_by or self.default_group_by
-        date_list = self._generate_date_list(start_date, end_date)
-        all_cached_data, missing_dates = self._check_cache_for_dates(
-            date_list, granularity_str, group_dimensions
+        # Convert date objects to datetime if needed
+        start_datetime = (
+            datetime.combine(start_date, datetime.min.time())
+            if isinstance(start_date, date)
+            else start_date
+        )
+        end_datetime = (
+            datetime.combine(end_date, datetime.min.time())
+            if isinstance(end_date, date)
+            else end_date
         )
 
-        # Return cached data if complete
-        if not missing_dates:
-            return await self._handle_fully_cached_data(
-                all_cached_data, start_date, end_date, granularity
+        # Get fresh data from API (no caching)
+        group_dimensions = group_by or self.default_group_by
+
+        try:
+            cost_summary = await self._get_cost_data_with_chunking(
+                start_datetime, end_datetime, granularity, group_dimensions, filter_by
             )
 
-        # Fetch fresh data if cache incomplete
-        try:
-            return await self._fetch_and_cache_fresh_data(
-                start_date, end_date, granularity, group_dimensions, filter_by, len(missing_dates)
+            logger.info(
+                f"🔵 AWS: Retrieved {len(cost_summary.data_points)} data points, total cost: ${cost_summary.total_cost}"
             )
+
+            return cost_summary
+
         except ClientError as e:
             self._handle_client_error(e)
             raise  # Re-raise after handling
@@ -1206,7 +862,6 @@ class AWSCostProvider(CloudCostProvider):
             f"🔵 AWS: Selective account name resolution completed for {len(account_ids)} accounts"
         )
         # Save updated cache to persistent storage
-        self._save_account_names_cache()
 
     async def resolve_account_names_for_ids(self, account_ids: list[str]) -> dict[str, str]:
         """Resolve account names for specific account IDs and return a mapping.
@@ -1229,7 +884,6 @@ class AWSCostProvider(CloudCostProvider):
             )
             await self._resolve_selective_account_names(uncached_ids)
             # Save updated cache to persistent storage
-            self._save_account_names_cache()
 
         # Return mapping for all requested IDs
         result = {}
@@ -1277,7 +931,6 @@ class AWSCostProvider(CloudCostProvider):
         # Cache the result (even if it's just the account ID)
         self.account_names_cache[account_id] = account_name
         # Save updated cache to persistent storage
-        self._save_account_names_cache()
         return account_name
 
     async def _resolve_account_name_from_organizations(self, account_id: str) -> str:

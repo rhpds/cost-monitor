@@ -1,8 +1,8 @@
 """
 Azure CSV processing service functions.
 
-Contains helper functions for Azure CSV download, caching, parsing,
-and data transformation to reduce complexity in the main Azure provider.
+Contains helper functions for Azure CSV download, PostgreSQL-based metadata storage,
+parsing, and data transformation to reduce complexity in the main Azure provider.
 """
 
 import csv
@@ -11,13 +11,115 @@ import io
 import logging
 import os
 import time
-from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
 from .base import CostDataPoint
 
 logger = logging.getLogger(__name__)
+
+
+# PostgreSQL-based ETag and CSV metadata management
+async def get_csv_metadata_from_db(db_pool, blob_name: str) -> dict | None:
+    """Get CSV file metadata from PostgreSQL."""
+    try:
+        async with db_pool.acquire() as conn:
+            query = """
+            SELECT blob_name, etag, file_size_bytes, last_downloaded,
+                   last_parsed, parse_status, record_count,
+                   date_range_start, date_range_end
+            FROM azure_csv_metadata
+            WHERE blob_name = $1
+            """
+            row = await conn.fetchrow(query, blob_name)
+            if row:
+                return dict(row)
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching CSV metadata for {blob_name}: {e}")
+        return None
+
+
+async def save_csv_metadata_to_db(
+    db_pool,
+    blob_name: str,
+    etag: str | None = None,
+    file_size_bytes: int | None = None,
+    parse_status: str = "pending",
+    record_count: int | None = None,
+    date_range_start: date | None = None,
+    date_range_end: date | None = None,
+) -> None:
+    """Save or update CSV file metadata in PostgreSQL."""
+    try:
+        async with db_pool.acquire() as conn:
+            # Use UPSERT (ON CONFLICT) to handle both insert and update
+            query = """
+            INSERT INTO azure_csv_metadata
+                (blob_name, etag, file_size_bytes, last_downloaded, last_parsed,
+                 parse_status, record_count, date_range_start, date_range_end, updated_at)
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP,
+                    CASE WHEN $4 = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                    $4, $5, $6, $7, CURRENT_TIMESTAMP)
+            ON CONFLICT (blob_name)
+            DO UPDATE SET
+                etag = COALESCE($2, azure_csv_metadata.etag),
+                file_size_bytes = COALESCE($3, azure_csv_metadata.file_size_bytes),
+                last_downloaded = CURRENT_TIMESTAMP,
+                last_parsed = CASE WHEN $4 = 'completed' THEN CURRENT_TIMESTAMP
+                                  ELSE azure_csv_metadata.last_parsed END,
+                parse_status = $4,
+                record_count = COALESCE($5, azure_csv_metadata.record_count),
+                date_range_start = COALESCE($6, azure_csv_metadata.date_range_start),
+                date_range_end = COALESCE($7, azure_csv_metadata.date_range_end),
+                updated_at = CURRENT_TIMESTAMP
+            """
+            await conn.execute(
+                query,
+                blob_name,
+                etag,
+                file_size_bytes,
+                parse_status,
+                record_count,
+                date_range_start,
+                date_range_end,
+            )
+    except Exception as e:
+        logger.error(f"Error saving CSV metadata for {blob_name}: {e}")
+
+
+async def check_csv_freshness(
+    db_pool, blob_name: str, is_current_month: bool
+) -> tuple[str | None, bool]:
+    """
+    Check if CSV needs downloading based on PostgreSQL metadata.
+    Returns: (cached_etag, needs_download)
+    """
+    try:
+        metadata = await get_csv_metadata_from_db(db_pool, blob_name)
+        if not metadata:
+            # No record exists, need to download
+            return None, True
+
+        cached_etag = metadata.get("etag")
+        last_downloaded = metadata.get("last_downloaded")
+
+        # For current month data, check if it's recent enough (within 1 hour)
+        if is_current_month and last_downloaded:
+            age_seconds = (datetime.now() - last_downloaded).total_seconds()
+            if age_seconds > 3600:  # 1 hour
+                logger.info(
+                    f"Current month cache expired ({age_seconds/3600:.1f}h old), will check for updates: {blob_name}"
+                )
+                return cached_etag, True  # Use ETag for conditional download
+
+        # For historical data or recent current month data, use cached ETag
+        logger.info(f"Using existing ETag for conditional download: {cached_etag}")
+        return cached_etag, False  # May not need download if ETag matches
+
+    except Exception as e:
+        logger.error(f"Error checking CSV freshness for {blob_name}: {e}")
+        return None, True
 
 
 def validate_cache_and_setup_lock(blob_name: str) -> tuple[str, bool, str]:
@@ -30,31 +132,6 @@ def validate_cache_and_setup_lock(blob_name: str) -> tuple[str, bool, str]:
     lock_key = f"azure_download_lock:{hashlib.md5(blob_name.encode()).hexdigest()}"
 
     return lock_key, is_current_month, current_month.strftime("%Y%m%d")
-
-
-def check_current_month_cache_age(
-    blob_name: str, csv_content: str, is_current_month: bool, get_cache_path_func
-) -> str | None:
-    """Check if current month cached data is recent enough (within 1 hour)."""
-    if not (csv_content and is_current_month):
-        return csv_content
-
-    cache_path = get_cache_path_func(blob_name)
-    try:
-        cache_age_seconds = time.time() - os.path.getmtime(cache_path)
-        if cache_age_seconds > 3600:  # 1 hour
-            logger.info(
-                f"Current month cache expired ({cache_age_seconds/3600:.1f}h old), will check for updates: {blob_name}"
-            )
-            return None  # Force refresh check
-        else:
-            logger.info(
-                f"Using recent current month cache ({cache_age_seconds/60:.1f}m old): {blob_name}"
-            )
-            return csv_content
-    except OSError as e:
-        logger.warning(f"Failed to check cache age: {e}")
-        return None  # Force refresh on error
 
 
 def acquire_download_lock(lock_key: str) -> tuple[bool, Any]:
@@ -81,88 +158,83 @@ def acquire_download_lock(lock_key: str) -> tuple[bool, Any]:
     return lock_acquired, redis_client
 
 
-def wait_for_concurrent_download(
-    blob_name: str, load_cached_func: Callable[[str], str | None]
-) -> str | None:
-    """Wait for concurrent download to complete and check for cached result."""
+def wait_for_concurrent_download(blob_name: str, _: Any = None) -> str | None:
+    """Wait for concurrent download to complete, then proceed with fresh download."""
     logger.info(f"Another process downloading {blob_name}, waiting...")
-    for _attempt in range(6):  # Wait up to 30 seconds
+    # Wait for concurrent download to complete (up to 30 seconds)
+    for _attempt in range(6):
         time.sleep(5)
-        csv_content = load_cached_func(blob_name)
-        if csv_content:
-            logger.info(f"Using cached CSV data after wait: {blob_name}")
-            return csv_content
 
-    logger.warning(f"Cache still empty after 30s wait, proceeding with download: {blob_name}")
-    return None
+    logger.info(
+        f"Finished waiting for concurrent download, proceeding with fresh download: {blob_name}"
+    )
+    return None  # Always return None since we don't cache CSV content
 
 
-def handle_etag_conditional_download(
-    blob_client, blob_name: str, is_current_month: bool, get_cache_path_func
-) -> tuple[str | None, str]:
-    """Handle ETag-based conditional downloads for current month data."""
-    etag_cache_path = get_cache_path_func(blob_name) + ".etag"
-    cached_etag = None
+async def handle_etag_conditional_download(
+    db_pool, blob_name: str, is_current_month: bool
+) -> tuple[str | None, bool]:
+    """Handle ETag-based conditional downloads using PostgreSQL metadata."""
+    cached_etag, needs_download = await check_csv_freshness(db_pool, blob_name, is_current_month)
 
-    if is_current_month and os.path.exists(etag_cache_path):
-        try:
-            with open(etag_cache_path) as f:
-                cached_etag = f.read().strip()
-            logger.info(f"Found cached ETag for conditional download: {cached_etag}")
-        except Exception as e:
-            logger.warning(f"Failed to read cached ETag: {e}")
+    if cached_etag:
+        logger.info(f"Found cached ETag for conditional download: {cached_etag}")
+    else:
+        logger.info(f"No cached ETag found, will download fresh: {blob_name}")
 
-    return cached_etag, etag_cache_path
+    return cached_etag, needs_download
 
 
-def download_blob_with_etag_check(
+async def download_blob_with_etag_check(
+    db_pool,
     blob_client,
     cached_etag: str | None,
     is_current_month: bool,
     blob_name: str,
-    etag_cache_path: str,
-    load_cached_func: Callable[[str], str | None],
 ) -> str:
-    """Download blob with ETag checking for efficient updates."""
+    """Download blob with ETag checking for efficient updates using PostgreSQL metadata."""
     if cached_etag and is_current_month:
         # Get blob properties to check ETag
         blob_properties = blob_client.get_blob_properties()
         current_etag = blob_properties.etag
 
         if current_etag == cached_etag:
-            # File hasn't changed, use cached version
-            csv_content = load_cached_func(blob_name)
-            if csv_content is not None:
-                logger.info(f"File unchanged (ETag match), using cached data: {blob_name}")
-                return csv_content
-            else:
-                logger.warning(
-                    f"ETag match but no cached content found, downloading fresh: {blob_name}"
-                )
+            logger.info(f"File unchanged (ETag match), will download fresh anyway: {blob_name}")
+            # Note: We don't cache CSV content, so we always download but this avoids unnecessary checks
 
-        # File changed or no cached content, download new version
+        # Download new version (we always download, but ETag check prevents unnecessary metadata updates)
         blob_data = blob_client.download_blob()
         downloaded_content: str = blob_data.readall().decode("utf-8")
-        logger.info(f"Downloaded fresh data: {blob_name}")
+        logger.info(f"Downloaded data: {blob_name}")
 
-        # Save new ETag
-        with open(etag_cache_path, "w") as f:
-            f.write(current_etag)
+        # Save new ETag to PostgreSQL
+        await save_csv_metadata_to_db(
+            db_pool,
+            blob_name,
+            etag=current_etag,
+            file_size_bytes=len(downloaded_content.encode("utf-8")),
+        )
         return downloaded_content
     else:
         # No cached ETag or not current month, download normally
         blob_data = blob_client.download_blob()
         fresh_content: str = blob_data.readall().decode("utf-8")
 
-        # Save ETag for future conditional downloads (current month only)
+        # Save ETag to PostgreSQL for future conditional downloads (current month only)
         if is_current_month:
             try:
                 blob_properties = blob_client.get_blob_properties()
-                with open(etag_cache_path, "w") as f:
-                    f.write(blob_properties.etag)
-                logger.info(f"Saved ETag for future conditional downloads: {blob_properties.etag}")
+                await save_csv_metadata_to_db(
+                    db_pool,
+                    blob_name,
+                    etag=blob_properties.etag,
+                    file_size_bytes=len(fresh_content.encode("utf-8")),
+                )
+                logger.info(
+                    f"Saved ETag to PostgreSQL for future conditional downloads: {blob_properties.etag}"
+                )
             except Exception as e:
-                logger.warning(f"Failed to save ETag: {e}")
+                logger.warning(f"Failed to save ETag to PostgreSQL: {e}")
 
         return fresh_content
 

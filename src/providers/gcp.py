@@ -4,11 +4,8 @@ Google Cloud Platform (GCP) Cloud Billing provider implementation.
 Provides GCP-specific cost monitoring functionality using the Cloud Billing API.
 """
 
-import hashlib
 import logging
-import os
-import pickle
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any
 
 try:
@@ -70,269 +67,10 @@ class GCPCostProvider(CloudCostProvider):
         )
         self.bq_table = config.get("bigquery_billing_table", "gcp_billing_export_v1_")
 
-        # Initialize persistent cache
-        self._init_cache()
+        # Cache initialization removed - using PostgreSQL instead
 
     def _get_provider_name(self) -> str:
         return "gcp"
-
-    def _init_cache(self):
-        """Initialize persistent cache for GCP cost data."""
-        # Get cache directory from config, with fallback to default
-        from ..config.settings import get_config
-
-        config = get_config()
-        base_cache_dir = config.cache.get("directory", "~/.cache/cost-monitor")
-        self.cache_dir = os.path.join(os.path.expanduser(base_cache_dir), "gcp")
-        os.makedirs(self.cache_dir, exist_ok=True)
-        # Cache files for 24 hours (GCP billing updates hourly)
-        self.cache_max_age_hours: int = 24
-        logger.debug(f"GCP cache initialized at: {self.cache_dir}")
-
-    def _get_cache_key(
-        self, start_date: date, end_date: date, granularity: str, project_id: str
-    ) -> str:
-        """Generate a unique cache key for cost data request."""
-        key_data = f"{start_date.isoformat()}:{end_date.isoformat()}:{granularity}:{project_id}"
-        return hashlib.md5(key_data.encode()).hexdigest()
-
-    def _get_cache_file_path(self, cache_key: str) -> str:
-        """Get the full path for a cache file."""
-        return os.path.join(self.cache_dir, f"{cache_key}.pkl")
-
-    def _get_cache_data_date(self, cache_file_path: str) -> date | None:
-        """Extract the data date from cached cost data."""
-        try:
-            with open(cache_file_path, "rb") as f:
-                cached_data = pickle.load(f)
-
-            # If cached data contains cost data points, extract the first date
-            if cached_data and len(cached_data) > 0:
-                first_point = cached_data[0]
-                if hasattr(first_point, "date") and isinstance(first_point.date, date):
-                    return first_point.date
-                elif isinstance(first_point, dict) and "date" in first_point:
-                    if isinstance(first_point["date"], date):
-                        return first_point["date"]
-                    elif isinstance(first_point["date"], str):
-                        return datetime.strptime(first_point["date"], "%Y-%m-%d").date()
-            return None
-        except (FileNotFoundError, pickle.PickleError, ValueError, AttributeError) as e:
-            logger.debug(f"💾 GCP: Could not extract date from cache file {cache_file_path}: {e}")
-            return None
-
-    def _is_cache_valid(self, cache_file_path: str) -> bool:
-        """Check if cache file exists and is not too old."""
-        if not os.path.exists(cache_file_path):
-            return False
-
-        # Extract date from cache file to determine data age
-        data_date = self._get_cache_data_date(cache_file_path)
-
-        if data_date:
-            # Calculate how old the data is (not the cache file age)
-            assert isinstance(data_date, date), "data_date must be a date object"
-            data_age_hours = (datetime.now().date() - data_date).total_seconds() / 3600
-
-            # PERMANENT CACHING: Historical data (>48 hours old) never expires
-            if data_age_hours >= 48:
-                logger.debug(f"💾 GCP: Permanent cache for {data_date} ({data_age_hours:.1f}h old)")
-                return True
-
-            # Extended cache for day-old data (24-48 hours)
-            elif data_age_hours >= 24:
-                logger.debug(f"💾 GCP: Extended cache for {data_date} ({data_age_hours:.1f}h old)")
-                return True
-
-        # For recent data (<24 hours) or if we can't extract date, use original logic
-        file_age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(cache_file_path))
-        is_valid = file_age.total_seconds() < (self.cache_max_age_hours * 3600)
-        logger.debug(
-            f"💾 GCP: Recent data cache valid: {is_valid} (age: {file_age.total_seconds()/3600:.1f}h)"
-        )
-        return is_valid
-
-    def _save_to_cache(self, cache_key: str, data: list[CostDataPoint]) -> None:
-        """Save cost data to cache."""
-        try:
-            # Ensure cache directory exists before saving
-            os.makedirs(self.cache_dir, exist_ok=True)
-
-            cache_file_path = self._get_cache_file_path(cache_key)
-            logger.info(f"🟡 GCP: Attempting to save cache to: {cache_file_path}")
-            logger.info(f"🟡 GCP: Cache directory: {self.cache_dir}")
-            logger.info(f"🟡 GCP: Data points to save: {len(data)}")
-
-            # Convert to serializable format
-            serializable_data = [
-                {
-                    "date": point.date.isoformat(),
-                    "amount": point.amount,
-                    "currency": point.currency,
-                    "service_name": point.service_name,
-                    "account_id": point.account_id,
-                    "resource_id": point.resource_id,
-                    "region": point.region,
-                    "tags": point.tags or {},
-                }
-                for point in data
-            ]
-            with open(cache_file_path, "wb") as f:
-                pickle.dump(serializable_data, f)
-            logger.info(
-                f"✅ GCP: Successfully saved {len(data)} cost data points to cache: {cache_key}"
-            )
-            logger.info(f"✅ GCP: Cache file size: {os.path.getsize(cache_file_path)} bytes")
-        except Exception as e:
-            logger.error(f"❌ GCP: Failed to save data to cache: {e}")
-            import traceback
-
-            logger.error(f"❌ GCP: Traceback: {traceback.format_exc()}")
-
-    def _load_from_cache(self, cache_key: str) -> list[CostDataPoint] | None:
-        """Load cost data from cache."""
-        try:
-            cache_file_path = self._get_cache_file_path(cache_key)
-            if self._is_cache_valid(cache_file_path):
-                with open(cache_file_path, "rb") as f:
-                    serializable_data = pickle.load(f)
-
-                # Convert back to CostDataPoint objects
-                data_points = []
-                for item in serializable_data:
-                    data_points.append(
-                        CostDataPoint(
-                            date=datetime.fromisoformat(item["date"]).date(),
-                            amount=item["amount"],
-                            currency=item["currency"],
-                            service_name=item.get("service_name"),
-                            account_id=item.get("account_id"),
-                            resource_id=item.get("resource_id"),
-                            region=item.get("region"),
-                            tags=item.get("tags", {}),
-                        )
-                    )
-
-                logger.info(
-                    f"Loaded {len(data_points)} GCP cost data points from cache: {cache_key}"
-                )
-                return data_points
-        except Exception as e:
-            logger.warning(f"Failed to load GCP data from cache: {e}")
-        return None
-
-    def _cleanup_old_cache_files(self):
-        """Clean up cache files older than max age, but preserve historical data."""
-        try:
-            now = datetime.now()
-            for filename in os.listdir(self.cache_dir):
-                if filename.endswith(".pkl"):
-                    file_path = os.path.join(self.cache_dir, filename)
-
-                    # Check if this is historical data that should be preserved
-                    data_date = self._get_cache_data_date(file_path)
-                    if data_date:
-                        data_age_hours = (datetime.now().date() - data_date).total_seconds() / 3600
-
-                        # Never delete historical data (>48 hours old)
-                        if data_age_hours >= 48:
-                            logger.debug(
-                                f"💾 GCP: Preserving permanent cache for {data_date} ({filename})"
-                            )
-                            continue
-
-                    # For recent data or files we can't parse, use original cleanup logic
-                    file_age = now - datetime.fromtimestamp(os.path.getmtime(file_path))
-                    if file_age.total_seconds() > (self.cache_max_age_hours * 3600):
-                        os.remove(file_path)
-                        logger.debug(f"Removed old GCP cache file: {filename}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup old GCP cache files: {e}")
-
-    def _get_cache_key_for_date(
-        self, target_date: date, granularity: str, group_by: list[str], project_id: str
-    ) -> str:
-        """Generate a unique cache key for a single date's cost data."""
-        key_data = (
-            f"{target_date.isoformat()}:{granularity}:{':'.join(sorted(group_by))}:{project_id}"
-        )
-        cache_key = hashlib.md5(key_data.encode()).hexdigest()
-        logger.debug(f"🟢 GCP: Daily cache key: {target_date} -> {cache_key}")
-        return cache_key
-
-    def _save_daily_cache(
-        self,
-        target_date: date,
-        granularity: str,
-        group_by: list[str],
-        project_id: str,
-        data: list[CostDataPoint],
-    ) -> None:
-        """Save daily cost data to cache."""
-        try:
-            # Ensure cache directory exists before saving
-            os.makedirs(self.cache_dir, exist_ok=True)
-
-            cache_key = self._get_cache_key_for_date(target_date, granularity, group_by, project_id)
-            cache_file_path = self._get_cache_file_path(cache_key)
-            logger.debug(f"🟢 GCP: Saving daily cache for {target_date}: {len(data)} data points")
-
-            # Convert to serializable format
-            serializable_data = [
-                {
-                    "date": point.date.isoformat(),
-                    "amount": point.amount,
-                    "currency": point.currency,
-                    "service_name": point.service_name,
-                    "account_id": point.account_id,
-                    "resource_id": point.resource_id,
-                    "region": point.region,
-                    "tags": point.tags or {},
-                }
-                for point in data
-            ]
-            with open(cache_file_path, "wb") as f:
-                pickle.dump(serializable_data, f)
-            logger.debug(
-                f"✅ GCP: Saved {len(data)} cost data points for {target_date}: {cache_key}"
-            )
-        except Exception as e:
-            logger.error(f"❌ GCP: Failed to save daily cache for {target_date}: {e}")
-
-    def _load_daily_cache(
-        self, target_date: date, granularity: str, group_by: list[str], project_id: str
-    ) -> list[CostDataPoint] | None:
-        """Load daily cost data from cache."""
-        try:
-            cache_key = self._get_cache_key_for_date(target_date, granularity, group_by, project_id)
-            cache_file_path = self._get_cache_file_path(cache_key)
-            if self._is_cache_valid(cache_file_path):
-                with open(cache_file_path, "rb") as f:
-                    serializable_data = pickle.load(f)
-
-                # Convert back to CostDataPoint objects
-                data_points = []
-                for item in serializable_data:
-                    data_points.append(
-                        CostDataPoint(
-                            date=datetime.fromisoformat(item["date"]).date(),
-                            amount=item["amount"],
-                            currency=item["currency"],
-                            service_name=item.get("service_name"),
-                            account_id=item.get("account_id"),
-                            resource_id=item.get("resource_id"),
-                            region=item.get("region"),
-                            tags=item.get("tags", {}),
-                        )
-                    )
-
-                logger.debug(
-                    f"📖 GCP: Loaded {len(data_points)} cached data points for {target_date}"
-                )
-                return data_points
-        except Exception as e:
-            logger.debug(f"❌ GCP: Failed to load daily cache for {target_date}: {e}")
-        return None
 
     async def authenticate(self) -> bool:
         """Authenticate with GCP using various methods."""
@@ -345,8 +83,8 @@ class GCPCostProvider(CloudCostProvider):
                 self._authenticated = True
                 logger.info(f"GCP authentication successful using {auth_result.method}")
 
-                # Clean up old cache files on successful authentication
-                self._cleanup_old_cache_files()
+                # GCP authentication successful
+                logger.info("GCP provider ready - using in-memory processing only")
 
                 return True
             else:
@@ -420,56 +158,7 @@ class GCPCostProvider(CloudCostProvider):
         # Validate and normalize dates
         start_date, end_date = self.validate_date_range(start_date, end_date)
 
-        # Prepare request parameters
-        granularity_str = "DAILY" if granularity == TimeGranularity.DAILY else "MONTHLY"
-        group_dimensions = group_by or []
-        project_id = self.project_id or "default"
-
-        # Generate list of dates in the range
-        date_list = []
-        current_date = start_date.date()
-        end_date_obj = end_date.date()
-
-        while current_date <= end_date_obj:
-            date_list.append(current_date)
-            current_date += timedelta(days=1)
-
-        # Try to load cached data for each day
-        all_cached_data = []
-        missing_dates = []
-
-        for target_date in date_list:
-            cached_data_for_date = self._load_daily_cache(
-                target_date, granularity_str, group_dimensions, project_id
-            )
-            if cached_data_for_date:
-                all_cached_data.extend(cached_data_for_date)
-                logger.debug(f"🟢 GCP: Cache HIT for {target_date}")
-            else:
-                missing_dates.append(target_date)
-                logger.debug(f"🟢 GCP: Cache MISS for {target_date}")
-
-        # If we have complete cached data for all dates, return it
-        if not missing_dates:
-            logger.info(
-                f"🟢 GCP: Using fully cached data for {start_date.date()} to {end_date.date()}"
-            )
-            return CostSummary(
-                provider=self._get_provider_name(),
-                start_date=start_date,
-                end_date=end_date,
-                granularity=granularity,
-                total_cost=sum(point.amount for point in all_cached_data),
-                currency=self.currency,
-                data_points=all_cached_data,
-                last_updated=datetime.now(),
-            )
-
-        # If we're missing some dates, we need to fetch fresh data
-        logger.info(
-            f"🟢 GCP: Cache PARTIAL - missing {len(missing_dates)} dates, fetching fresh data"
-        )
-
+        # Get fresh data from API (no caching)
         try:
             logger.info(f"🟢 GCP: Fetching fresh cost data for {start_date} to {end_date}")
             # Use BigQuery billing export if available, otherwise use Cloud Billing API
@@ -496,13 +185,7 @@ class GCPCostProvider(CloudCostProvider):
                     daily_data[point_date] = []
                 daily_data[point_date].append(point)
 
-            # Save each day's data to its own cache file
-            for day_date, day_data_points in daily_data.items():
-                self._save_daily_cache(
-                    day_date, granularity_str, group_dimensions, project_id, day_data_points
-                )
-
-            logger.info(f"🟢 GCP: Saved daily cache for {len(daily_data)} dates")
+            logger.info(f"🟢 GCP: Processed {len(daily_data)} dates")
             return cost_summary
 
         except GoogleAPICallError as e:

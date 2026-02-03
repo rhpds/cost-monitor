@@ -204,7 +204,11 @@ data:
     ON cost_data_points(service_name, date DESC);
 
     CREATE INDEX IF NOT EXISTS idx_cost_data_points_collected_at
-    ON cost_data_points(collected_at DESC);
+    ON cost_data_points(collected_at DESC, date DESC);
+
+    -- Performance index for freshness queries with provider and date
+    CREATE INDEX IF NOT EXISTS idx_cost_data_provider_date_collected
+    ON cost_data_points(provider_id, date, collected_at DESC);
 
     -- JSON indexes for provider metadata
     CREATE INDEX IF NOT EXISTS idx_cost_data_points_metadata_gin

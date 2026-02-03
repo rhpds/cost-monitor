@@ -5,6 +5,7 @@ Contains Pydantic models used across the API layer.
 """
 
 from datetime import date, datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -40,6 +41,10 @@ class CostSummary(BaseModel):
     account_breakdown: dict[str, list[AccountData]]
     data_collection_complete: bool
     last_updated: datetime
+    data_freshness: str | None = None
+    background_refresh_triggered: bool | None = None
+    refresh_status: str | None = None
+    freshness_metadata: dict[str, Any] | None = None
 
 
 class HealthCheck(BaseModel):

@@ -34,23 +34,22 @@ async def prepare_date_range_and_cache(
     # Cache key
     cache_key = f"cost_summary:{start_date}:{end_date}:{','.join(providers or [])}"
 
-    # Try cache first (skip if force_refresh is enabled)
+    # Handle force refresh - clear cache and skip cache check
     cached_result = None
-    if not force_refresh and redis_client:
-        logger.info(f"🔍 DEBUG: Checking Redis cache with key: {cache_key}")
+    if force_refresh and redis_client:
+        logger.info(f"Force refresh requested, clearing cache for key: {cache_key}")
+        try:
+            # Clear the specific cache entry
+            await redis_client.delete(cache_key)
+        except Exception as e:
+            logger.error(f"Error clearing Redis cache: {e}")
+    elif not force_refresh and redis_client:
         try:
             cached = await redis_client.get(cache_key)
             if cached:
                 cached_result = json.loads(cached)
-                logger.info("🔍 DEBUG: Found cached result")
-            else:
-                logger.info("🔍 DEBUG: No cached result found")
         except Exception as e:
-            logger.error(f"🔍 DEBUG: Error accessing Redis cache: {e}")
-    else:
-        logger.info(
-            f"🔍 DEBUG: Skipping cache check (force_refresh={force_refresh}, redis_client={redis_client is not None})"
-        )
+            logger.error(f"Error accessing Redis cache: {e}")
 
     return start_date, end_date, cache_key, cached_result
 
@@ -118,6 +117,9 @@ async def _handle_force_refresh(
 
     # Collect fresh data for all requested providers and dates
     await collect_missing_data(start_date, end_date, providers_to_check)
+
+    # Clear cache for the refreshed date range to ensure fresh data is served
+    await _invalidate_force_refresh_cache(start_date, end_date, providers_to_check)
 
 
 async def _handle_normal_collection(
@@ -377,24 +379,8 @@ async def _get_gcp_account_breakdown(start_date: date, end_date: date):
         from src.providers.gcp import GCPCostProvider
 
         config = get_config()
-        logger.info(f"🔍 DEBUG: get_config() returned: {config} (type: {type(config)})")
 
         # Config is guaranteed to be non-None per type annotations
-
-        logger.info(f"🔍 DEBUG: Config has gcp attribute: {hasattr(config, 'gcp')}")
-
-        if hasattr(config, "gcp"):
-            logger.info(f"🔍 DEBUG: config.gcp = {config.gcp} (type: {type(config.gcp)})")
-            if hasattr(config.gcp, "get"):
-                logger.info(
-                    f"🔍 DEBUG: config.gcp.get('enabled', False) = {config.gcp.get('enabled', False)}"
-                )
-            else:
-                logger.info("🔍 DEBUG: config.gcp does not have .get() method")
-
-        logger.info(
-            f"🔍 DEBUG: GCP config check - enabled: {config.gcp.get('enabled', False) if hasattr(config, 'gcp') else 'no gcp config'}"
-        )
 
         if config and hasattr(config, "gcp") and config.gcp.get("enabled", False):
             logger.info("Collecting GCP account breakdown separately...")
@@ -562,10 +548,8 @@ def _build_provider_data(service_rows, total_rows):
 
 def _build_account_breakdown(all_account_rows):
     """Build account breakdown from processed account data."""
-    logger.info(f"🔍 DEBUG: Building account breakdown for {len(all_account_rows)} rows")
     result = {}
     for row in all_account_rows:
-        logger.info(f"🔍 DEBUG: Processing account row: {row} (type: {type(row)})")
         try:
             provider = row["provider"]
             account_name = row.get("account_name", row["account_id"]) if row else "unknown"
@@ -584,5 +568,20 @@ def _build_account_breakdown(all_account_rows):
                 }
             )
         except Exception as e:
-            logger.error(f"🔍 DEBUG: Error processing account row {row}: {e}")
+            logger.error(f"Error processing account row {row}: {e}")
     return result
+
+
+async def _invalidate_force_refresh_cache(
+    start_date: date, end_date: date, providers: list[str]
+) -> None:
+    """Invalidate cache after force refresh to ensure fresh data is served."""
+    try:
+        # Import the cache invalidation function from data_service
+        from ..data_service import _invalidate_cache_for_date_range
+
+        await _invalidate_cache_for_date_range(start_date, end_date, providers)
+        logger.info(f"✅ Force refresh cache invalidation completed for {providers}")
+
+    except Exception as e:
+        logger.error(f"❌ Error during force refresh cache invalidation: {e}")
