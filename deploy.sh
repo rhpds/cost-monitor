@@ -321,6 +321,40 @@ update_buildconfigs() {
     echo -e "${GREEN}✅ Build configurations updated${NC}"
 }
 
+# Setup GitHub webhooks
+setup_github_webhooks() {
+    echo -e "${BLUE}🪝 Setting up GitHub webhook triggers...${NC}"
+
+    if [ "${DRY_RUN}" = "true" ]; then
+        echo -e "${YELLOW}[DRY RUN] Would regenerate webhook secrets${NC}"
+        return
+    fi
+
+    # Regenerate webhook secrets for BuildConfigs
+    echo -e "${YELLOW}🔄 Regenerating webhook secrets...${NC}"
+    oc set triggers bc/cost-data-service --from-github -n ${NAMESPACE}
+    oc set triggers bc/cost-monitor-dashboard --from-github -n ${NAMESPACE}
+
+    echo -e "${GREEN}✅ Webhook secrets regenerated${NC}"
+
+    # Get webhook URLs with secrets
+    local data_service_url=$(oc describe bc cost-data-service -n ${NAMESPACE} | grep "Webhook GitHub" -A1 | grep URL | awk '{print $2}')
+    local dashboard_url=$(oc describe bc cost-monitor-dashboard -n ${NAMESPACE} | grep "Webhook GitHub" -A1 | grep URL | awk '{print $2}')
+
+    # Replace <secret> placeholder with actual secret
+    local data_service_secret=$(oc get bc cost-data-service -n ${NAMESPACE} -o jsonpath='{.spec.triggers[?(@.type=="GitHub")].github.secret}' | awk '{print $NF}')
+    local dashboard_secret=$(oc get bc cost-monitor-dashboard -n ${NAMESPACE} -o jsonpath='{.spec.triggers[?(@.type=="GitHub")].github.secret}' | awk '{print $NF}')
+
+    data_service_url="${data_service_url//<secret>/$data_service_secret}"
+    dashboard_url="${dashboard_url//<secret>/$dashboard_secret}"
+
+    # Store webhook URLs for later display
+    export WEBHOOK_DATA_SERVICE_URL="$data_service_url"
+    export WEBHOOK_DASHBOARD_URL="$dashboard_url"
+
+    echo -e "${GREEN}✅ GitHub webhooks configured${NC}"
+}
+
 # OAuth setup functions
 detect_oauth_settings() {
     echo -e "${BLUE}🔍 Detecting OpenShift OAuth configuration...${NC}"
@@ -716,6 +750,11 @@ else
 
     echo ""
 
+    # Setup GitHub webhooks
+    setup_github_webhooks
+
+    echo ""
+
     # Deploy all resources first (infrastructure and applications)
     echo -e "${BLUE}🚀 Deploying all resources...${NC}"
 
@@ -795,6 +834,23 @@ else
         echo -e "${BLUE}API URL:${NC} https://cost-api.${CLUSTER_DOMAIN}/api"
         echo -e "${BLUE}Health URL:${NC} https://cost-health.${CLUSTER_DOMAIN}/health"
     fi
+    echo ""
+    echo -e "${YELLOW}🪝 GitHub Webhook Configuration:${NC}"
+    echo -e "Add these webhooks to your GitHub repository settings:"
+    echo -e "${BLUE}Repository:${NC} ${GIT_REPOSITORY}"
+    echo -e "${BLUE}Settings → Webhooks → Add webhook${NC}"
+    echo ""
+    echo -e "${YELLOW}Webhook 1 - cost-data-service:${NC}"
+    echo -e "   Payload URL: ${WEBHOOK_DATA_SERVICE_URL}"
+    echo -e "   Content type: application/json"
+    echo -e "   Events: Just the push event"
+    echo ""
+    echo -e "${YELLOW}Webhook 2 - cost-monitor-dashboard:${NC}"
+    echo -e "   Payload URL: ${WEBHOOK_DASHBOARD_URL}"
+    echo -e "   Content type: application/json"
+    echo -e "   Events: Just the push event"
+    echo ""
+    echo -e "${GREEN}✅ Automatic builds will trigger on git push to ${GIT_BRANCH} branch${NC}"
     echo ""
     echo -e "${BLUE}Next steps:${NC}"
     if [ "${OAUTH_ENABLED}" = "true" ]; then

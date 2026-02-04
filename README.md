@@ -132,6 +132,29 @@ oc start-build cost-data-service -n cost-monitor
 oc start-build cost-monitor-dashboard -n cost-monitor
 ```
 
+### GitHub Webhook Configuration
+
+The deployment script automatically generates webhook secrets for GitHub integration. To enable automatic builds on git push:
+
+**1. Run the deployment script** which will output webhook URLs at the end:
+```bash
+./deploy.sh
+```
+
+**2. Configure webhooks in GitHub:**
+- Go to your repository: `https://github.com/rhpds/cost-monitor/settings/hooks`
+- Add webhook for cost-data-service BuildConfig
+- Add webhook for cost-monitor-dashboard BuildConfig
+- Use the URLs provided by the deployment script
+- Set Content type: `application/json`
+- Select Events: `Just the push event`
+
+**3. Verify webhook setup:**
+- Webhooks will show a green checkmark if successful
+- Failed webhooks (403 error) indicate missing RBAC permissions
+
+**Note:** OpenShift 4.16+ requires a RoleBinding to allow unauthenticated webhook access. This is automatically created during deployment and is namespace-scoped for security.
+
 ## Alternative Installation Methods
 
 ### Docker Deployment

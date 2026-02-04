@@ -97,6 +97,45 @@ Both namespaces have BuildConfigs configured to automatically trigger builds whe
 - **Dev namespace**: Builds automatically when code is pushed to `main`
 - **Prod namespace**: Builds automatically when code is pushed to `production`
 
+#### GitHub Webhook Setup
+
+The `./deploy.sh` script automatically generates secure webhook secrets and provides the webhook URLs at the end of deployment. To enable automatic builds on git push:
+
+**1. Deploy the application:**
+```bash
+./deploy.sh  # for production
+./deploy.sh dev  # for development
+```
+
+The script will output webhook URLs like:
+```
+🪝 GitHub Webhook Configuration:
+Webhook 1 - cost-data-service:
+   Payload URL: https://api.cluster.example.com:6443/.../webhooks/abc123/github
+Webhook 2 - cost-monitor-dashboard:
+   Payload URL: https://api.cluster.example.com:6443/.../webhooks/xyz789/github
+```
+
+**2. Configure webhooks in GitHub:**
+- Navigate to: `https://github.com/rhpds/cost-monitor/settings/hooks`
+- Click "Add webhook"
+- Paste the Payload URL from deployment output
+- Set Content type: `application/json`
+- Select Events: `Just the push event`
+- Click "Add webhook"
+- Repeat for both BuildConfigs (cost-data-service and cost-monitor-dashboard)
+
+**3. Verify webhook delivery:**
+- After adding, GitHub will send a test ping
+- Check that webhook shows a green checkmark ✓
+- If you see a 403 error, verify the RoleBinding exists:
+  ```bash
+  oc get rolebinding webhook-access-unauthenticated -n <namespace>
+  ```
+
+**Security Note:**
+OpenShift 4.16+ requires explicit RBAC permissions for unauthenticated webhook access. The deployment automatically creates a namespace-scoped RoleBinding that allows GitHub webhooks to trigger builds without exposing other cluster resources. This RoleBinding is defined in `openshift/base/security/webhook-rolebinding.yaml` and grants the `system:webhook` ClusterRole to the `system:unauthenticated` group within the namespace only.
+
 ### Deployment Workflow
 
 #### Deploying to Development
