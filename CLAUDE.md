@@ -69,8 +69,147 @@ After deployment, access the dashboard via the OpenShift route:
 
 ```bash
 # Get the dashboard URL
-oc get route cost-monitor-dashboard-route -o jsonpath='{.spec.host}'
+oc get route dashboard-route -n cost-monitor -o jsonpath='{.spec.host}'
 ```
+
+## Git Branching and Deployment Strategy
+
+### Branch Structure
+
+The project uses a two-branch deployment model to separate development and production environments:
+
+- **`main` branch** → **`cost-monitor-dev` namespace**
+  - All development work and pull requests merge here
+  - OpenShift BuildConfigs watch this branch and trigger automatic builds
+  - Used for testing and validation before promoting to production
+  - Developers can push directly to main for rapid iteration
+
+- **`production` branch** → **`cost-monitor` namespace**
+  - Production-ready, stable code only
+  - OpenShift BuildConfigs watch this branch for production deployments
+  - Tagged with semantic versions (v1.0.0, v1.1.0, etc.) for release tracking
+  - Receives code via merge from main after validation in dev
+
+### Automatic Build Triggers
+
+Both namespaces have BuildConfigs configured to automatically trigger builds when their respective branches are updated:
+
+- **Dev namespace**: Builds automatically when code is pushed to `main`
+- **Prod namespace**: Builds automatically when code is pushed to `production`
+
+### Deployment Workflow
+
+#### Deploying to Development
+
+```bash
+# 1. Make changes and commit to main
+git checkout main
+git add .
+git commit -m "Your changes"
+git push origin main
+
+# 2. OpenShift automatically triggers builds in cost-monitor-dev
+# Monitor build progress:
+oc get builds -n cost-monitor-dev -w
+
+# 3. Once build completes, rollout new deployment
+oc rollout restart deployment/cost-data-service -n cost-monitor-dev
+oc rollout restart deployment/dashboard-service -n cost-monitor-dev
+
+# 4. Verify deployment
+oc rollout status deployment/cost-data-service -n cost-monitor-dev
+```
+
+#### Promoting to Production
+
+```bash
+# 1. Merge validated main branch to production
+git checkout production
+git merge main
+
+# 2. Create release tag (semantic versioning)
+git tag -a v1.1.0 -m "Release v1.1.0 - Azure background refresh fix"
+git push origin production
+git push origin v1.1.0
+
+# 3. OpenShift automatically triggers builds in cost-monitor (production)
+# Monitor build progress:
+oc get builds -n cost-monitor -w
+
+# 4. Once build completes, rollout new deployment
+oc rollout restart deployment/cost-data-service -n cost-monitor
+oc rollout restart deployment/dashboard-service -n cost-monitor
+
+# 5. Verify production deployment
+oc rollout status deployment/cost-data-service -n cost-monitor
+oc get pods -n cost-monitor
+```
+
+#### Manual Build Trigger (if automatic triggers fail)
+
+```bash
+# Development
+oc start-build cost-data-service -n cost-monitor-dev
+oc start-build cost-monitor-dashboard -n cost-monitor-dev
+
+# Production
+oc start-build cost-data-service -n cost-monitor
+oc start-build cost-monitor-dashboard -n cost-monitor
+```
+
+#### Hotfix Workflow
+
+For urgent production fixes:
+
+```bash
+# 1. Create hotfix from production branch
+git checkout production
+git checkout -b hotfix/critical-bug-fix
+
+# 2. Make the fix and test locally
+# ... make changes ...
+git commit -m "Fix critical bug"
+
+# 3. Merge to production
+git checkout production
+git merge hotfix/critical-bug-fix
+git tag -a v1.1.1 -m "Hotfix v1.1.1 - Critical bug fix"
+git push origin production
+git push origin v1.1.1
+
+# 4. Backport to main
+git checkout main
+git merge hotfix/critical-bug-fix
+git push origin main
+
+# 5. Clean up
+git branch -d hotfix/critical-bug-fix
+```
+
+### BuildConfig Details
+
+The BuildConfigs are configured as follows:
+
+```yaml
+# Development (cost-monitor-dev)
+spec:
+  source:
+    git:
+      ref: main
+      uri: https://github.com/rhpds/cost-monitor.git
+
+# Production (cost-monitor)
+spec:
+  source:
+    git:
+      ref: production
+      uri: https://github.com/rhpds/cost-monitor.git
+```
+
+Both configs include automatic triggers for:
+- GitHub webhooks (when configured)
+- ConfigChange (when BuildConfig is updated)
+- ImageChange (when base Python image updates)
 
 ## Alternative Installation Methods
 

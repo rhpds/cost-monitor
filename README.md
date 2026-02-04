@@ -70,7 +70,66 @@ oc apply -k openshift/overlays/production
 After deployment, get the dashboard URL:
 
 ```bash
-oc get route cost-monitor-dashboard-route -o jsonpath='{.spec.host}'
+oc get route dashboard-route -n cost-monitor -o jsonpath='{.spec.host}'
+```
+
+## Git Branching and Deployment Strategy
+
+The project uses a two-branch strategy for managing deployments:
+
+### Branch Structure
+
+- **`main`** - Development branch
+  - All development work happens here
+  - Automatically triggers builds in `cost-monitor-dev` namespace
+  - Used for testing and validation before production
+
+- **`production`** - Production branch
+  - Stable, production-ready code
+  - Automatically triggers builds in `cost-monitor` namespace
+  - Tagged with semantic versions (v1.0.0, v1.1.0, etc.)
+
+### Deployment Workflow
+
+**Development Deployment:**
+```bash
+# Push changes to main
+git push origin main
+
+# Dev builds trigger automatically in cost-monitor-dev namespace
+# Monitor build progress:
+oc get builds -n cost-monitor-dev -w
+```
+
+**Production Deployment:**
+```bash
+# 1. Merge main to production
+git checkout production
+git merge main
+git push origin production
+
+# 2. Create release tag
+git tag -a v1.1.0 -m "Release v1.1.0 - Description of changes"
+git push origin v1.1.0
+
+# 3. Production builds trigger automatically in cost-monitor namespace
+# Monitor build progress:
+oc get builds -n cost-monitor -w
+
+# 4. Once builds complete, rollout new deployments
+oc rollout restart deployment/cost-data-service -n cost-monitor
+oc rollout restart deployment/dashboard-service -n cost-monitor
+```
+
+**Manual Build Trigger (if needed):**
+```bash
+# Dev
+oc start-build cost-data-service -n cost-monitor-dev
+oc start-build cost-monitor-dashboard -n cost-monitor-dev
+
+# Prod
+oc start-build cost-data-service -n cost-monitor
+oc start-build cost-monitor-dashboard -n cost-monitor
 ```
 
 ## Alternative Installation Methods
