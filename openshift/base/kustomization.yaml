@@ -29,6 +29,9 @@ resources:
   # Authentication and authorization
   - auth/
 
+  # Security and RBAC
+  - security/webhook-rolebinding.yaml
+
 # Common labels applied to all resources
 labels:
 - includeSelectors: true
