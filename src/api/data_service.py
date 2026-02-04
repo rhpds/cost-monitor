@@ -626,6 +626,10 @@ async def collect_provider_data(
         # Create provider instance
         provider_instance = ProviderFactory.create_provider(provider_name, provider_config)
 
+        # Inject database pool for providers that need it (Azure uses PostgreSQL for metadata)
+        if provider_name == "azure":
+            provider_instance.db_pool = db_pool
+
         # Authenticate
         if not auth_manager:
             raise ValueError("Authentication manager not available")
