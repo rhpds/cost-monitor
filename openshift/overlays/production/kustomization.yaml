@@ -48,6 +48,23 @@ configMapGenerator:
 
 # Production patches for security and performance
 patches:
+# Configure BuildConfigs to use production branch
+- target:
+    kind: BuildConfig
+    name: cost-data-service
+  patch: |-
+    - op: replace
+      path: /spec/source/git/ref
+      value: production
+
+- target:
+    kind: BuildConfig
+    name: cost-monitor-dashboard
+  patch: |-
+    - op: replace
+      path: /spec/source/git/ref
+      value: production
+
 # Enhanced dashboard deployment for production
 - target:
     kind: DeploymentConfig
