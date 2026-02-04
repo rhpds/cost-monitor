@@ -355,6 +355,35 @@ setup_github_webhooks() {
     echo -e "${GREEN}✅ GitHub webhooks configured${NC}"
 }
 
+# Setup automatic image rollout triggers
+setup_image_triggers() {
+    echo -e "${BLUE}🔄 Configuring automatic rollout on image changes...${NC}"
+
+    if [ "${DRY_RUN}" = "true" ]; then
+        echo -e "${YELLOW}[DRY RUN] Would configure image triggers${NC}"
+        return
+    fi
+
+    # Get container names
+    local data_service_container=$(oc get deployment cost-data-service -n ${NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null || echo "cost-data-service")
+    local dashboard_container=$(oc get deployment dashboard-service -n ${NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null || echo "dashboard")
+
+    # Set image triggers on deployments
+    echo -e "${YELLOW}Setting image trigger for cost-data-service...${NC}"
+    oc set triggers deploy/cost-data-service \
+        --from-image=cost-data-service:latest \
+        -c ${data_service_container} \
+        -n ${NAMESPACE}
+
+    echo -e "${YELLOW}Setting image trigger for dashboard-service...${NC}"
+    oc set triggers deploy/dashboard-service \
+        --from-image=cost-monitor-dashboard:latest \
+        -c ${dashboard_container} \
+        -n ${NAMESPACE}
+
+    echo -e "${GREEN}✅ Image triggers configured - deployments will auto-rollout on new builds${NC}"
+}
+
 # OAuth setup functions
 detect_oauth_settings() {
     echo -e "${BLUE}🔍 Detecting OpenShift OAuth configuration...${NC}"
@@ -783,6 +812,11 @@ else
 
     # Start application services in proper order to prevent race conditions
     deploy_services_ordered
+
+    echo ""
+
+    # Setup automatic image rollout triggers
+    setup_image_triggers
 
     # Setup OAuth client and wait for proxy if enabled
     if [ "${OAUTH_ENABLED}" = "true" ]; then

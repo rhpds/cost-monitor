@@ -99,6 +99,9 @@ git push origin main
 # Dev builds trigger automatically in cost-monitor-dev namespace
 # Monitor build progress:
 oc get builds -n cost-monitor-dev -w
+
+# Deployments automatically rollout when builds complete (no manual action needed)
+oc get pods -n cost-monitor-dev -w
 ```
 
 **Production Deployment:**
@@ -116,9 +119,8 @@ git push origin v1.1.0
 # Monitor build progress:
 oc get builds -n cost-monitor -w
 
-# 4. Once builds complete, rollout new deployments
-oc rollout restart deployment/cost-data-service -n cost-monitor
-oc rollout restart deployment/dashboard-service -n cost-monitor
+# 4. Deployments automatically rollout when builds complete (no manual action needed)
+oc get pods -n cost-monitor -w
 ```
 
 **Manual Build Trigger (if needed):**
@@ -154,6 +156,12 @@ The deployment script automatically generates webhook secrets for GitHub integra
 - Failed webhooks (403 error) indicate missing RBAC permissions
 
 **Note:** OpenShift 4.16+ requires a RoleBinding to allow unauthenticated webhook access. This is automatically created during deployment and is namespace-scoped for security.
+
+**4. Automatic rollouts enabled:**
+The deployment script configures ImageStream triggers so deployments automatically rollout when builds complete. This means:
+- Git push → GitHub webhook → Build starts → Build completes → **Deployment auto-rollouts** ✅
+- No manual `oc rollout restart` needed
+- Uses OpenShift's `image.openshift.io/triggers` annotation on Deployments
 
 ## Alternative Installation Methods
 

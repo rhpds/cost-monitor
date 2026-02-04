@@ -136,6 +136,31 @@ Webhook 2 - cost-monitor-dashboard:
 **Security Note:**
 OpenShift 4.16+ requires explicit RBAC permissions for unauthenticated webhook access. The deployment automatically creates a namespace-scoped RoleBinding that allows GitHub webhooks to trigger builds without exposing other cluster resources. This RoleBinding is defined in `openshift/base/security/webhook-rolebinding.yaml` and grants the `system:webhook` ClusterRole to the `system:unauthenticated` group within the namespace only.
 
+#### Automatic Deployment Rollouts
+
+The deployment script configures **ImageStream triggers** on Deployments to enable automatic rollouts when new images are built. This creates a fully automated CI/CD pipeline:
+
+**How it works:**
+1. Git push → GitHub webhook triggers BuildConfig
+2. BuildConfig builds new image → Pushes to ImageStream
+3. ImageStream update detected → Deployment automatically rolls out new pods
+4. No manual `oc rollout restart` required
+
+**Technical implementation:**
+The deployment script runs:
+```bash
+oc set triggers deploy/cost-data-service --from-image=cost-data-service:latest -c cost-data-service
+oc set triggers deploy/dashboard-service --from-image=cost-monitor-dashboard:latest -c dashboard
+```
+
+This sets the `image.openshift.io/triggers` annotation on each Deployment, which tells OpenShift to watch the specified ImageStreamTag and automatically update the deployment when a new image is pushed.
+
+**Benefits:**
+- ✅ Fully automated deployment pipeline
+- ✅ Faster iteration cycles
+- ✅ Consistent deployment behavior
+- ✅ No manual intervention needed after code push
+
 ### Deployment Workflow
 
 #### Deploying to Development
@@ -151,9 +176,9 @@ git push origin main
 # Monitor build progress:
 oc get builds -n cost-monitor-dev -w
 
-# 3. Once build completes, rollout new deployment
-oc rollout restart deployment/cost-data-service -n cost-monitor-dev
-oc rollout restart deployment/dashboard-service -n cost-monitor-dev
+# 3. Deployments automatically rollout when builds complete (no manual action needed)
+# Monitor rollout progress:
+oc get pods -n cost-monitor-dev -w
 
 # 4. Verify deployment
 oc rollout status deployment/cost-data-service -n cost-monitor-dev
@@ -175,13 +200,12 @@ git push origin v1.1.0
 # Monitor build progress:
 oc get builds -n cost-monitor -w
 
-# 4. Once build completes, rollout new deployment
-oc rollout restart deployment/cost-data-service -n cost-monitor
-oc rollout restart deployment/dashboard-service -n cost-monitor
+# 4. Deployments automatically rollout when builds complete (no manual action needed)
+# Monitor rollout progress:
+oc get pods -n cost-monitor -w
 
 # 5. Verify production deployment
 oc rollout status deployment/cost-data-service -n cost-monitor
-oc get pods -n cost-monitor
 ```
 
 #### Manual Build Trigger (if automatic triggers fail)
