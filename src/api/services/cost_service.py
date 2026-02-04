@@ -224,9 +224,14 @@ async def _query_total_costs(conn, start_date, end_date, providers):
 
 
 async def _query_daily_costs(conn, start_date, end_date, providers):
-    """Query daily cost breakdown."""
+    """Query daily cost breakdown with collection timestamps."""
     daily_query = """
-        SELECT cdp.date, p.name as provider, SUM(cdp.cost) as cost, cdp.currency
+        SELECT
+            cdp.date,
+            p.name as provider,
+            SUM(cdp.cost) as cost,
+            cdp.currency,
+            MAX(cdp.collected_at) as last_collected_at
         FROM cost_data_points cdp
         JOIN providers p ON cdp.provider_id = p.id
         WHERE cdp.date BETWEEN $1 AND $2
@@ -488,8 +493,12 @@ def build_response(
 
 
 def _build_daily_costs_dict(daily_rows):
-    """Build daily costs dictionary from database rows."""
+    """Build daily costs dictionary from database rows with incomplete data detection."""
+    from datetime import datetime, timedelta, timezone
+
     daily_costs_dict = {}
+    incomplete_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
     for row in daily_rows:
         date_obj = row["date"]
         date_str = date_obj.isoformat() if hasattr(date_obj, "isoformat") else str(date_obj)
@@ -504,15 +513,27 @@ def _build_daily_costs_dict(daily_rows):
                     "azure": 0.0,
                     "gcp": 0.0,
                 },
+                "incomplete_providers": set(),  # Track which providers have incomplete data
             }
 
         provider = row["provider"]
         cost = float(row["cost"])
+        last_collected = row.get("last_collected_at")
+
+        # Check if data is incomplete (collected within last 24 hours)
+        if last_collected and last_collected > incomplete_cutoff:
+            daily_costs_dict[date_str]["incomplete_providers"].add(provider)
+
         daily_costs_dict[date_str]["provider_breakdown"][provider] = cost
         daily_costs_dict[date_str]["total_cost"] += cost
 
-    # Convert to list format expected by dashboard
-    return list(daily_costs_dict.values())
+    # Convert to list format expected by dashboard, converting set to list for JSON serialization
+    result = []
+    for day_data in daily_costs_dict.values():
+        day_data["incomplete_providers"] = list(day_data["incomplete_providers"])
+        result.append(day_data)
+
+    return result
 
 
 def _build_provider_data(service_rows, total_rows):

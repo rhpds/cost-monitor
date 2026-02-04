@@ -226,34 +226,57 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
         ratio = max(all_values) / min(all_values) if min(all_values) > 0 else 1
         will_use_log_scale = ratio > 50
 
+    has_incomplete_data = False  # Track if any incomplete data exists
+
     for provider in providers:
         values = [item.get("provider_breakdown", {}).get(provider, 0) for item in daily_costs]
+        incomplete_flags = [
+            provider in item.get("incomplete_providers", []) for item in daily_costs
+        ]
 
-        # Prepare display values and text labels
+        # Prepare display values, text labels, and marker colors with opacity
         display_values = []
         hover_values = []
         text_labels = []
+        marker_colors = []
+        base_color = DashboardTheme.COLORS.get(provider, "#000000")
 
-        for _, (_, value) in enumerate(zip(daily_costs, values, strict=False)):
+        for item, value, is_incomplete in zip(daily_costs, values, incomplete_flags, strict=False):
             if value == 0:
                 # Show N/C/Y for any provider with zero cost
                 display_values.append(0.5)  # Small visible height for N/C/Y
                 hover_values.append(0)
                 text_labels.append("N/C/Y")
+                # Use reduced opacity for N/C/Y bars
+                r, g, b = int(base_color[1:3], 16), int(base_color[3:5], 16), int(base_color[5:7], 16)
+                marker_colors.append(f"rgba({r}, {g}, {b}, 0.3)")
             else:
                 # Show actual cost data
                 display_value = max(value, 0.01) if will_use_log_scale and value <= 0 else value
                 display_values.append(display_value)
                 hover_values.append(value)
-                text_labels.append(f"${value:.0f}" if value >= 1 else f"${value:.2f}")
+                label = f"${value:.0f}" if value >= 1 else f"${value:.2f}"
+                if is_incomplete:
+                    label += "*"
+                    has_incomplete_data = True
+                text_labels.append(label)
+
+                # Use lower opacity for incomplete data
+                if is_incomplete:
+                    r, g, b = int(base_color[1:3], 16), int(base_color[3:5], 16), int(base_color[5:7], 16)
+                    marker_colors.append(f"rgba({r}, {g}, {b}, 0.5)")
+                else:
+                    marker_colors.append(base_color)
 
         fig.add_trace(
             go.Bar(
                 x=dates,
                 y=display_values,
                 name=provider.upper(),
-                marker_color=DashboardTheme.COLORS.get(provider, "#000000"),
-                marker_line=dict(width=1, color="rgba(0,0,0,0.3)"),
+                marker=dict(
+                    color=marker_colors,
+                    line=dict(width=1, color="rgba(0,0,0,0.3)"),
+                ),
                 text=text_labels,
                 textposition="auto",  # Let Plotly decide best position
                 textfont=dict(size=12, color="black"),
@@ -261,6 +284,9 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
                 customdata=hover_values,
             )
         )
+
+    # Store whether we have incomplete data for later use in layout
+    fig._has_incomplete_data = has_incomplete_data
 
 
 def _add_single_provider_trace(fig, daily_costs, dates, selected_provider, today_str, dashboard):
@@ -351,8 +377,14 @@ def _update_chart_layout(fig, selected_provider, use_log_scale=False):
 
     # Add explanation for N/C/Y when showing all providers (legend is visible)
     if selected_provider == "all":
+        annotations_text = ["N/C/Y = No Cost Yet"]
+
+        # Add incomplete data explanation if needed
+        if hasattr(fig, "_has_incomplete_data") and fig._has_incomplete_data:
+            annotations_text.append("* = Data still collecting")
+
         fig.add_annotation(
-            text="N/C/Y = No Cost Yet",
+            text="<br>".join(annotations_text),
             xref="paper",
             yref="paper",
             x=1.02,
