@@ -21,6 +21,7 @@ resources:
   # Application deployments
   - deployments/cost-data-service.yaml
   - deployments/dashboard-service.yaml
+  - deployments/data-refresh-cronjob.yaml
 
   # Services and networking
   - services/services.yaml

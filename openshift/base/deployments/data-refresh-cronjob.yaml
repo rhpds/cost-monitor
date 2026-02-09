@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cost-data-refresh
+  labels:
+    app: cost-monitor
+    component: data-refresh
+spec:
+  schedule: "0 */2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: cost-monitor
+        component: data-refresh
+    spec:
+      activeDeadlineSeconds: 1800
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: cost-monitor
+            component: data-refresh
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: data-refresh
+            image: image-registry.openshift-image-registry.svc:5000/cost-monitor/cost-data-service:latest
+            imagePullPolicy: Always
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting scheduled cost data refresh..."
+              START_DATE=$(date -d "7 days ago" +%Y-%m-%d)
+              END_DATE=$(date -d "yesterday" +%Y-%m-%d)
+              echo "Refreshing data from ${START_DATE} to ${END_DATE}"
+              FAILED=0
+              for PROVIDER in aws azure gcp; do
+                echo "Refreshing ${PROVIDER} data..."
+                HTTP_CODE=$(curl -sf -o /tmp/response.json -w "%{http_code}" --max-time 600 \
+                  "http://cost-data-service:8000/api/v1/costs/summary?force_refresh=true&start_date=${START_DATE}&end_date=${END_DATE}&providers=${PROVIDER}")
+                if [ $? -eq 0 ] && [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+                  echo "${PROVIDER}: refresh completed successfully (HTTP ${HTTP_CODE})"
+                else
+                  echo "${PROVIDER}: refresh failed (HTTP ${HTTP_CODE})"
+                  FAILED=$((FAILED + 1))
+                fi
+              done
+              if [ ${FAILED} -gt 0 ]; then
+                echo "WARNING: ${FAILED} provider(s) failed to refresh"
+                exit 1
+              fi
+              echo "All providers refreshed successfully"
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "100m"
+              limits:
+                memory: "256Mi"
+                cpu: "500m"
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: false
+              capabilities:
+                drop:
+                - ALL
+          restartPolicy: OnFailure

@@ -143,6 +143,15 @@ spec:
     - protocol: TCP
       port: 8000  # API port
 
+  # Allow traffic from data-refresh CronJob
+  - from:
+    - podSelector:
+        matchLabels:
+          component: data-refresh
+    ports:
+    - protocol: TCP
+      port: 8000
+
   # Allow health checks from OpenShift monitoring (restricted route)
   - from:
     - namespaceSelector:

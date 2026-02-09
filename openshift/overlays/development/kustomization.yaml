@@ -71,11 +71,14 @@ patches:
         name: LOG_LEVEL
         value: DEBUG
 
-# Development CronJob with longer interval
+# Development CronJob - suspended by default, enable manually when needed
 - target:
     kind: CronJob
-    name: cost-monitor-prometheus-export
+    name: cost-data-refresh
   patch: |
+    - op: add
+      path: /spec/suspend
+      value: true
     - op: replace
       path: /spec/schedule
       value: "0 */4 * * *"  # Every 4 hours for development

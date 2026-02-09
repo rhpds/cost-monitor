@@ -105,11 +105,11 @@ patches:
 # Enhanced CronJob for production
 - target:
     kind: CronJob
-    name: cost-monitor-prometheus-export
+    name: cost-data-refresh
   patch: |
     - op: replace
       path: /spec/schedule
-      value: "*/15 * * * *"
+      value: "0 */1 * * *"  # Every hour for production
     - op: add
       path: /spec/jobTemplate/spec/template/spec/containers/0/env/-
       value:
