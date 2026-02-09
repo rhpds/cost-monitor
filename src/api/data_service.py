@@ -932,6 +932,7 @@ async def get_cost_summary(
         # Import the cost service module
         from .services.cost_service import (
             build_response,
+            ensure_data_collection,
             prepare_date_range_and_cache,
             process_account_data,
             query_cost_data,
@@ -944,7 +945,18 @@ async def get_cost_summary(
         if cached_result:
             return cached_result
 
-        # Step 2: Data collection is handled by the CronJob — the web app is read-only
+        # Step 2: Only collect data on explicit force_refresh (used by CronJob)
+        if force_refresh:
+            await ensure_data_collection(
+                start_date,
+                end_date,
+                providers,
+                force_refresh,
+                db_pool,
+                collect_missing_data,
+                check_existing_data,
+                get_missing_date_ranges,
+            )
 
         # Step 3: Query all required data from database
         db_results = await query_cost_data(start_date, end_date, providers, db_pool)
