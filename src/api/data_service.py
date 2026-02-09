@@ -723,7 +723,39 @@ async def store_cost_data(provider_name: str, cost_points: list[ProviderCostData
 
         provider_id = provider_row["id"]
 
-        # Insert cost data points
+        # Pre-aggregate cost points by (date, service_name, account_id, region)
+        # Azure CSVs have multiple rows per service/account/region (one per meter),
+        # so we must sum them before inserting to avoid losing data on ON CONFLICT.
+        aggregated: dict[tuple, dict] = {}
+        for point in cost_points:
+            point_date = (
+                point.date
+                if isinstance(point.date, date) and not isinstance(point.date, datetime)
+                else point.date.date()
+            )
+            key = (
+                point_date,
+                point.service_name or "",
+                point.account_id or "",
+                point.region or "",
+            )
+            if key in aggregated:
+                aggregated[key]["amount"] += point.amount
+            else:
+                aggregated[key] = {
+                    "amount": point.amount,
+                    "currency": point.currency,
+                    "account_name": getattr(point, "account_name", None),
+                    "provider_metadata": getattr(point, "provider_metadata", None),
+                }
+
+        logger.info(
+            f"Aggregated {len(cost_points)} raw points into "
+            f"{len(aggregated)} unique (date, service, account, region) groups "
+            f"for {provider_name}"
+        )
+
+        # Insert aggregated cost data points
         insert_query = """
             INSERT INTO cost_data_points
             (provider_id, date, granularity, cost, currency, service_name, account_id, account_name, region, provider_metadata)
@@ -732,27 +764,22 @@ async def store_cost_data(provider_name: str, cost_points: list[ProviderCostData
             DO UPDATE SET granularity = EXCLUDED.granularity, cost = EXCLUDED.cost, currency = EXCLUDED.currency, account_name = EXCLUDED.account_name, provider_metadata = EXCLUDED.provider_metadata, collected_at = CURRENT_TIMESTAMP
         """
 
-        for point in cost_points:
-            point_date = (
-                point.date
-                if isinstance(point.date, date) and not isinstance(point.date, datetime)
-                else point.date.date()
-            )
+        for (point_date, service_name, account_id, region), agg in aggregated.items():
             await conn.execute(
                 insert_query,
                 provider_id,
                 point_date,
-                "DAILY",  # Set granularity to DAILY for cost data collection
-                point.amount,
-                point.currency,
-                point.service_name or "",
-                point.account_id or "",
-                getattr(point, "account_name", None),
-                point.region or "",
-                getattr(point, "provider_metadata", None),
+                "DAILY",
+                agg["amount"],
+                agg["currency"],
+                service_name,
+                account_id,
+                agg["account_name"],
+                region,
+                agg["provider_metadata"],
             )
 
-        logger.info(f"Stored {len(cost_points)} data points for {provider_name}")
+        logger.info(f"Stored {len(aggregated)} aggregated data points for {provider_name}")
 
 
 async def update_provider_sync_status(provider_name: str, status: str, last_sync: datetime):
