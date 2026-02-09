@@ -248,9 +248,9 @@ async def get_missing_date_ranges(
 
     # Define data freshness rules for each provider (days to wait before data is available)
     provider_delays = {
-        "aws": 2,  # AWS Cost Explorer has 1-2 day delay
-        "azure": 1,  # Azure typically has 1 day delay
-        "gcp": 1,  # GCP can have up to 1 day delay
+        "aws": 0,
+        "azure": 0,
+        "gcp": 0,
     }
 
     # Generate all dates in the requested range
