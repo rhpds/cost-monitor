@@ -303,8 +303,7 @@ async def get_missing_date_ranges(
 async def check_data_freshness_and_trigger_refresh(  # noqa: C901
     start_date: date, end_date: date, providers: list[str] | None, force_refresh: bool = False
 ) -> dict[str, Any]:
-    """Check data freshness and trigger background refresh if needed. Return freshness metadata."""
-    import asyncio
+    """Check data freshness and return freshness metadata."""
     from datetime import datetime, timedelta
 
     if force_refresh:
@@ -327,14 +326,13 @@ async def check_data_freshness_and_trigger_refresh(  # noqa: C901
 
         # Provider delays for determining what data can be refreshed
         provider_delays = {
-            "aws": 2,  # AWS Cost Explorer has 1-2 day delay
-            "azure": 1,  # Azure typically has 1 day delay
-            "gcp": 1,  # GCP can have up to 1 day delay
+            "aws": 0,
+            "azure": 0,
+            "gcp": 0,
         }
 
         freshness_info = {}
         stale_providers = []
-        refresh_triggered = False
 
         # Check if providers is valid
         if providers is None:
@@ -402,23 +400,18 @@ async def check_data_freshness_and_trigger_refresh(  # noqa: C901
             if is_stale:
                 stale_providers.append(provider)
 
-        # Trigger background refresh for stale providers
+        # Report staleness but don't trigger refresh (CronJob handles refresh)
         if stale_providers:
-            logger.info(f"🔄 Triggering background refresh for stale providers: {stale_providers}")
-
-            # Start background task (don't wait for it)
-            asyncio.create_task(
-                _background_refresh_stale_data(start_date, end_date, stale_providers)
+            refresh_status = (
+                f"Stale data detected for {', '.join(stale_providers)} "
+                "(refresh handled by CronJob)"
             )
-            refresh_triggered = True
-
-            refresh_status = f"Background refresh started for {', '.join(stale_providers)}"
         else:
             refresh_status = "All data is fresh"
 
         # Determine overall freshness status
         if stale_providers:
-            overall_freshness = "stale_data_refreshing"
+            overall_freshness = "stale"
         elif not freshness_info:
             overall_freshness = "no_data"
         else:
@@ -426,7 +419,7 @@ async def check_data_freshness_and_trigger_refresh(  # noqa: C901
 
         return {
             "data_freshness": overall_freshness,
-            "background_refresh_triggered": refresh_triggered,
+            "background_refresh_triggered": False,
             "refresh_status": refresh_status,
             "freshness_metadata": freshness_info,
         }
@@ -736,7 +729,7 @@ async def store_cost_data(provider_name: str, cost_points: list[ProviderCostData
             (provider_id, date, granularity, cost, currency, service_name, account_id, account_name, region, provider_metadata)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (provider_id, date, service_name, account_id, region)
-            DO UPDATE SET granularity = EXCLUDED.granularity, cost = cost_data_points.cost + EXCLUDED.cost, currency = EXCLUDED.currency, account_name = EXCLUDED.account_name, provider_metadata = EXCLUDED.provider_metadata
+            DO UPDATE SET granularity = EXCLUDED.granularity, cost = EXCLUDED.cost, currency = EXCLUDED.currency, account_name = EXCLUDED.account_name, provider_metadata = EXCLUDED.provider_metadata, collected_at = CURRENT_TIMESTAMP
         """
 
         for point in cost_points:
@@ -752,10 +745,10 @@ async def store_cost_data(provider_name: str, cost_points: list[ProviderCostData
                 "DAILY",  # Set granularity to DAILY for cost data collection
                 point.amount,
                 point.currency,
-                point.service_name,
-                point.account_id,
+                point.service_name or "",
+                point.account_id or "",
                 getattr(point, "account_name", None),
-                point.region,
+                point.region or "",
                 getattr(point, "provider_metadata", None),
             )
 
@@ -939,7 +932,6 @@ async def get_cost_summary(
         # Import the cost service module
         from .services.cost_service import (
             build_response,
-            ensure_data_collection,
             prepare_date_range_and_cache,
             process_account_data,
             query_cost_data,
@@ -952,22 +944,12 @@ async def get_cost_summary(
         if cached_result:
             return cached_result
 
-        # Step 2: Ensure data collection
-        data_collection_complete = await ensure_data_collection(
-            start_date,
-            end_date,
-            providers,
-            force_refresh,
-            db_pool,
-            collect_missing_data,
-            check_existing_data,
-            get_missing_date_ranges,
-        )
+        # Step 2: Data collection is handled by the CronJob — the web app is read-only
 
         # Step 3: Query all required data from database
         db_results = await query_cost_data(start_date, end_date, providers, db_pool)
 
-        # Step 3.5: Check data freshness and trigger background refresh if needed (async)
+        # Step 3.5: Check data freshness (reporting only, refresh handled by CronJob)
         freshness_info = await check_data_freshness_and_trigger_refresh(
             start_date, end_date, providers, force_refresh
         )
@@ -978,9 +960,7 @@ async def get_cost_summary(
         )
 
         # Step 5: Build final response with freshness info
-        result_dict = build_response(
-            db_results, all_account_rows, start_date, end_date, data_collection_complete
-        )
+        result_dict = build_response(db_results, all_account_rows, start_date, end_date, True)
 
         # Add freshness metadata to response
         result_dict.update(freshness_info)
