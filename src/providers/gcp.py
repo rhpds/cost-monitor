@@ -242,9 +242,11 @@ class GCPCostProvider(CloudCostProvider):
                     group_columns.append("location.location")
 
         # Build WHERE clause
+        # Use usage_start_time for both bounds so costs are attributed to the
+        # day usage began, matching the GCP Console's cost breakdown.
         where_conditions = [
             f"DATE(usage_start_time) >= '{start_date.date()}'",
-            f"DATE(usage_end_time) <= '{end_date.date()}'",
+            f"DATE(usage_start_time) <= '{end_date.date()}'",
         ]
 
         if filter_by:
