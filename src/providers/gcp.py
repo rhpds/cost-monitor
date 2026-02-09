@@ -209,16 +209,19 @@ class GCPCostProvider(CloudCostProvider):
         table_name = f"{self.bq_table}{self.billing_account_id.replace('-', '_')}"
 
         # Build SQL query
+        # Use America/Los_Angeles timezone to match GCP Console date attribution
+        tz = "America/Los_Angeles"
         date_format = "%Y-%m-%d" if granularity == TimeGranularity.DAILY else "%Y-%m"
         date_column = (
-            "usage_start_time"
+            f'usage_start_time, "{tz}"'
             if granularity == TimeGranularity.DAILY
-            else "EXTRACT(YEAR_MONTH FROM usage_start_time)"
+            else f"EXTRACT(YEAR_MONTH FROM usage_start_time AT TIME ZONE '{tz}')"
         )
 
         select_columns = [
             f"FORMAT_DATE('{date_format}', DATE({date_column})) as usage_date",
-            "SUM(cost) as total_cost",
+            # Include credits (SUDs, CUDs, promotions) to match GCP Console totals
+            "SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) as total_cost",
             "currency",
             # Always include service information for better cost breakdown
             "service.description as service_name",
@@ -242,11 +245,11 @@ class GCPCostProvider(CloudCostProvider):
                     group_columns.append("location.location")
 
         # Build WHERE clause
-        # Use usage_start_time for both bounds so costs are attributed to the
-        # day usage began, matching the GCP Console's cost breakdown.
+        # Use usage_start_time in the billing account timezone so date
+        # boundaries match the GCP Console's cost breakdown.
         where_conditions = [
-            f"DATE(usage_start_time) >= '{start_date.date()}'",
-            f"DATE(usage_start_time) <= '{end_date.date()}'",
+            f"DATE(usage_start_time, \"{tz}\") >= '{start_date.date()}'",
+            f"DATE(usage_start_time, \"{tz}\") <= '{end_date.date()}'",
         ]
 
         if filter_by:
