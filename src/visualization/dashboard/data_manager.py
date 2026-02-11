@@ -196,6 +196,44 @@ class CostDataManager:
             return getattr(cost_data, "account_breakdown", {})
         return {}
 
+    async def get_aws_breakdown(
+        self,
+        start_date: date,
+        end_date: date,
+        group_by: str = "LINKED_ACCOUNT",
+        top_n: int = 25,
+    ) -> dict[str, Any] | None:
+        """Get AWS cost breakdown from data service API."""
+        try:
+            url = f"{self.data_service_url}/api/v1/costs/aws/breakdown"
+            params = {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "group_by": group_by,
+                "top_n": top_n,
+            }
+
+            days = (end_date - start_date).days + 1
+            api_timeout = min(180, 30 + days * 3)
+            logger.info(
+                f"Fetching AWS breakdown ({group_by}) for {start_date} to {end_date} "
+                f"(timeout={api_timeout}s)"
+            )
+
+            response = requests.get(url, params=params, timeout=api_timeout)
+            response.raise_for_status()
+
+            result: dict[str, Any] = response.json()
+            logger.info(
+                f"AWS breakdown retrieved: {len(result.get('items', []))} items, "
+                f"total=${result.get('total_cost', 0):.2f}"
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to get AWS breakdown: {e}")
+            return None
+
     def get_auth_status(self) -> dict[str, Any]:
         """Get authentication status from the data service API."""
         try:

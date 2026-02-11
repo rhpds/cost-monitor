@@ -232,6 +232,7 @@ class CostMonitorDashboard:
     def _setup_callbacks(self):
         """Set up all dashboard callbacks."""
         # Import and setup callback modules
+        from .callbacks.aws_breakdown import setup_aws_breakdown_callbacks
         from .callbacks.charts import setup_chart_callbacks
         from .callbacks.data_store import setup_data_store_callbacks
         from .callbacks.interactions import setup_interaction_callbacks
@@ -242,6 +243,7 @@ class CostMonitorDashboard:
         setup_chart_callbacks(self)
         setup_interaction_callbacks(self)
         setup_table_callbacks(self)
+        setup_aws_breakdown_callbacks(self)
 
     async def run(self):
         """Start the dashboard server."""

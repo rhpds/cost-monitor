@@ -61,3 +61,19 @@ class CostDataPoint(BaseModel):
     service_name: str | None = None
     account_id: str | None = None
     region: str | None = None
+
+
+class BreakdownItem(BaseModel):
+    key: str
+    display_name: str
+    daily_costs: dict[str, float]
+    total_cost: float
+    currency: str
+
+
+class AWSBreakdownResponse(BaseModel):
+    group_by: str
+    items: list[BreakdownItem]
+    total_cost: float
+    period_start: date
+    period_end: date

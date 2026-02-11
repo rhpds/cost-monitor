@@ -30,7 +30,7 @@ from ..providers.base import (
 from ..utils.auth import MultiCloudAuthManager
 
 # Import AWS account management utilities
-from .models import CostDataPoint, CostSummary, HealthCheck
+from .models import AWSBreakdownResponse, BreakdownItem, CostDataPoint, CostSummary, HealthCheck
 
 # Configure logging
 logging.basicConfig(
@@ -1152,6 +1152,143 @@ async def get_providers():
         raise HTTPException(status_code=500, detail="Error retrieving providers")
 
 
+def _aggregate_breakdown_points(
+    data_points: list[ProviderCostDataPoint], group_by: str
+) -> dict[str, dict[str, Any]]:
+    """Aggregate cost data points into a breakdown map keyed by account or instance type."""
+    items_map: dict[str, dict[str, Any]] = {}
+    for point in data_points:
+        key = (
+            (point.account_id or "unknown")
+            if group_by == "LINKED_ACCOUNT"
+            else (point.service_name or "unknown")
+        )
+
+        if key not in items_map:
+            items_map[key] = {
+                "daily_costs": {},
+                "total_cost": 0.0,
+                "currency": point.currency,
+            }
+
+        date_str = (
+            point.date.strftime("%Y-%m-%d")
+            if isinstance(point.date, date | datetime)
+            else str(point.date)
+        )
+        items_map[key]["daily_costs"][date_str] = (
+            items_map[key]["daily_costs"].get(date_str, 0.0) + point.amount
+        )
+        items_map[key]["total_cost"] += point.amount
+
+    return items_map
+
+
+def _build_breakdown_items(
+    items_map: dict[str, dict[str, Any]],
+    top_keys: list[str],
+    group_by: str,
+    name_map: dict[str, str],
+) -> list[BreakdownItem]:
+    """Build BreakdownItem list from aggregated data."""
+    items = []
+    for key in top_keys:
+        if group_by == "LINKED_ACCOUNT":
+            resolved = name_map.get(key, key)
+            display_name = f"{resolved} ({key})" if resolved != key else f"AWS Account ({key})"
+        else:
+            display_name = key
+
+        data = items_map[key]
+        items.append(
+            BreakdownItem(
+                key=key,
+                display_name=display_name,
+                daily_costs=data["daily_costs"],
+                total_cost=data["total_cost"],
+                currency=data["currency"],
+            )
+        )
+    return items
+
+
+@app.get("/api/v1/costs/aws/breakdown", response_model=AWSBreakdownResponse)
+async def get_aws_breakdown(
+    start_date: date = Query(..., description="Start date (YYYY-MM-DD)"),
+    end_date: date = Query(..., description="End date (YYYY-MM-DD)"),
+    group_by: str = Query(
+        "LINKED_ACCOUNT",
+        description="Dimension to group by: LINKED_ACCOUNT or INSTANCE_TYPE",
+    ),
+    top_n: int = Query(25, ge=1, le=100, description="Number of top items to return"),
+):
+    """Get AWS cost breakdown by linked account or EC2 instance type.
+
+    Queries AWS Cost Explorer directly for real-time breakdown data.
+    """
+    if group_by not in ("LINKED_ACCOUNT", "INSTANCE_TYPE"):
+        raise HTTPException(
+            status_code=400,
+            detail="group_by must be LINKED_ACCOUNT or INSTANCE_TYPE",
+        )
+
+    try:
+        if not config or not auth_manager:
+            raise ValueError("Service not initialized")
+
+        provider_config = config.get_provider_config("aws")
+        if not provider_config:
+            raise ValueError("No AWS configuration found")
+
+        provider_instance = ProviderFactory.create_provider("aws", provider_config)
+
+        auth_result = await auth_manager.authenticate_provider("aws", provider_config)
+        if not auth_result.success:
+            raise ValueError(f"AWS authentication failed: {auth_result.error_message}")
+
+        # Build query parameters based on group_by dimension
+        if group_by == "INSTANCE_TYPE":
+            filter_by: dict[str, Any] | None = {
+                "services": ["Amazon Elastic Compute Cloud - Compute"]
+            }
+            dimensions = ["INSTANCE_TYPE"]
+        else:
+            filter_by = None
+            dimensions = ["LINKED_ACCOUNT"]
+
+        cost_summary = await provider_instance.get_cost_data(
+            start_date, end_date, TimeGranularity.DAILY, group_by=dimensions, filter_by=filter_by
+        )
+
+        items_map = _aggregate_breakdown_points(cost_summary.data_points, group_by)
+
+        # Sort by total cost descending and take top N
+        sorted_keys = sorted(items_map, key=lambda k: items_map[k]["total_cost"], reverse=True)
+        top_keys = sorted_keys[:top_n]
+
+        # Resolve display names for linked accounts
+        if group_by == "LINKED_ACCOUNT":
+            account_ids = [k for k in top_keys if k != "unknown"]
+            name_map = await provider_instance.resolve_account_names_for_ids(account_ids)
+        else:
+            name_map = {}
+
+        items = _build_breakdown_items(items_map, top_keys, group_by, name_map)
+        total_cost = sum(d["total_cost"] for d in items_map.values())
+
+        return AWSBreakdownResponse(
+            group_by=group_by,
+            items=items,
+            total_cost=total_cost,
+            period_start=start_date,
+            period_end=end_date,
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting AWS breakdown: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving AWS breakdown: {e}")
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -1163,6 +1300,7 @@ async def root():
             "health": "/api/health/ready",
             "costs": "/api/v1/costs",
             "summary": "/api/v1/costs/summary",
+            "aws_breakdown": "/api/v1/costs/aws/breakdown",
             "providers": "/api/v1/providers",
             "docs": "/docs",
         },

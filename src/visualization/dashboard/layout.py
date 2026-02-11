@@ -40,379 +40,439 @@ def create_dashboard_layout(dashboard):
                 [
                     dbc.Col(
                         [
-                            html.H1(
-                                "☁️ Multi-Cloud Cost Monitor",
-                                className="text-center mb-4",
-                                style={"color": "#2E86AB", "font-weight": "bold"},
+                            html.Div(
+                                [
+                                    html.H1(
+                                        "☁️ Multi-Cloud Cost Monitor",
+                                        className="text-center mb-0",
+                                        style={"color": "#2E86AB", "font-weight": "bold"},
+                                    ),
+                                    dbc.Button(
+                                        "AWS Breakdown",
+                                        id="btn-aws-breakdown",
+                                        color="warning",
+                                        size="sm",
+                                        className="ms-3",
+                                        style={"whiteSpace": "nowrap"},
+                                    ),
+                                ],
+                                className="d-flex align-items-center justify-content-center mb-4",
                             ),
                         ]
                     )
                 ],
                 className="mb-4",
             ),
-            # Alert banner
-            dbc.Row([dbc.Col([html.Div(id="alert-banner")])], className="mb-3"),
-            # Authentication warning banner
-            dbc.Row([dbc.Col([html.Div(id="auth-warning-banner")])], className="mb-3"),
-            # Loading banner
-            dbc.Row([dbc.Col([html.Div(id="loading-banner")])], className="mb-3"),
-            # Date range controls
-            dbc.Row(
-                [
-                    dbc.Col(
+            # === Main dashboard content (toggled visibility) ===
+            html.Div(
+                id="main-dashboard-content",
+                children=[
+                    # Alert banner
+                    dbc.Row([dbc.Col([html.Div(id="alert-banner")])], className="mb-3"),
+                    # Authentication warning banner
+                    dbc.Row(
+                        [dbc.Col([html.Div(id="auth-warning-banner")])],
+                        className="mb-3",
+                    ),
+                    # Loading banner
+                    dbc.Row([dbc.Col([html.Div(id="loading-banner")])], className="mb-3"),
+                    # Date range controls
+                    dbc.Row(
                         [
-                            html.H5("📅 Date Range", className="mb-3"),
-                            dbc.Card(
+                            dbc.Col(
                                 [
-                                    dbc.CardBody(
+                                    html.H5("📅 Date Range", className="mb-3"),
+                                    dbc.Card(
                                         [
-                                            dbc.Row(
+                                            dbc.CardBody(
                                                 [
-                                                    dbc.Col(
+                                                    dbc.Row(
                                                         [
-                                                            html.Div(
+                                                            dbc.Col(
                                                                 [
-                                                                    dcc.DatePickerRange(
-                                                                        id="date-range-picker",
-                                                                        start_date=date.today().replace(
-                                                                            day=1
-                                                                        ),
-                                                                        end_date=date.today(),
-                                                                        display_format="YYYY-MM-DD",
-                                                                        style={"width": "auto"},
-                                                                    ),
-                                                                    dbc.Button(
-                                                                        "Apply",
-                                                                        id="btn-apply-dates",
-                                                                        color="success",
-                                                                        size="sm",
-                                                                        style={"marginLeft": "8px"},
-                                                                    ),
+                                                                    html.Div(
+                                                                        [
+                                                                            dcc.DatePickerRange(
+                                                                                id="date-range-picker",
+                                                                                start_date=date.today().replace(
+                                                                                    day=1
+                                                                                ),
+                                                                                end_date=date.today(),
+                                                                                display_format="YYYY-MM-DD",
+                                                                                style={
+                                                                                    "width": "auto"
+                                                                                },
+                                                                            ),
+                                                                            dbc.Button(
+                                                                                "Apply",
+                                                                                id="btn-apply-dates",
+                                                                                color="success",
+                                                                                size="sm",
+                                                                                style={
+                                                                                    "marginLeft": "8px"
+                                                                                },
+                                                                            ),
+                                                                        ],
+                                                                        style={
+                                                                            "alignItems": "center",
+                                                                            "display": "flex",
+                                                                        },
+                                                                    )
                                                                 ],
-                                                                style={
-                                                                    "alignItems": "center",
-                                                                    "display": "flex",
-                                                                },
-                                                            )
-                                                        ],
-                                                        md=12,
+                                                                md=12,
+                                                            ),
+                                                        ]
+                                                    ),
+                                                    dbc.Row(
+                                                        [
+                                                            dbc.Col(
+                                                                [
+                                                                    html.Div(
+                                                                        [
+                                                                            html.Small(
+                                                                                "Quick ranges: ",
+                                                                                className="text-muted me-2",
+                                                                            ),
+                                                                            _create_quick_date_buttons(),
+                                                                        ],
+                                                                        className="d-flex align-items-center mt-2",
+                                                                    )
+                                                                ],
+                                                                md=12,
+                                                            ),
+                                                        ]
                                                     ),
                                                 ]
-                                            ),
-                                            dbc.Row(
-                                                [
-                                                    dbc.Col(
-                                                        [
-                                                            html.Div(
-                                                                [
-                                                                    html.Small(
-                                                                        "Quick ranges: ",
-                                                                        className="text-muted me-2",
-                                                                    ),
-                                                                    _create_quick_date_buttons(),
-                                                                ],
-                                                                className="d-flex align-items-center mt-2",
+                                            )
+                                        ]
+                                    ),
+                                ],
+                                lg=12,
+                            )
+                        ],
+                        className="mb-4",
+                    ),
+                    # Key metrics row
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    html.H5("📊 Key Metrics", className="mb-3"),
+                                    dbc.Row(
+                                        [
+                                            dbc.Col(
+                                                dbc.Card(
+                                                    [
+                                                        dbc.CardHeader("Total Cost"),
+                                                        dbc.CardBody(
+                                                            html.H4(
+                                                                "$0.00",
+                                                                id="total-cost-metric",
+                                                                className="text-primary mb-0",
                                                             )
-                                                        ],
-                                                        md=12,
+                                                        ),
+                                                    ],
+                                                    className="mb-3",
+                                                ),
+                                                md=3,
+                                            ),
+                                            dbc.Col(
+                                                dbc.Card(
+                                                    [
+                                                        dbc.CardHeader("Daily Average"),
+                                                        dbc.CardBody(
+                                                            html.H4(
+                                                                "$0.00",
+                                                                id="daily-average-metric",
+                                                                className="text-info mb-0",
+                                                            )
+                                                        ),
+                                                    ],
+                                                    className="mb-3",
+                                                ),
+                                                md=3,
+                                            ),
+                                            dbc.Col(
+                                                dbc.Card(
+                                                    [
+                                                        dbc.CardHeader("Monthly Projection"),
+                                                        dbc.CardBody(
+                                                            html.H4(
+                                                                "$0.00",
+                                                                id="monthly-projection-metric",
+                                                                className="text-warning mb-0",
+                                                            )
+                                                        ),
+                                                    ],
+                                                    className="mb-3",
+                                                ),
+                                                md=3,
+                                            ),
+                                            dbc.Col(
+                                                dbc.Card(
+                                                    [
+                                                        dbc.CardHeader("Cost Trend"),
+                                                        dbc.CardBody(
+                                                            html.H4(
+                                                                "0.0%",
+                                                                id="cost-trend-metric",
+                                                                className="text-muted mb-0",
+                                                            )
+                                                        ),
+                                                    ],
+                                                    className="mb-3",
+                                                ),
+                                                md=3,
+                                            ),
+                                        ],
+                                        id="key-metrics-row",
+                                    ),
+                                ]
+                            )
+                        ],
+                        className="mb-4",
+                    ),
+                    # Daily cost trends chart - full width row
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Card(
+                                        [
+                                            dbc.CardHeader(
+                                                [
+                                                    html.H5(
+                                                        "💹 Daily Cost Trends",
+                                                        className="mb-0",
                                                     ),
+                                                    html.Div(
+                                                        [
+                                                            dbc.Checklist(
+                                                                id="include-savings-plans-toggle",
+                                                                options=[
+                                                                    {
+                                                                        "label": "Include Savings Plans",
+                                                                        "value": "include",
+                                                                    }
+                                                                ],
+                                                                value=[],
+                                                                switch=True,
+                                                                className="me-3",
+                                                            ),
+                                                            dbc.Checklist(
+                                                                id="log-scale-toggle",
+                                                                options=[
+                                                                    {
+                                                                        "label": "Logarithmic Scale",
+                                                                        "value": "log",
+                                                                    }
+                                                                ],
+                                                                value=["log"],
+                                                                switch=True,
+                                                                className="me-3",
+                                                            ),
+                                                            dbc.Select(
+                                                                id="provider-selector",
+                                                                options=[
+                                                                    {
+                                                                        "label": "All Providers",
+                                                                        "value": "all",
+                                                                    },
+                                                                    {
+                                                                        "label": "AWS",
+                                                                        "value": "aws",
+                                                                    },
+                                                                    {
+                                                                        "label": "Azure",
+                                                                        "value": "azure",
+                                                                    },
+                                                                    {
+                                                                        "label": "GCP",
+                                                                        "value": "gcp",
+                                                                    },
+                                                                ],
+                                                                value="all",
+                                                                style={"minWidth": "150px"},
+                                                            ),
+                                                        ],
+                                                        className="d-flex align-items-center",
+                                                    ),
+                                                ],
+                                                className="d-flex justify-content-between align-items-center",
+                                            ),
+                                            dbc.CardBody(
+                                                [
+                                                    dcc.Graph(
+                                                        id="cost-trend-chart",
+                                                        style={"height": "400px"},
+                                                        config=plotly_config,
+                                                    )
+                                                ]
+                                            ),
+                                        ]
+                                    )
+                                ],
+                                lg=12,
+                            ),
+                        ],
+                        className="mb-4",
+                    ),
+                    # Provider breakdown chart
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Card(
+                                        [
+                                            dbc.CardHeader(
+                                                html.H5(
+                                                    "🔧 Provider Breakdown",
+                                                    className="mb-0",
+                                                )
+                                            ),
+                                            dbc.CardBody(
+                                                [
+                                                    dcc.Graph(
+                                                        id="provider-breakdown-chart",
+                                                        style={"height": "400px"},
+                                                        config=plotly_config,
+                                                    )
+                                                ]
+                                            ),
+                                        ]
+                                    )
+                                ],
+                                lg=12,
+                            ),
+                        ],
+                        className="mb-4",
+                    ),
+                    # Service breakdown section
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Card(
+                                        [
+                                            dbc.CardHeader(
+                                                [
+                                                    html.H5(
+                                                        "⚙️ Top Services",
+                                                        className="mb-0",
+                                                    ),
+                                                    dbc.Select(
+                                                        id="service-provider-selector",
+                                                        options=[],
+                                                        value="aws",
+                                                        className="w-25",
+                                                    ),
+                                                ],
+                                                className="d-flex justify-content-between align-items-center",
+                                            ),
+                                            dbc.CardBody(
+                                                [
+                                                    dcc.Graph(
+                                                        id="service-breakdown-chart",
+                                                        style={"height": "400px"},
+                                                        config=plotly_config,
+                                                    )
                                                 ]
                                             ),
                                         ]
                                     )
                                 ]
-                            ),
+                            )
                         ],
-                        lg=12,
-                    )
-                ],
-                className="mb-4",
-            ),
-            # Key metrics row
-            dbc.Row(
-                [
-                    dbc.Col(
+                        className="mb-4",
+                    ),
+                    # Account breakdown section
+                    dbc.Row(
                         [
-                            html.H5("📊 Key Metrics", className="mb-3"),
-                            dbc.Row(
+                            dbc.Col(
                                 [
-                                    dbc.Col(
-                                        dbc.Card(
-                                            [
-                                                dbc.CardHeader("Total Cost"),
-                                                dbc.CardBody(
-                                                    html.H4(
-                                                        "$0.00",
-                                                        id="total-cost-metric",
-                                                        className="text-primary mb-0",
-                                                    )
-                                                ),
-                                            ],
-                                            className="mb-3",
-                                        ),
-                                        md=3,
-                                    ),
-                                    dbc.Col(
-                                        dbc.Card(
-                                            [
-                                                dbc.CardHeader("Daily Average"),
-                                                dbc.CardBody(
-                                                    html.H4(
-                                                        "$0.00",
-                                                        id="daily-average-metric",
-                                                        className="text-info mb-0",
-                                                    )
-                                                ),
-                                            ],
-                                            className="mb-3",
-                                        ),
-                                        md=3,
-                                    ),
-                                    dbc.Col(
-                                        dbc.Card(
-                                            [
-                                                dbc.CardHeader("Monthly Projection"),
-                                                dbc.CardBody(
-                                                    html.H4(
-                                                        "$0.00",
-                                                        id="monthly-projection-metric",
-                                                        className="text-warning mb-0",
-                                                    )
-                                                ),
-                                            ],
-                                            className="mb-3",
-                                        ),
-                                        md=3,
-                                    ),
-                                    dbc.Col(
-                                        dbc.Card(
-                                            [
-                                                dbc.CardHeader("Cost Trend"),
-                                                dbc.CardBody(
-                                                    html.H4(
-                                                        "0.0%",
-                                                        id="cost-trend-metric",
-                                                        className="text-muted mb-0",
-                                                    )
-                                                ),
-                                            ],
-                                            className="mb-3",
-                                        ),
-                                        md=3,
-                                    ),
-                                ],
-                                id="key-metrics-row",
-                            ),
-                        ]
-                    )
-                ],
-                className="mb-4",
-            ),
-            # Daily cost trends chart - full width row
-            dbc.Row(
-                [
-                    dbc.Col(
-                        [
-                            dbc.Card(
-                                [
-                                    dbc.CardHeader(
+                                    dbc.Card(
                                         [
-                                            html.H5("💹 Daily Cost Trends", className="mb-0"),
-                                            html.Div(
+                                            dbc.CardHeader(
                                                 [
-                                                    dbc.Checklist(
-                                                        id="include-savings-plans-toggle",
-                                                        options=[
-                                                            {
-                                                                "label": "Include Savings Plans",
-                                                                "value": "include",
-                                                            }
-                                                        ],
-                                                        value=[],  # Default unchecked
-                                                        switch=True,
-                                                        className="me-3",
+                                                    html.H5(
+                                                        "👥 Account Breakdown",
+                                                        className="mb-0",
                                                     ),
-                                                    dbc.Checklist(
-                                                        id="log-scale-toggle",
-                                                        options=[
-                                                            {
-                                                                "label": "Logarithmic Scale",
-                                                                "value": "log",
-                                                            }
-                                                        ],
-                                                        value=[
-                                                            "log"
-                                                        ],  # Default checked (log scale)
-                                                        switch=True,
-                                                        className="me-3",
-                                                    ),
-                                                    dbc.Select(
-                                                        id="provider-selector",
-                                                        options=[
-                                                            {
-                                                                "label": "All Providers",
-                                                                "value": "all",
-                                                            },
-                                                            {"label": "AWS", "value": "aws"},
-                                                            {"label": "Azure", "value": "azure"},
-                                                            {"label": "GCP", "value": "gcp"},
-                                                        ],
-                                                        value="all",
-                                                        style={"minWidth": "150px"},
+                                                    html.Div(
+                                                        [
+                                                            dbc.Button(
+                                                                "🔍",
+                                                                id="account-search-toggle",
+                                                                color="outline-secondary",
+                                                                size="sm",
+                                                                className="me-2",
+                                                            ),
+                                                            dbc.Button(
+                                                                "📊",
+                                                                id="account-chart-view",
+                                                                color="outline-primary",
+                                                                size="sm",
+                                                                className="me-2",
+                                                            ),
+                                                            dbc.Button(
+                                                                "💾",
+                                                                id="account-export-csv",
+                                                                color="outline-success",
+                                                                size="sm",
+                                                            ),
+                                                        ]
                                                     ),
                                                 ],
-                                                className="d-flex align-items-center",
+                                                className="d-flex justify-content-between align-items-center",
                                             ),
-                                        ],
-                                        className="d-flex justify-content-between align-items-center",
-                                    ),
-                                    dbc.CardBody(
-                                        [
-                                            dcc.Graph(
-                                                id="cost-trend-chart",
-                                                style={"height": "400px"},
-                                                config=plotly_config,
-                                            )
+                                            dbc.CardBody(
+                                                [html.Div(id="account-breakdown-content")]
+                                            ),
                                         ]
-                                    ),
+                                    )
                                 ]
                             )
                         ],
-                        lg=12,
+                        className="mb-4",
                     ),
-                ],
-                className="mb-4",
-            ),
-            # Provider breakdown chart
-            dbc.Row(
-                [
-                    dbc.Col(
+                    # Data table section
+                    dbc.Row(
                         [
-                            dbc.Card(
+                            dbc.Col(
                                 [
-                                    dbc.CardHeader(
-                                        html.H5("🔧 Provider Breakdown", className="mb-0")
-                                    ),
-                                    dbc.CardBody(
+                                    dbc.Card(
                                         [
-                                            dcc.Graph(
-                                                id="provider-breakdown-chart",
-                                                style={"height": "400px"},
-                                                config=plotly_config,
-                                            )
+                                            dbc.CardHeader(
+                                                html.H5(
+                                                    "📋 Detailed Cost Data",
+                                                    className="mb-0",
+                                                )
+                                            ),
+                                            dbc.CardBody([html.Div(id="cost-data-table")]),
                                         ]
-                                    ),
+                                    )
                                 ]
                             )
                         ],
-                        lg=12,
+                        className="mb-4",
                     ),
                 ],
-                className="mb-4",
             ),
-            # Service breakdown section
-            dbc.Row(
-                [
-                    dbc.Col(
-                        [
-                            dbc.Card(
-                                [
-                                    dbc.CardHeader(
-                                        [
-                                            html.H5("⚙️ Top Services", className="mb-0"),
-                                            dbc.Select(
-                                                id="service-provider-selector",
-                                                options=[],
-                                                value="aws",
-                                                className="w-25",
-                                            ),
-                                        ],
-                                        className="d-flex justify-content-between align-items-center",
-                                    ),
-                                    dbc.CardBody(
-                                        [
-                                            dcc.Graph(
-                                                id="service-breakdown-chart",
-                                                style={"height": "400px"},
-                                                config=plotly_config,
-                                            )
-                                        ]
-                                    ),
-                                ]
-                            )
-                        ]
-                    )
+            # === AWS Breakdown content (hidden by default) ===
+            html.Div(
+                id="aws-breakdown-content",
+                style={"display": "none"},
+                children=[
+                    _create_aws_breakdown_section(plotly_config),
                 ],
-                className="mb-4",
             ),
-            # Account breakdown section
-            dbc.Row(
-                [
-                    dbc.Col(
-                        [
-                            dbc.Card(
-                                [
-                                    dbc.CardHeader(
-                                        [
-                                            html.H5("👥 Account Breakdown", className="mb-0"),
-                                            html.Div(
-                                                [
-                                                    dbc.Button(
-                                                        "🔍",
-                                                        id="account-search-toggle",
-                                                        color="outline-secondary",
-                                                        size="sm",
-                                                        className="me-2",
-                                                    ),
-                                                    dbc.Button(
-                                                        "📊",
-                                                        id="account-chart-view",
-                                                        color="outline-primary",
-                                                        size="sm",
-                                                        className="me-2",
-                                                    ),
-                                                    dbc.Button(
-                                                        "💾",
-                                                        id="account-export-csv",
-                                                        color="outline-success",
-                                                        size="sm",
-                                                    ),
-                                                ]
-                                            ),
-                                        ],
-                                        className="d-flex justify-content-between align-items-center",
-                                    ),
-                                    dbc.CardBody([html.Div(id="account-breakdown-content")]),
-                                ]
-                            )
-                        ]
-                    )
-                ],
-                className="mb-4",
-            ),
-            # Data table section
-            dbc.Row(
-                [
-                    dbc.Col(
-                        [
-                            dbc.Card(
-                                [
-                                    dbc.CardHeader(
-                                        html.H5("📋 Detailed Cost Data", className="mb-0")
-                                    ),
-                                    dbc.CardBody([html.Div(id="cost-data-table")]),
-                                ]
-                            )
-                        ]
-                    )
-                ],
-                className="mb-4",
-            ),
-            # Hidden components for state management
+            # Hidden components for state management (shared across pages)
             dcc.Store(id="cost-data-store"),
             dcc.Store(id="alert-data-store"),
-            dcc.Store(id="loading-store", data={"loading": True}),  # Start with loading=True
+            dcc.Store(id="loading-store", data={"loading": True}),
             dcc.Store(id="auth-status-store"),
+            dcc.Store(id="aws-breakdown-data-store"),
+            dcc.Store(id="current-page-store", data={"page": "main"}),
             dcc.Interval(
                 id="interval-component",
                 interval=dashboard.refresh_interval,
@@ -422,6 +482,142 @@ def create_dashboard_layout(dashboard):
             html.Div(id="last-update-time", className="text-muted text-center mt-3"),
         ],
         fluid=True,
+    )
+
+
+def _create_aws_breakdown_section(plotly_config):
+    """Create the AWS cost breakdown section layout."""
+    return html.Div(
+        [
+            # Header with back button
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            html.Div(
+                                [
+                                    dbc.Button(
+                                        "Back to Dashboard",
+                                        id="btn-back-to-dashboard",
+                                        color="secondary",
+                                        size="sm",
+                                        className="me-3",
+                                    ),
+                                    html.H3(
+                                        "AWS Cost Breakdown",
+                                        className="mb-0",
+                                        style={"color": "#FF9900"},
+                                    ),
+                                ],
+                                className="d-flex align-items-center",
+                            )
+                        ]
+                    )
+                ],
+                className="mb-3",
+            ),
+            # Date range display and controls
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            html.Div(
+                                id="breakdown-date-range-display",
+                                className="text-muted mb-2",
+                            ),
+                        ],
+                        md=4,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.RadioItems(
+                                id="breakdown-dimension-selector",
+                                options=[
+                                    {
+                                        "label": "By Linked Account",
+                                        "value": "LINKED_ACCOUNT",
+                                    },
+                                    {
+                                        "label": "By EC2 Instance Type",
+                                        "value": "INSTANCE_TYPE",
+                                    },
+                                ],
+                                value="LINKED_ACCOUNT",
+                                inline=True,
+                                className="mb-0",
+                            ),
+                        ],
+                        md=5,
+                    ),
+                    dbc.Col(
+                        [
+                            html.Div(
+                                [
+                                    html.Small("Top N: ", className="text-muted me-2"),
+                                    dbc.Select(
+                                        id="breakdown-top-n",
+                                        options=[
+                                            {"label": "10", "value": "10"},
+                                            {"label": "25", "value": "25"},
+                                            {"label": "50", "value": "50"},
+                                        ],
+                                        value="25",
+                                        style={
+                                            "width": "80px",
+                                            "display": "inline-block",
+                                        },
+                                    ),
+                                ],
+                                className="d-flex align-items-center justify-content-end",
+                            )
+                        ],
+                        md=3,
+                    ),
+                ],
+                className="mb-3",
+            ),
+            # Loading area
+            html.Div(id="breakdown-loading"),
+            # Stacked bar chart
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        [
+                                            dcc.Graph(
+                                                id="aws-breakdown-chart",
+                                                style={"height": "600px"},
+                                                config=plotly_config,
+                                            )
+                                        ]
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ],
+                className="mb-4",
+            ),
+            # Summary table
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.Card(
+                                [
+                                    dbc.CardHeader(html.H5("Summary", className="mb-0")),
+                                    dbc.CardBody([html.Div(id="aws-breakdown-table")]),
+                                ]
+                            )
+                        ]
+                    )
+                ],
+                className="mb-4",
+            ),
+        ]
     )
 
 
