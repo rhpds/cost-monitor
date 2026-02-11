@@ -1152,38 +1152,6 @@ async def get_providers():
         raise HTTPException(status_code=500, detail="Error retrieving providers")
 
 
-def _aggregate_breakdown_points(
-    data_points: list[ProviderCostDataPoint], group_by: str
-) -> dict[str, dict[str, Any]]:
-    """Aggregate cost data points into a breakdown map keyed by account or instance type."""
-    items_map: dict[str, dict[str, Any]] = {}
-    for point in data_points:
-        key = (
-            (point.account_id or "unknown")
-            if group_by == "LINKED_ACCOUNT"
-            else (point.service_name or "unknown")
-        )
-
-        if key not in items_map:
-            items_map[key] = {
-                "daily_costs": {},
-                "total_cost": 0.0,
-                "currency": point.currency,
-            }
-
-        date_str = (
-            point.date.strftime("%Y-%m-%d")
-            if isinstance(point.date, date | datetime)
-            else str(point.date)
-        )
-        items_map[key]["daily_costs"][date_str] = (
-            items_map[key]["daily_costs"].get(date_str, 0.0) + point.amount
-        )
-        items_map[key]["total_cost"] += point.amount
-
-    return items_map
-
-
 def _build_breakdown_items(
     items_map: dict[str, dict[str, Any]],
     top_keys: list[str],
@@ -1212,6 +1180,86 @@ def _build_breakdown_items(
     return items
 
 
+async def _query_cost_explorer_breakdown(
+    provider_instance: Any,
+    start_date: date,
+    end_date: date,
+    group_by: str,
+) -> dict[str, dict[str, Any]]:
+    """Query AWS Cost Explorer directly with 1-day chunks to avoid 5000 record truncation.
+
+    Returns an aggregated items_map keyed by account_id or instance_type.
+    """
+    import asyncio
+
+    ce_client = provider_instance.cost_explorer_client
+    if not ce_client:
+        raise ValueError("Cost Explorer client not initialized")
+
+    dimension = "LINKED_ACCOUNT" if group_by == "LINKED_ACCOUNT" else "INSTANCE_TYPE"
+
+    # Build optional filter for instance type queries
+    ce_filter = None
+    if group_by == "INSTANCE_TYPE":
+        ce_filter = {
+            "Dimensions": {
+                "Key": "SERVICE",
+                "Values": ["Amazon Elastic Compute Cloud - Compute"],
+            }
+        }
+
+    items_map: dict[str, dict[str, Any]] = {}
+    current = start_date
+
+    while current <= end_date:
+        # 1-day chunks: CE end date is exclusive, so +1 day
+        chunk_end = current + timedelta(days=1)
+
+        params: dict[str, Any] = {
+            "TimePeriod": {
+                "Start": current.strftime("%Y-%m-%d"),
+                "End": chunk_end.strftime("%Y-%m-%d"),
+            },
+            "Granularity": "DAILY",
+            "Metrics": ["UnblendedCost"],
+            "GroupBy": [{"Type": "DIMENSION", "Key": dimension}],
+        }
+        if ce_filter:
+            params["Filter"] = ce_filter
+
+        try:
+            response = ce_client.get_cost_and_usage(**params)
+
+            for result in response.get("ResultsByTime", []):
+                day_str = result["TimePeriod"]["Start"]
+                for group in result.get("Groups", []):
+                    key = group["Keys"][0]
+                    amount = float(
+                        group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0)
+                    )
+                    if amount <= 0:
+                        continue
+
+                    if key not in items_map:
+                        items_map[key] = {
+                            "daily_costs": {},
+                            "total_cost": 0.0,
+                            "currency": "USD",
+                        }
+                    items_map[key]["daily_costs"][day_str] = (
+                        items_map[key]["daily_costs"].get(day_str, 0.0) + amount
+                    )
+                    items_map[key]["total_cost"] += amount
+
+        except Exception as e:
+            logger.warning(f"AWS CE chunk {current} failed: {e}")
+
+        current = chunk_end
+        await asyncio.sleep(0.1)
+
+    return items_map
+
+
 @app.get("/api/v1/costs/aws/breakdown", response_model=AWSBreakdownResponse)
 async def get_aws_breakdown(
     start_date: date = Query(..., description="Start date (YYYY-MM-DD)"),
@@ -1224,7 +1272,8 @@ async def get_aws_breakdown(
 ):
     """Get AWS cost breakdown by linked account or EC2 instance type.
 
-    Queries AWS Cost Explorer directly for real-time breakdown data.
+    Queries AWS Cost Explorer directly with 1-day chunks to handle large
+    account counts without hitting the 5000 record limit.
     """
     if group_by not in ("LINKED_ACCOUNT", "INSTANCE_TYPE"):
         raise HTTPException(
@@ -1246,32 +1295,21 @@ async def get_aws_breakdown(
         if not auth_result.success:
             raise ValueError(f"AWS authentication failed: {auth_result.error_message}")
 
-        # Build query parameters based on group_by dimension
-        if group_by == "INSTANCE_TYPE":
-            filter_by: dict[str, Any] | None = {
-                "services": ["Amazon Elastic Compute Cloud - Compute"]
-            }
-            dimensions = ["INSTANCE_TYPE"]
-        else:
-            filter_by = None
-            dimensions = ["LINKED_ACCOUNT"]
-
-        cost_summary = await provider_instance.get_cost_data(
-            start_date, end_date, TimeGranularity.DAILY, group_by=dimensions, filter_by=filter_by
+        # Query CE directly with 1-day chunks (bypasses provider's
+        # bulk account name resolution that would timeout with 6000 accounts)
+        items_map = await _query_cost_explorer_breakdown(
+            provider_instance, start_date, end_date, group_by
         )
-
-        items_map = _aggregate_breakdown_points(cost_summary.data_points, group_by)
 
         # Sort by total cost descending and take top N
         sorted_keys = sorted(items_map, key=lambda k: items_map[k]["total_cost"], reverse=True)
         top_keys = sorted_keys[:top_n]
 
-        # Resolve display names for linked accounts
+        # Resolve display names only for the top-N accounts (fast)
+        name_map: dict[str, str] = {}
         if group_by == "LINKED_ACCOUNT":
             account_ids = [k for k in top_keys if k != "unknown"]
             name_map = await provider_instance.resolve_account_names_for_ids(account_ids)
-        else:
-            name_map = {}
 
         items = _build_breakdown_items(items_map, top_keys, group_by, name_map)
         total_cost = sum(d["total_cost"] for d in items_map.values())
