@@ -1291,9 +1291,10 @@ async def get_aws_breakdown(
 
         provider_instance = ProviderFactory.create_provider("aws", provider_config)
 
-        auth_result = await auth_manager.authenticate_provider("aws", provider_config)
-        if not auth_result.success:
-            raise ValueError(f"AWS authentication failed: {auth_result.error_message}")
+        # Must call provider.authenticate() directly so the CE client is created.
+        # auth_manager.authenticate_provider() only validates credentials but
+        # does not initialise the boto3 CE/Organizations clients on the instance.
+        await provider_instance.authenticate()
 
         # Query CE directly with 1-day chunks (bypasses provider's
         # bulk account name resolution that would timeout with 6000 accounts)
