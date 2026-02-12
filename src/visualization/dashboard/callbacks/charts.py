@@ -287,7 +287,7 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
                 ),
                 text=text_labels,
                 textposition="auto",  # Let Plotly decide best position
-                textfont=dict(size=12, color=DashboardTheme.COLORS["text"]),
+                textfont=dict(size=12, color="#1a1b26"),
                 hovertemplate=f"<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{customdata:.2f}}<extra></extra>",
                 customdata=hover_values,
             )
