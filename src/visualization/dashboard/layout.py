@@ -36,44 +36,17 @@ def create_dashboard_layout(dashboard):
     return dbc.Container(
         [
             # Header
-            dbc.Row(
+            html.Div(
                 [
-                    dbc.Col(
-                        [
-                            html.Div(
-                                [
-                                    html.H1(
-                                        "☁️ Multi-Cloud Cost Monitor",
-                                        className="text-center mb-0",
-                                        style={"color": "#7aa2f7", "font-weight": "bold"},
-                                    ),
-                                    dbc.Button(
-                                        "AWS Breakdown",
-                                        id="btn-aws-breakdown",
-                                        color="warning",
-                                        size="sm",
-                                        className="ms-3",
-                                        style={"whiteSpace": "nowrap"},
-                                    ),
-                                    html.A(
-                                        dbc.Button(
-                                            "Parsec AI Explorer",
-                                            color="info",
-                                            size="sm",
-                                            style={"whiteSpace": "nowrap"},
-                                        ),
-                                        href="https://parsec.apps.ocpv-infra01.dal12.infra.demo.redhat.com",
-                                        target="_blank",
-                                        rel="noopener noreferrer",
-                                        className="ms-2",
-                                    ),
-                                ],
-                                className="d-flex align-items-center justify-content-center mb-4",
-                            ),
-                        ]
-                    )
+                    html.Img(
+                        src="/assets/logo.png",
+                        style={
+                            "height": "80px",
+                            "borderRadius": "8px",
+                        },
+                    ),
                 ],
-                className="mb-4",
+                className="mt-2 mb-3",
             ),
             # === Main dashboard content (toggled visibility) ===
             html.Div(
@@ -88,7 +61,7 @@ def create_dashboard_layout(dashboard):
                     ),
                     # Loading banner
                     dbc.Row([dbc.Col([html.Div(id="loading-banner")])], className="mb-3"),
-                    # Date range controls
+                    # Date range controls + nav buttons
                     dbc.Row(
                         [
                             dbc.Col(
@@ -137,8 +110,36 @@ def create_dashboard_layout(dashboard):
                                         style={"width": "fit-content"},
                                     ),
                                 ],
-                                lg=12,
-                            )
+                            ),
+                            dbc.Col(
+                                [
+                                    html.Div(
+                                        [
+                                            dbc.Button(
+                                                "AWS Breakdown",
+                                                id="btn-aws-breakdown",
+                                                color="warning",
+                                                size="sm",
+                                                style={"whiteSpace": "nowrap"},
+                                            ),
+                                            html.A(
+                                                dbc.Button(
+                                                    "Parsec AI Explorer",
+                                                    color="info",
+                                                    size="sm",
+                                                    style={"whiteSpace": "nowrap"},
+                                                ),
+                                                href="https://parsec.apps.ocpv-infra01.dal12.infra.demo.redhat.com",
+                                                target="_blank",
+                                                rel="noopener noreferrer",
+                                                className="ms-2",
+                                            ),
+                                        ],
+                                        className="d-flex align-items-center",
+                                    ),
+                                ],
+                                className="d-flex align-items-start pt-4",
+                            ),
                         ],
                         className="mb-4",
                     ),

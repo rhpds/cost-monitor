@@ -1,3 +1,21 @@
+/* Make date picker arrow bigger and bolder */
+.DateRangePickerInput {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+}
+.DateRangePickerInput_arrow {
+    padding: 0 8px !important;
+    flex-shrink: 0 !important;
+}
+.DateRangePickerInput_arrow_svg {
+    width: 28px !important;
+    height: 28px !important;
+    fill: #565f89 !important;
+    stroke: #565f89 !important;
+    stroke-width: 100 !important;
+}
+
 /* Hide Dash debug indicators */
 ._dash-debug-alert {
     display: none !important;

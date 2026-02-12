@@ -8,6 +8,7 @@ layout setup, and helper methods.
 import logging
 import time
 from datetime import date, timedelta
+from pathlib import Path
 
 from .data_manager import CostDataManager
 from .themes import DashboardTheme
@@ -89,11 +90,13 @@ class CostMonitorDashboard:
 
         # Initialize Dash app
         logger.debug("Creating Dash app with styling...")
+        # Use project root assets folder (not relative to this module)
+        project_root = Path(__file__).resolve().parents[3]
         self.app = dash.Dash(
             __name__,
             external_stylesheets=[dbc.themes.DARKLY, dbc.icons.FONT_AWESOME],
             title="Multi-Cloud Cost Monitor",
-            assets_folder="assets",
+            assets_folder=str(project_root / "assets"),
         )
 
         # Add custom CSS for spinner animation
