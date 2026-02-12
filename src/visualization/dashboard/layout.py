@@ -55,6 +55,18 @@ def create_dashboard_layout(dashboard):
                                         className="ms-3",
                                         style={"whiteSpace": "nowrap"},
                                     ),
+                                    html.A(
+                                        dbc.Button(
+                                            "Parsec AI Explorer",
+                                            color="info",
+                                            size="sm",
+                                            style={"whiteSpace": "nowrap"},
+                                        ),
+                                        href="https://parsec.apps.ocpv-infra01.dal12.infra.demo.redhat.com",
+                                        target="_blank",
+                                        rel="noopener noreferrer",
+                                        className="ms-2",
+                                    ),
                                 ],
                                 className="d-flex align-items-center justify-content-center mb-4",
                             ),
