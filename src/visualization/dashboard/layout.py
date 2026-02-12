@@ -45,7 +45,7 @@ def create_dashboard_layout(dashboard):
                                     html.H1(
                                         "☁️ Multi-Cloud Cost Monitor",
                                         className="text-center mb-0",
-                                        style={"color": "#2E86AB", "font-weight": "bold"},
+                                        style={"color": "#7aa2f7", "font-weight": "bold"},
                                     ),
                                     dbc.Button(
                                         "AWS Breakdown",
@@ -519,7 +519,7 @@ def _create_aws_breakdown_section(plotly_config):
                                     html.H3(
                                         "AWS Cost Breakdown",
                                         className="mb-0",
-                                        style={"color": "#FF9900"},
+                                        style={"color": "#ff9e64"},
                                     ),
                                 ],
                                 className="d-flex align-items-center",

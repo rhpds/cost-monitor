@@ -1,5 +1,5 @@
 # OAuth-compatible route patches template
-# Replace YOUR_CLUSTER_DOMAIN with your actual OpenShift cluster domain
+# Replace YOUR_NAMESPACE and YOUR_CLUSTER_DOMAIN with your actual values
 # Note: data-api-route removed - API is now internal only for security
 
 ---
@@ -9,7 +9,7 @@ kind: Route
 metadata:
   name: dashboard-route
 spec:
-  host: cost-monitor.YOUR_CLUSTER_DOMAIN
+  host: YOUR_NAMESPACE.YOUR_CLUSTER_DOMAIN
 
 ---
 # Health check route (direct access for monitoring)
@@ -18,4 +18,4 @@ kind: Route
 metadata:
   name: health-route
 spec:
-  host: cost-health.YOUR_CLUSTER_DOMAIN
+  host: health-YOUR_NAMESPACE.YOUR_CLUSTER_DOMAIN

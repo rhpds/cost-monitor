@@ -72,14 +72,16 @@ def _setup_loading_callbacks(dashboard):
                             html.H5(
                                 "🔄 Loading Cost Data",
                                 className="mb-1",
-                                style={"color": "#004085"},
+                                style={"color": "#7aa2f7"},
                             ),
                             html.P(
-                                f"Fetching data for {start_date} to {end_date}..."
-                                if start_date and end_date
-                                else "Loading cost information...",
+                                (
+                                    f"Fetching data for {start_date} to {end_date}..."
+                                    if start_date and end_date
+                                    else "Loading cost information..."
+                                ),
                                 className="mb-0",
-                                style={"fontSize": "0.9rem", "color": "#004085"},
+                                style={"fontSize": "0.9rem", "color": "#c0caf5"},
                             ),
                         ]
                     ),

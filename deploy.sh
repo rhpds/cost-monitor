@@ -123,6 +123,7 @@ eval $SED_CMD "\"s|YOUR_REGISTRY_URL|${IMAGE_REGISTRY}|g\"" "$LOCAL_OVERLAY_DIR/
 eval $SED_CMD "\"s|^namespace: cost-monitor|namespace: ${NAMESPACE}|g\"" "$LOCAL_OVERLAY_DIR/kustomization.yaml"
 
 # Replace placeholders in routes-patch.yaml
+eval $SED_CMD "\"s|YOUR_NAMESPACE|${NAMESPACE}|g\"" "$LOCAL_OVERLAY_DIR/routes-patch.yaml"
 eval $SED_CMD "\"s|YOUR_CLUSTER_DOMAIN|${CLUSTER_DOMAIN}|g\"" "$LOCAL_OVERLAY_DIR/routes-patch.yaml"
 
 echo -e "${GREEN}✅ Local overlay generated${NC}"
@@ -488,7 +489,7 @@ configure_oauth_files() {
     local oauth_routes_base="openshift/base/auth/oauth-routes.yaml"
     local oauth_routes_patch="$LOCAL_OVERLAY_DIR/auth-patches/oauth-routes-patch.yaml"
     if [ -f "$oauth_routes_base" ]; then
-        sed -e "s|health-cost-monitor\\.apps\\.cluster\\.local|health-cost-monitor.${CLUSTER_DOMAIN}|g" \
+        sed -e "s|health-cost-monitor\\.apps\\.cluster\\.local|health-${NAMESPACE}.${CLUSTER_DOMAIN}|g" \
             "$oauth_routes_base" > "$oauth_routes_patch"
         echo "Created OAuth routes patch: $oauth_routes_patch"
     fi
@@ -499,7 +500,7 @@ configure_oauth_files() {
     if [ -f "$oauth_rbac_base" ]; then
         # Determine the redirect URI based on environment
         # Match the auto-generated route name pattern: <route-name>-<namespace>.<domain>
-        local redirect_uri="https://dashboard-route-${NAMESPACE}.${CLUSTER_DOMAIN}/oauth/callback"
+        local redirect_uri="https://${NAMESPACE}.${CLUSTER_DOMAIN}/oauth/callback"
 
         # Update OAuth RBAC with correct redirect URI and generated client secret
         # Keep the original names - dev environment will use JSON patch to rename OAuth client
@@ -856,7 +857,7 @@ else
         echo -e "${BLUE}🔐 OAuth-Protected URLs:${NC}"
         DASHBOARD_URL=$(oc get route dashboard-route -n ${NAMESPACE} -o jsonpath='{.spec.host}' 2>/dev/null || echo "dashboard-route-${NAMESPACE}.${CLUSTER_DOMAIN}")
         echo -e "${BLUE}Dashboard URL (OAuth):${NC} https://${DASHBOARD_URL}"
-        echo -e "${BLUE}Health URL (Direct):${NC} https://health-cost-monitor.${CLUSTER_DOMAIN}/health"
+        echo -e "${BLUE}Health URL (Direct):${NC} https://health-${NAMESPACE}.${CLUSTER_DOMAIN}/health"
         echo ""
         echo -e "${YELLOW}📝 OAuth Information:${NC}"
         echo -e "   • Dashboard access requires OpenShift login"
@@ -864,9 +865,9 @@ else
         echo -e "   • Health checks available for monitoring tools"
     else
         echo -e "${BLUE}📖 Standard URLs:${NC}"
-        echo -e "${BLUE}Dashboard URL:${NC} https://cost-monitor.${CLUSTER_DOMAIN}"
-        echo -e "${BLUE}API URL:${NC} https://cost-api.${CLUSTER_DOMAIN}/api"
-        echo -e "${BLUE}Health URL:${NC} https://cost-health.${CLUSTER_DOMAIN}/health"
+        echo -e "${BLUE}Dashboard URL:${NC} https://${NAMESPACE}.${CLUSTER_DOMAIN}"
+        echo -e "${BLUE}API URL:${NC} https://api-${NAMESPACE}.${CLUSTER_DOMAIN}/api"
+        echo -e "${BLUE}Health URL:${NC} https://health-${NAMESPACE}.${CLUSTER_DOMAIN}/health"
     fi
     echo ""
     echo -e "${YELLOW}🪝 GitHub Webhook Configuration:${NC}"
@@ -913,6 +914,6 @@ else
         echo -e "   ${YELLOW}oc logs -f deployment/cost-data-service -n ${NAMESPACE}${NC}"
         echo -e "   ${YELLOW}oc logs -f dc/cost-monitor-dashboard -n ${NAMESPACE}${NC}"
         echo ""
-        echo -e "3. Access the dashboard at: ${BLUE}https://cost-monitor.${CLUSTER_DOMAIN}${NC}"
+        echo -e "3. Access the dashboard at: ${BLUE}https://${NAMESPACE}.${CLUSTER_DOMAIN}${NC}"
     fi
 fi

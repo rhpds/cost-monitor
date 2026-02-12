@@ -17,33 +17,33 @@ from ..themes import DashboardTheme
 
 logger = logging.getLogger(__name__)
 
-# Color palette for breakdown items (distinct from provider colors)
+# Color palette for breakdown items (Tokyonight-inspired)
 BREAKDOWN_COLORS = [
-    "#FF9900",  # AWS orange
-    "#146EB4",  # AWS dark blue
-    "#232F3E",  # AWS squid ink
-    "#FF6600",
-    "#1A8CFF",
-    "#00A1C9",
-    "#D45B07",
-    "#7D8998",
-    "#2E73B8",
-    "#E07941",
-    "#3F8624",
-    "#8C4FFF",
-    "#C7511F",
-    "#007185",
-    "#B12704",
-    "#067D68",
-    "#CC5500",
-    "#5C687A",
-    "#DD4477",
-    "#316395",
-    "#994499",
-    "#22AA99",
-    "#AAAA11",
-    "#6633CC",
-    "#E67300",
+    "#7aa2f7",  # Periwinkle blue
+    "#9ece6a",  # Lime green
+    "#e0af68",  # Golden yellow
+    "#f7768e",  # Soft pink-red
+    "#bb9af7",  # Purple
+    "#7dcfff",  # Cyan
+    "#73daca",  # Teal
+    "#ff9e64",  # Orange
+    "#c0caf5",  # Lavender
+    "#a9b1d6",  # Muted lavender
+    "#2ac3de",  # Bright cyan
+    "#b4f9f8",  # Light teal
+    "#ff7a93",  # Light pink
+    "#c3e88d",  # Light green
+    "#ffc777",  # Light gold
+    "#c099ff",  # Light purple
+    "#4fd6be",  # Bright teal
+    "#fc7b7b",  # Coral
+    "#86e1fc",  # Sky blue
+    "#c8d3f5",  # Pale lavender
+    "#82aaff",  # Blue
+    "#fca7ea",  # Pink
+    "#41a6b5",  # Dark teal
+    "#9d7cd8",  # Medium purple
+    "#394b70",  # Deep blue-gray
 ]
 
 
@@ -183,11 +183,14 @@ def _setup_chart_callback(dashboard):
                 x=0.5,
                 y=0.5,
                 showarrow=False,
-                font=dict(size=16, color="gray"),
+                font=dict(size=16, color=DashboardTheme.COLORS["text_muted"]),
             )
             fig.update_layout(
                 xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
                 yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+                paper_bgcolor=DashboardTheme.COLORS["background"],
+                plot_bgcolor=DashboardTheme.COLORS["background"],
+                font=dict(color=DashboardTheme.COLORS["text"]),
                 **DashboardTheme.LAYOUT,
             )
             return fig
@@ -203,7 +206,12 @@ def _setup_chart_callback(dashboard):
 
         if not sorted_dates:
             fig = go.Figure()
-            fig.update_layout(**DashboardTheme.LAYOUT)
+            fig.update_layout(
+                paper_bgcolor=DashboardTheme.COLORS["background"],
+                plot_bgcolor=DashboardTheme.COLORS["background"],
+                font=dict(color=DashboardTheme.COLORS["text"]),
+                **DashboardTheme.LAYOUT,
+            )
             return fig
 
         fig = go.Figure()
@@ -242,11 +250,15 @@ def _setup_chart_callback(dashboard):
             barmode="stack",
             xaxis_title="Date",
             yaxis_title="Cost ($)",
-            yaxis=dict(tickformat="$,.0f"),
+            yaxis=dict(
+                tickformat="$,.0f",
+                gridcolor="rgba(59,66,97,0.5)",
+            ),
             xaxis=dict(
                 tickmode="linear",
                 dtick="D1" if len(sorted_dates) <= 31 else "D7",
                 tickangle=-45,
+                gridcolor="rgba(59,66,97,0.3)",
             ),
             legend=dict(
                 orientation="h",
@@ -254,10 +266,13 @@ def _setup_chart_callback(dashboard):
                 y=-0.2,
                 xanchor="center",
                 x=0.5,
-                font=dict(size=10),
+                font=dict(size=10, color=DashboardTheme.COLORS["text"]),
             ),
+            paper_bgcolor=DashboardTheme.COLORS["background"],
+            plot_bgcolor=DashboardTheme.COLORS["background"],
             font_family=DashboardTheme.LAYOUT["font_family"],
             font_size=DashboardTheme.LAYOUT["font_size"],
+            font_color=DashboardTheme.COLORS["text"],
             margin={"l": 60, "r": 20, "t": 40, "b": 120},
         )
 

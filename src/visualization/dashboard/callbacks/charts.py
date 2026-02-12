@@ -150,12 +150,15 @@ def _create_loading_chart(title):
         xanchor="center",
         yanchor="middle",
         showarrow=False,
-        font=dict(size=16, color="gray"),
+        font=dict(size=16, color=DashboardTheme.COLORS["text_muted"]),
     )
     loading_fig.update_layout(
         title=title,
         xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
         yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        paper_bgcolor=DashboardTheme.COLORS["background"],
+        plot_bgcolor=DashboardTheme.COLORS["background"],
+        font=dict(color=DashboardTheme.COLORS["text"]),
         **DashboardTheme.LAYOUT,
     )
     return loading_fig
@@ -169,7 +172,7 @@ def _create_no_data_chart(title):
 
     # Show N/C/Y bars for all providers
     providers = ["AWS", "Azure", "GCP"]
-    colors = ["#ff9800", "#00bcd4", "#4caf50"]  # AWS orange, Azure cyan, GCP green
+    colors = ["#ff9e64", "#7aa2f7", "#9ece6a"]  # AWS orange, Azure blue, GCP green
     today_str = date.today().strftime("%Y-%m-%d")
 
     for _, (provider, color) in enumerate(zip(providers, colors, strict=False)):
@@ -181,7 +184,7 @@ def _create_no_data_chart(title):
                 marker=dict(color=color, opacity=0.3),
                 text=["N/C/Y"],
                 textposition="inside",
-                textfont=dict(size=14, color="gray"),
+                textfont=dict(size=14, color=DashboardTheme.COLORS["text_muted"]),
                 hovertemplate=f"<b>{provider}</b><br>Date: %{{x}}<br>Cost: No Cost Yet<extra></extra>",
             )
         )
@@ -190,6 +193,9 @@ def _create_no_data_chart(title):
         title=title,
         xaxis_title="Date",
         barmode="group",
+        paper_bgcolor=DashboardTheme.COLORS["background"],
+        plot_bgcolor=DashboardTheme.COLORS["background"],
+        font=dict(color=DashboardTheme.COLORS["text"]),
         **DashboardTheme.LAYOUT,
         yaxis=dict(range=[0, 1], title="Cost ($)"),  # Small range to show the N/C/Y text clearly
         annotations=[
@@ -202,7 +208,7 @@ def _create_no_data_chart(title):
                 xanchor="left",
                 yanchor="bottom",
                 showarrow=False,
-                font=dict(size=12, color="gray"),
+                font=dict(size=12, color=DashboardTheme.COLORS["text_muted"]),
             )
         ],
     )
@@ -283,11 +289,11 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
                 name=provider.upper(),
                 marker=dict(
                     color=marker_colors,
-                    line=dict(width=1, color="rgba(0,0,0,0.3)"),
+                    line=dict(width=1, color="rgba(59,66,97,0.5)"),
                 ),
                 text=text_labels,
                 textposition="auto",  # Let Plotly decide best position
-                textfont=dict(size=12, color="black"),
+                textfont=dict(size=12, color=DashboardTheme.COLORS["text"]),
                 hovertemplate=f"<b>{provider.upper()}</b><br>Date: %{{x}}<br>Cost: $%{{customdata:.2f}}<extra></extra>",
                 customdata=hover_values,
             )
@@ -361,7 +367,7 @@ def _update_chart_layout(fig, selected_provider, use_log_scale=False):
 
     yaxis_config = dict(
         tickformat="$,.0f",
-        gridcolor="rgba(200,200,200,0.3)",
+        gridcolor="rgba(59,66,97,0.5)",
     )
 
     if use_log_scale:
@@ -371,6 +377,9 @@ def _update_chart_layout(fig, selected_provider, use_log_scale=False):
         title=title,
         xaxis_title="Date",
         yaxis_title="Cost ($)" + (" - Logarithmic" if use_log_scale else ""),
+        paper_bgcolor=DashboardTheme.COLORS["background"],
+        plot_bgcolor=DashboardTheme.COLORS["background"],
+        font=dict(color=DashboardTheme.COLORS["text"]),
         **DashboardTheme.LAYOUT,
         hovermode="x unified",
         showlegend=selected_provider == "all",
@@ -379,6 +388,7 @@ def _update_chart_layout(fig, selected_provider, use_log_scale=False):
             tickmode="linear",
             dtick="D1" if len(fig.data[0].x if fig.data else []) <= 31 else "D7",
             tickangle=-45,
+            gridcolor="rgba(59,66,97,0.3)",
         ),
         yaxis=yaxis_config,
     )
@@ -400,9 +410,9 @@ def _update_chart_layout(fig, selected_provider, use_log_scale=False):
             xanchor="left",
             yanchor="bottom",
             showarrow=False,
-            font=dict(size=10, color="gray"),
-            bgcolor="rgba(255,255,255,0.8)",
-            bordercolor="rgba(200,200,200,0.5)",
+            font=dict(size=10, color=DashboardTheme.COLORS["text_muted"]),
+            bgcolor="rgba(30,32,48,0.9)",
+            bordercolor="rgba(59,66,97,0.5)",
             borderwidth=1,
         )
 
@@ -448,6 +458,9 @@ def _setup_provider_breakdown_callback(dashboard):
 
         fig.update_layout(
             title="Cost by Provider",
+            paper_bgcolor=DashboardTheme.COLORS["background"],
+            plot_bgcolor=DashboardTheme.COLORS["background"],
+            font=dict(color=DashboardTheme.COLORS["text"]),
             **DashboardTheme.LAYOUT,
             annotations=[
                 dict(
@@ -455,6 +468,7 @@ def _setup_provider_breakdown_callback(dashboard):
                     x=0.5,
                     y=0.5,
                     font_size=14,
+                    font_color=DashboardTheme.COLORS["text"],
                     showarrow=False,
                 )
             ],
@@ -539,6 +553,9 @@ def _setup_service_breakdown_callback(dashboard):
             xaxis_type="log",  # Use logarithmic scale for cost differences
             yaxis_title="Service",
             height=400,
+            paper_bgcolor=DashboardTheme.COLORS["background"],
+            plot_bgcolor=DashboardTheme.COLORS["background"],
+            font=dict(color=DashboardTheme.COLORS["text"]),
             **DashboardTheme.LAYOUT,
         )
 

@@ -91,7 +91,7 @@ class CostMonitorDashboard:
         logger.debug("Creating Dash app with styling...")
         self.app = dash.Dash(
             __name__,
-            external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
+            external_stylesheets=[dbc.themes.DARKLY, dbc.icons.FONT_AWESOME],
             title="Multi-Cloud Cost Monitor",
             assets_folder="assets",
         )
@@ -116,6 +116,23 @@ class CostMonitorDashboard:
                 {%favicon%}
                 {%css%}
                 <style>
+                :root {
+                    --bg: #1a1b26;
+                    --bg-surface: #24283b;
+                    --bg-tool: #1e2030;
+                    --text: #c0caf5;
+                    --text-muted: #565f89;
+                    --accent: #7aa2f7;
+                    --accent-dim: #3d59a1;
+                    --border: #3b4261;
+                    --success: #9ece6a;
+                    --error: #f7768e;
+                    --warning: #e0af68;
+                }
+                body {
+                    background-color: var(--bg) !important;
+                    color: var(--text) !important;
+                }
                 @keyframes spin {
                     0% { transform: rotate(0deg); }
                     100% { transform: rotate(360deg); }
@@ -129,13 +146,174 @@ class CostMonitorDashboard:
                     align-items: center;
                     height: 200px;
                     font-size: 18px;
-                    color: #6c757d;
+                    color: var(--text-muted);
                 }
                 .metric-card {
                     transition: transform 0.2s ease-in-out;
                 }
                 .metric-card:hover {
                     transform: translateY(-2px);
+                }
+                .container-fluid {
+                    background-color: var(--bg) !important;
+                }
+                .card {
+                    background-color: var(--bg-surface) !important;
+                    border-color: var(--border) !important;
+                    color: var(--text) !important;
+                }
+                .card-header {
+                    background-color: var(--bg-tool) !important;
+                    border-bottom-color: var(--border) !important;
+                    color: var(--text) !important;
+                }
+                .card-body {
+                    background-color: var(--bg-surface) !important;
+                    color: var(--text) !important;
+                }
+                .text-primary {
+                    color: var(--accent) !important;
+                }
+                .text-info {
+                    color: #7dcfff !important;
+                }
+                .text-warning {
+                    color: var(--warning) !important;
+                }
+                .text-danger {
+                    color: var(--error) !important;
+                }
+                .text-success {
+                    color: var(--success) !important;
+                }
+                .text-muted {
+                    color: var(--text-muted) !important;
+                }
+                h1, h2, h3, h4, h5, h6 {
+                    color: var(--text) !important;
+                }
+                .form-select, .form-control {
+                    background-color: var(--bg-surface) !important;
+                    border-color: var(--border) !important;
+                    color: var(--text) !important;
+                }
+                .form-select:focus, .form-control:focus {
+                    border-color: var(--accent) !important;
+                    box-shadow: 0 0 0 0.2rem rgba(122, 162, 247, 0.25) !important;
+                }
+                .btn-outline-secondary {
+                    color: var(--text-muted) !important;
+                    border-color: var(--border) !important;
+                }
+                .btn-outline-secondary:hover {
+                    background-color: var(--bg-tool) !important;
+                    color: var(--text) !important;
+                    border-color: var(--accent) !important;
+                }
+                .btn-primary {
+                    background-color: var(--accent) !important;
+                    border-color: var(--accent) !important;
+                    color: var(--bg) !important;
+                }
+                .btn-primary:hover {
+                    background-color: #89b4fa !important;
+                    border-color: #89b4fa !important;
+                }
+                .btn-success {
+                    background-color: var(--success) !important;
+                    border-color: var(--success) !important;
+                    color: var(--bg) !important;
+                }
+                .btn-warning {
+                    background-color: var(--warning) !important;
+                    border-color: var(--warning) !important;
+                    color: var(--bg) !important;
+                }
+                .btn-info {
+                    background-color: #7dcfff !important;
+                    border-color: #7dcfff !important;
+                    color: var(--bg) !important;
+                }
+                .btn-secondary {
+                    background-color: var(--accent-dim) !important;
+                    border-color: var(--border) !important;
+                    color: var(--text) !important;
+                }
+                .alert-info {
+                    background-color: rgba(122, 162, 247, 0.15) !important;
+                    border-color: var(--accent-dim) !important;
+                    color: var(--text) !important;
+                }
+                .alert-warning {
+                    background-color: rgba(224, 175, 104, 0.15) !important;
+                    border-color: var(--warning) !important;
+                    color: var(--text) !important;
+                }
+                .alert-danger {
+                    background-color: rgba(247, 118, 142, 0.15) !important;
+                    border-color: var(--error) !important;
+                    color: var(--text) !important;
+                }
+                .table {
+                    color: var(--text) !important;
+                    --bs-table-bg: var(--bg-surface);
+                    --bs-table-striped-bg: var(--bg-tool);
+                    --bs-table-hover-bg: var(--accent-dim);
+                    --bs-table-border-color: var(--border);
+                }
+                .table thead th {
+                    background-color: var(--bg) !important;
+                    color: var(--accent) !important;
+                    border-color: var(--border) !important;
+                    font-weight: 600;
+                }
+                .table td, .table th {
+                    border-color: var(--border) !important;
+                }
+                .dash-table-container .dash-spreadsheet-container {
+                    background-color: var(--bg-surface) !important;
+                }
+                .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th,
+                .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner td {
+                    color: var(--text) !important;
+                }
+                .form-check-input:checked {
+                    background-color: var(--accent) !important;
+                    border-color: var(--accent) !important;
+                }
+                .form-check-label {
+                    color: var(--text) !important;
+                }
+                .DateInput_input {
+                    background-color: var(--bg-surface) !important;
+                    color: var(--text) !important;
+                    border-color: var(--border) !important;
+                }
+                .DateRangePickerInput {
+                    background-color: var(--bg-surface) !important;
+                    border-color: var(--border) !important;
+                }
+                .DateRangePickerInput_arrow_svg {
+                    fill: var(--text-muted) !important;
+                }
+                a {
+                    color: var(--accent);
+                }
+                a:hover {
+                    color: #89b4fa;
+                }
+                ::-webkit-scrollbar {
+                    width: 6px;
+                }
+                ::-webkit-scrollbar-track {
+                    background: transparent;
+                }
+                ::-webkit-scrollbar-thumb {
+                    background: var(--border);
+                    border-radius: 3px;
+                }
+                ::-webkit-scrollbar-thumb:hover {
+                    background: var(--text-muted);
                 }
                 </style>
             </head>
@@ -212,12 +390,15 @@ class CostMonitorDashboard:
             xanchor="center",
             yanchor="middle",
             showarrow=False,
-            font=dict(size=16, color="gray"),
+            font=dict(size=16, color=DashboardTheme.COLORS["text_muted"]),
         )
         loading_fig.update_layout(
             title=title,
             xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
             yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+            paper_bgcolor=DashboardTheme.COLORS["background"],
+            plot_bgcolor=DashboardTheme.COLORS["background"],
+            font=dict(color=DashboardTheme.COLORS["text"]),
             **DashboardTheme.LAYOUT,
         )
         return loading_fig

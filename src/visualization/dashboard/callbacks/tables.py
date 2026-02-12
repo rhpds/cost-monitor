@@ -86,19 +86,31 @@ def _setup_account_breakdown_callback(dashboard):
                 {"name": "Cost", "id": "Cost"},
                 {"name": "Currency", "id": "Currency"},
             ],
-            style_cell={"textAlign": "left", "padding": "10px"},
-            style_header={
-                "backgroundColor": DashboardTheme.COLORS.get("primary", "#2E86AB"),
-                "color": "white",
-                "fontWeight": "bold",
+            style_cell={
+                "textAlign": "left",
+                "padding": "10px",
+                "color": DashboardTheme.COLORS["text"],
+                "borderColor": DashboardTheme.COLORS["border"],
             },
-            style_data={"backgroundColor": "white"},
+            style_header={
+                "backgroundColor": DashboardTheme.COLORS["background"],
+                "color": DashboardTheme.COLORS["accent"],
+                "fontWeight": "bold",
+                "borderColor": DashboardTheme.COLORS["border"],
+            },
+            style_data={
+                "backgroundColor": DashboardTheme.COLORS["surface"],
+            },
             style_data_conditional=[
                 {
                     "if": {"row_index": "odd"},
-                    "backgroundColor": "rgb(248, 248, 248)",
+                    "backgroundColor": DashboardTheme.COLORS.get("light", "#24283b"),
                 }
             ],
+            style_filter={
+                "backgroundColor": DashboardTheme.COLORS["surface"],
+                "color": DashboardTheme.COLORS["text"],
+            },
             page_size=20,
             page_action="native",
             sort_action="native",
@@ -162,17 +174,25 @@ def _setup_cost_data_table_callback(dashboard):
                 {"name": "GCP", "id": "GCP"},
                 {"name": "Total", "id": "Total"},
             ],
-            style_cell={"textAlign": "left", "padding": "10px"},
-            style_header={
-                "backgroundColor": DashboardTheme.COLORS.get("primary", "#2E86AB"),
-                "color": "white",
-                "fontWeight": "bold",
+            style_cell={
+                "textAlign": "left",
+                "padding": "10px",
+                "color": DashboardTheme.COLORS["text"],
+                "borderColor": DashboardTheme.COLORS["border"],
             },
-            style_data={"backgroundColor": "white"},
+            style_header={
+                "backgroundColor": DashboardTheme.COLORS["background"],
+                "color": DashboardTheme.COLORS["accent"],
+                "fontWeight": "bold",
+                "borderColor": DashboardTheme.COLORS["border"],
+            },
+            style_data={
+                "backgroundColor": DashboardTheme.COLORS["surface"],
+            },
             style_data_conditional=[
                 {
                     "if": {"row_index": "odd"},
-                    "backgroundColor": "rgb(248, 248, 248)",
+                    "backgroundColor": DashboardTheme.COLORS.get("light", "#24283b"),
                 }
             ],
             page_size=15,
