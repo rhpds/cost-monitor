@@ -524,6 +524,44 @@ curl "http://localhost:8000/api/v1/costs/summary?start_date=2026-02-01&end_date=
 ./scripts/dev-local-to-ocp.sh cost-monitor-dev restart api
 ```
 
+## Visual Testing with Playwright MCP
+
+The project includes a Playwright MCP server (configured in `.mcp.json`) for visually inspecting the deployed dashboard. This is useful for debugging chart rendering, CSS issues, and layout problems that can't be caught from code alone.
+
+### Credentials
+
+Dashboard login credentials are stored in `.playwright-credentials.yaml` (git-ignored). Read this file to get the username and password before logging in.
+
+### Accessing the Dashboard
+
+The dashboard is behind Red Hat SSO (OAuth proxy). To access it via Playwright:
+
+1. **Get the dashboard URL** from the OpenShift route:
+   - **Prod**: `oc get route dashboard-route -n cost-monitor -o jsonpath='{.spec.host}'`
+   - **Dev**: `oc get route dashboard-route -n cost-monitor-dev -o jsonpath='{.spec.host}'`
+   - Navigate to `https://<host>` from the output
+2. **Click** "Log in with OpenShift" button
+3. The SSO login page will appear at `auth.redhat.com` - **fill in** the username and password from `.playwright-credentials.yaml`
+4. **Click** "Log in to SSO"
+5. If a redirect page appears, click the redirect link or wait for auto-redirect
+
+### Common Playwright Workflows
+
+**Take a full-page screenshot** to see overall dashboard state:
+- Use `browser_take_screenshot` with `fullPage: true`
+
+**Inspect chart rendering** when charts appear blank or broken:
+- Use `browser_evaluate` to inspect SVG structure, bar colors, clip-paths, and computed styles
+- Check for callback errors in `browser_console_messages`
+
+**Test CSS fixes live** before committing:
+- Use `browser_evaluate` to modify styles in-place and verify the fix visually
+
+### Known Plotly Dark Theme Pitfalls
+
+- Plotly creates multiple stacked `svg.main-svg` elements per chart. CSS rules targeting `.main-svg` must use `:first-child` / `:not(:first-child)` to avoid making overlay SVGs opaque.
+- Never pass `paper_bgcolor`, `plot_bgcolor`, or `font=dict(color=...)` explicitly alongside `**DashboardTheme.LAYOUT` - this causes `TypeError` from duplicate kwargs and crashes the chart callback silently.
+
 ## Code Quality Standards
 
 This project enforces strict code quality standards through automated pre-commit hooks. All code must pass these standards before being committed.

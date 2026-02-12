@@ -212,3 +212,10 @@ CLAUDE-TEST-HARNESS.md
 test-harness.sh
 .env.local
 venv-*/
+
+# Playwright
+.playwright-credentials.yaml
+.playwright-mcp/
+
+# Claude session state
+.claude-session-state.md
