@@ -285,11 +285,16 @@ class CostMonitorDashboard:
                     color: var(--text) !important;
                 }
                 /* Date picker - all elements */
+                .DateRangePicker, .DateRangePicker_1,
+                .DateRangePickerInput, .DateRangePickerInput_1,
+                .DateRangePickerInput__withBorder,
                 .DateInput, .DateInput_1 {
                     background-color: var(--bg-surface) !important;
+                    background: var(--bg-surface) !important;
                 }
                 .DateInput_input, .DateInput_input_1 {
                     background-color: var(--bg-surface) !important;
+                    background: var(--bg-surface) !important;
                     color: var(--text) !important;
                     border-color: var(--border) !important;
                     border-bottom: 2px solid var(--border) !important;
@@ -297,9 +302,11 @@ class CostMonitorDashboard:
                 .DateInput_input__focused {
                     border-bottom: 2px solid var(--accent) !important;
                 }
-                .DateRangePickerInput, .DateRangePickerInput_1 {
-                    background-color: var(--bg-surface) !important;
-                    border-color: var(--border) !important;
+                .DateInput_fang {
+                    display: none !important;
+                }
+                .DateRangePickerInput, .DateRangePickerInput_1,
+                .DateRangePickerInput__withBorder {
                     border: 1px solid var(--border) !important;
                     border-radius: 6px !important;
                 }

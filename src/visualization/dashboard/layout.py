@@ -98,65 +98,43 @@ def create_dashboard_layout(dashboard):
                                         [
                                             dbc.CardBody(
                                                 [
-                                                    dbc.Row(
+                                                    html.Div(
                                                         [
-                                                            dbc.Col(
-                                                                [
-                                                                    html.Div(
-                                                                        [
-                                                                            dcc.DatePickerRange(
-                                                                                id="date-range-picker",
-                                                                                start_date=date.today().replace(
-                                                                                    day=1
-                                                                                ),
-                                                                                end_date=date.today(),
-                                                                                display_format="YYYY-MM-DD",
-                                                                                style={
-                                                                                    "width": "auto"
-                                                                                },
-                                                                            ),
-                                                                            dbc.Button(
-                                                                                "Apply",
-                                                                                id="btn-apply-dates",
-                                                                                color="success",
-                                                                                size="sm",
-                                                                                style={
-                                                                                    "marginLeft": "8px"
-                                                                                },
-                                                                            ),
-                                                                        ],
-                                                                        style={
-                                                                            "alignItems": "center",
-                                                                            "display": "flex",
-                                                                        },
-                                                                    )
-                                                                ],
-                                                                md=12,
+                                                            dcc.DatePickerRange(
+                                                                id="date-range-picker",
+                                                                start_date=date.today().replace(
+                                                                    day=1
+                                                                ),
+                                                                end_date=date.today(),
+                                                                display_format="YYYY-MM-DD",
+                                                                style={
+                                                                    "width": "auto"
+                                                                },
                                                             ),
-                                                        ]
+                                                            dbc.Button(
+                                                                "Apply",
+                                                                id="btn-apply-dates",
+                                                                color="success",
+                                                                size="sm",
+                                                                className="ms-2",
+                                                            ),
+                                                        ],
+                                                        className="d-flex align-items-center",
                                                     ),
-                                                    dbc.Row(
+                                                    html.Div(
                                                         [
-                                                            dbc.Col(
-                                                                [
-                                                                    html.Div(
-                                                                        [
-                                                                            html.Small(
-                                                                                "Quick ranges: ",
-                                                                                className="text-muted me-2",
-                                                                            ),
-                                                                            _create_quick_date_buttons(),
-                                                                        ],
-                                                                        className="d-flex align-items-center mt-2",
-                                                                    )
-                                                                ],
-                                                                md=12,
+                                                            html.Small(
+                                                                "Quick ranges: ",
+                                                                className="text-muted me-2",
                                                             ),
-                                                        ]
+                                                            _create_quick_date_buttons(),
+                                                        ],
+                                                        className="d-flex align-items-center mt-2",
                                                     ),
                                                 ]
                                             )
-                                        ]
+                                        ],
+                                        style={"width": "fit-content"},
                                     ),
                                 ],
                                 lg=12,
