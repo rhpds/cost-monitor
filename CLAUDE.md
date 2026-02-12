@@ -545,6 +545,10 @@ The dashboard is behind Red Hat SSO (OAuth proxy). To access it via Playwright:
 4. **Click** "Log in to SSO"
 5. If a redirect page appears, click the redirect link or wait for auto-redirect
 
+### Important: Close the Browser When Done
+
+Always call `browser_close` after finishing visual inspection. Leaving the browser open consumes resources unnecessarily.
+
 ### Common Playwright Workflows
 
 **Take a full-page screenshot** to see overall dashboard state:
