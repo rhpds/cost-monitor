@@ -53,6 +53,8 @@ def setup_aws_breakdown_callbacks(dashboard):
     _setup_data_fetch_callback(dashboard)
     _setup_chart_callback(dashboard)
     _setup_table_callback(dashboard)
+    _setup_drilldown_click_callback(dashboard)
+    _setup_drilldown_table_callback(dashboard)
 
 
 def _setup_page_toggle_callback(dashboard):
@@ -347,6 +349,173 @@ def _setup_table_callback(dashboard):
                         html.Td(
                             trend_text,
                             className=trend_color,
+                            style={"textAlign": "right"},
+                        ),
+                    ]
+                )
+            )
+
+        return dbc.Table(
+            [header, html.Tbody(rows)],
+            bordered=True,
+            hover=True,
+            striped=True,
+            responsive=True,
+            size="sm",
+        )
+
+
+def _setup_drilldown_click_callback(dashboard):
+    """Handle clicks on the breakdown chart to fetch drilldown data."""
+
+    @dashboard.app.callback(
+        [
+            Output("aws-drilldown-data-store", "data"),
+            Output("aws-drilldown-section", "style"),
+            Output("drilldown-title", "children"),
+        ],
+        [
+            Input("aws-breakdown-chart", "clickData"),
+            Input("btn-close-drilldown", "n_clicks"),
+        ],
+        [
+            State("aws-breakdown-data-store", "data"),
+            State("date-range-picker", "start_date"),
+            State("date-range-picker", "end_date"),
+        ],
+        prevent_initial_call=True,
+    )
+    def handle_chart_click(click_data, close_clicks, breakdown_data, start_date_str, end_date_str):
+        """Fetch drilldown when a bar segment is clicked."""
+        import dash
+
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            raise PreventUpdate
+
+        triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+        if triggered_id == "btn-close-drilldown":
+            return None, {"display": "none"}, ""
+
+        if not click_data or not breakdown_data:
+            raise PreventUpdate
+
+        if not start_date_str or not end_date_str:
+            raise PreventUpdate
+
+        # Extract the clicked item's key from the trace name
+        point = click_data["points"][0]
+        trace_idx = point.get("curveNumber", 0)
+        items = breakdown_data.get("items", [])
+        if trace_idx >= len(items):
+            raise PreventUpdate
+
+        clicked_item = items[trace_idx]
+        clicked_key = clicked_item["key"]
+        clicked_name = clicked_item["display_name"]
+        group_by = breakdown_data.get("group_by", "LINKED_ACCOUNT")
+
+        # Determine drilldown type
+        if group_by == "INSTANCE_TYPE":
+            drilldown_type = "instance_type_accounts"
+            title = f"Accounts using {clicked_name}"
+        else:
+            drilldown_type = "account_services"
+            title = f"Services for {clicked_name}"
+
+        from datetime import datetime
+
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+
+        # Fetch drilldown data
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        async def fetch():
+            return await dashboard.data_manager.get_aws_drilldown(
+                start_date, end_date, drilldown_type, clicked_key
+            )
+
+        try:
+            result = loop.run_until_complete(fetch())
+        except Exception as e:
+            logger.error(f"Error fetching drilldown: {e}")
+            result = None
+
+        if result is None:
+            return (
+                None,
+                {"display": "block"},
+                title,
+            )
+
+        return result, {"display": "block"}, title
+
+
+def _setup_drilldown_table_callback(dashboard):
+    """Render the drilldown results table."""
+
+    @dashboard.app.callback(
+        Output("aws-drilldown-table", "children"),
+        [Input("aws-drilldown-data-store", "data")],
+    )
+    def update_drilldown_table(drilldown_data):
+        """Render drilldown table."""
+        if not drilldown_data or not drilldown_data.get("items"):
+            return html.Div(
+                "Click a bar segment above to drill down.",
+                className="text-muted text-center p-3",
+            )
+
+        items = drilldown_data["items"]
+        total = drilldown_data.get("total_cost", 0)
+        drilldown_type = drilldown_data.get("drilldown_type", "")
+
+        header = html.Thead(
+            html.Tr(
+                [
+                    html.Th("Rank", style={"width": "60px"}),
+                    html.Th("Account" if drilldown_type == "instance_type_accounts" else "Service"),
+                    html.Th("Total Cost", style={"textAlign": "right"}),
+                    html.Th(
+                        "% of Total",
+                        style={"textAlign": "right", "width": "100px"},
+                    ),
+                ]
+            )
+        )
+
+        rows = []
+        for rank, item in enumerate(items, 1):
+            cost = item.get("total_cost", 0)
+            name = item.get("display_name", item.get("key", ""))
+            pct = (cost / total * 100) if total > 0 else 0
+
+            rows.append(
+                html.Tr(
+                    [
+                        html.Td(str(rank)),
+                        html.Td(
+                            name,
+                            style={
+                                "maxWidth": "500px",
+                                "overflow": "hidden",
+                                "textOverflow": "ellipsis",
+                                "whiteSpace": "nowrap",
+                            },
+                            title=name,
+                        ),
+                        html.Td(
+                            f"${cost:,.2f}",
+                            style={"textAlign": "right"},
+                        ),
+                        html.Td(
+                            f"{pct:.1f}%",
                             style={"textAlign": "right"},
                         ),
                     ]

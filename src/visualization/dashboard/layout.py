@@ -472,6 +472,7 @@ def create_dashboard_layout(dashboard):
             dcc.Store(id="loading-store", data={"loading": True}),
             dcc.Store(id="auth-status-store"),
             dcc.Store(id="aws-breakdown-data-store"),
+            dcc.Store(id="aws-drilldown-data-store"),
             dcc.Store(id="current-page-store", data={"page": "main"}),
             dcc.Interval(
                 id="interval-component",
@@ -616,6 +617,47 @@ def _create_aws_breakdown_section(plotly_config):
                     )
                 ],
                 className="mb-4",
+            ),
+            # Drilldown section (shown on click)
+            html.Div(
+                id="aws-drilldown-section",
+                style={"display": "none"},
+                children=[
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Card(
+                                        [
+                                            dbc.CardHeader(
+                                                [
+                                                    html.Div(
+                                                        [
+                                                            html.H5(
+                                                                id="drilldown-title",
+                                                                className="mb-0",
+                                                            ),
+                                                            dbc.Button(
+                                                                "Close",
+                                                                id="btn-close-drilldown",
+                                                                color="outline-secondary",
+                                                                size="sm",
+                                                                className="ms-auto",
+                                                            ),
+                                                        ],
+                                                        className="d-flex align-items-center",
+                                                    )
+                                                ]
+                                            ),
+                                            dbc.CardBody([html.Div(id="aws-drilldown-table")]),
+                                        ]
+                                    )
+                                ]
+                            )
+                        ],
+                        className="mb-4",
+                    ),
+                ],
             ),
         ]
     )

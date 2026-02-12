@@ -30,7 +30,15 @@ from ..providers.base import (
 from ..utils.auth import MultiCloudAuthManager
 
 # Import AWS account management utilities
-from .models import AWSBreakdownResponse, BreakdownItem, CostDataPoint, CostSummary, HealthCheck
+from .models import (
+    AWSBreakdownResponse,
+    AWSDrilldownResponse,
+    BreakdownItem,
+    CostDataPoint,
+    CostSummary,
+    DrilldownItem,
+    HealthCheck,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -1199,13 +1207,24 @@ async def _query_cost_explorer_breakdown(
 
     dimension = "LINKED_ACCOUNT" if group_by == "LINKED_ACCOUNT" else "INSTANCE_TYPE"
 
-    # Build optional filter for instance type queries
-    ce_filter = None
+    # Build filters per dimension
+    # INSTANCE_TYPE: scope to EC2 only
+    # LINKED_ACCOUNT: exclude savings plan payments that skew daily bars
+    ce_filter: dict[str, Any] | None = None
     if group_by == "INSTANCE_TYPE":
         ce_filter = {
             "Dimensions": {
                 "Key": "SERVICE",
                 "Values": ["Amazon Elastic Compute Cloud - Compute"],
+            }
+        }
+    else:
+        ce_filter = {
+            "Not": {
+                "Dimensions": {
+                    "Key": "SERVICE",
+                    "Values": ["Savings Plans for AWS Compute usage"],
+                }
             }
         }
 
@@ -1329,6 +1348,168 @@ async def get_aws_breakdown(
         raise HTTPException(status_code=500, detail=f"Error retrieving AWS breakdown: {e}")
 
 
+async def _query_ce_drilldown(
+    ce_client: Any,
+    start_date: date,
+    end_date: date,
+    group_by_dim: str,
+    ce_filter: dict[str, Any],
+) -> dict[str, float]:
+    """Query Cost Explorer for drilldown totals grouped by a single dimension."""
+    import asyncio
+
+    totals: dict[str, float] = {}
+    current = start_date
+    while current <= end_date:
+        chunk_end = current + timedelta(days=1)
+        params: dict[str, Any] = {
+            "TimePeriod": {
+                "Start": current.strftime("%Y-%m-%d"),
+                "End": chunk_end.strftime("%Y-%m-%d"),
+            },
+            "Granularity": "DAILY",
+            "Metrics": ["UnblendedCost"],
+            "GroupBy": [{"Type": "DIMENSION", "Key": group_by_dim}],
+            "Filter": ce_filter,
+        }
+        try:
+            resp = ce_client.get_cost_and_usage(**params)
+            for result in resp.get("ResultsByTime", []):
+                for group in result.get("Groups", []):
+                    key = group["Keys"][0]
+                    amt = float(group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0))
+                    if amt > 0:
+                        totals[key] = totals.get(key, 0.0) + amt
+        except Exception as e:
+            logger.warning(f"AWS CE drilldown chunk {current} failed: {e}")
+        current = chunk_end
+        await asyncio.sleep(0.1)
+    return totals
+
+
+@app.get("/api/v1/costs/aws/drilldown", response_model=AWSDrilldownResponse)
+async def get_aws_drilldown(
+    start_date: date = Query(..., description="Start date"),
+    end_date: date = Query(..., description="End date"),
+    drilldown_type: str = Query(
+        ...,
+        description="instance_type_accounts or account_services",
+    ),
+    selected_key: str = Query(..., description="The instance type or account ID clicked"),
+    top_n: int = Query(25, ge=1, le=100, description="Number of top items"),
+):
+    """Drill down into a specific instance type or account.
+
+    - instance_type_accounts: show accounts using a given EC2 instance type
+    - account_services: show service breakdown for a given linked account
+    """
+    if drilldown_type not in ("instance_type_accounts", "account_services"):
+        raise HTTPException(status_code=400, detail="Invalid drilldown_type")
+
+    try:
+        if not config or not auth_manager:
+            raise ValueError("Service not initialized")
+        provider_config = config.get_provider_config("aws")
+        if not provider_config:
+            raise ValueError("No AWS configuration found")
+
+        provider_instance = ProviderFactory.create_provider("aws", provider_config)
+        await provider_instance.authenticate()
+
+        ce_client = provider_instance.cost_explorer_client
+        if not ce_client:
+            raise ValueError("Cost Explorer client not initialized")
+
+        if drilldown_type == "instance_type_accounts":
+            # Show accounts using this instance type (EC2 only)
+            ce_filter: dict[str, Any] = {
+                "And": [
+                    {
+                        "Dimensions": {
+                            "Key": "SERVICE",
+                            "Values": ["Amazon Elastic Compute Cloud - Compute"],
+                        }
+                    },
+                    {
+                        "Dimensions": {
+                            "Key": "INSTANCE_TYPE",
+                            "Values": [selected_key],
+                        }
+                    },
+                ]
+            }
+            totals = await _query_ce_drilldown(
+                ce_client, start_date, end_date, "LINKED_ACCOUNT", ce_filter
+            )
+
+            # Resolve account names for top-N only
+            sorted_keys = sorted(totals, key=lambda k: totals[k], reverse=True)[:top_n]
+            name_map = await provider_instance.resolve_account_names_for_ids(sorted_keys)
+
+            items = []
+            for key in sorted_keys:
+                resolved = name_map.get(key, key)
+                display = f"{resolved} ({key})" if resolved != key else f"AWS Account ({key})"
+                items.append(
+                    DrilldownItem(
+                        key=key, display_name=display, total_cost=totals[key], currency="USD"
+                    )
+                )
+            selected_display = selected_key
+
+        else:  # account_services
+            ce_filter = {
+                "And": [
+                    {
+                        "Dimensions": {
+                            "Key": "LINKED_ACCOUNT",
+                            "Values": [selected_key],
+                        }
+                    },
+                    {
+                        "Not": {
+                            "Dimensions": {
+                                "Key": "SERVICE",
+                                "Values": ["Savings Plans for AWS Compute usage"],
+                            }
+                        }
+                    },
+                ]
+            }
+            totals = await _query_ce_drilldown(
+                ce_client, start_date, end_date, "SERVICE", ce_filter
+            )
+
+            sorted_keys = sorted(totals, key=lambda k: totals[k], reverse=True)[:top_n]
+            items = [
+                DrilldownItem(key=k, display_name=k, total_cost=totals[k], currency="USD")
+                for k in sorted_keys
+            ]
+
+            # Resolve the account name for the header
+            name_map = await provider_instance.resolve_account_names_for_ids([selected_key])
+            resolved = name_map.get(selected_key, selected_key)
+            selected_display = (
+                f"{resolved} ({selected_key})"
+                if resolved != selected_key
+                else f"AWS Account ({selected_key})"
+            )
+
+        return AWSDrilldownResponse(
+            drilldown_type=drilldown_type,
+            selected_key=selected_key,
+            selected_display=selected_display,
+            items=items,
+            total_cost=sum(totals.values()),
+            period_start=start_date,
+            period_end=end_date,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in AWS drilldown: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in AWS drilldown: {e}")
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -1341,6 +1522,7 @@ async def root():
             "costs": "/api/v1/costs",
             "summary": "/api/v1/costs/summary",
             "aws_breakdown": "/api/v1/costs/aws/breakdown",
+            "aws_drilldown": "/api/v1/costs/aws/drilldown",
             "providers": "/api/v1/providers",
             "docs": "/docs",
         },

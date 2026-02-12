@@ -234,6 +234,42 @@ class CostDataManager:
             logger.error(f"Failed to get AWS breakdown: {e}")
             return None
 
+    async def get_aws_drilldown(
+        self,
+        start_date: date,
+        end_date: date,
+        drilldown_type: str,
+        selected_key: str,
+        top_n: int = 25,
+    ) -> dict[str, Any] | None:
+        """Get AWS drilldown data from data service API."""
+        try:
+            url = f"{self.data_service_url}/api/v1/costs/aws/drilldown"
+            params = {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "drilldown_type": drilldown_type,
+                "selected_key": selected_key,
+                "top_n": top_n,
+            }
+
+            days = (end_date - start_date).days + 1
+            api_timeout = min(180, 30 + days * 3)
+
+            response = requests.get(url, params=params, timeout=api_timeout)
+            response.raise_for_status()
+
+            result: dict[str, Any] = response.json()
+            logger.info(
+                f"AWS drilldown retrieved: {len(result.get('items', []))} items "
+                f"for {drilldown_type}={selected_key}"
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to get AWS drilldown: {e}")
+            return None
+
     def get_auth_status(self) -> dict[str, Any]:
         """Get authentication status from the data service API."""
         try:

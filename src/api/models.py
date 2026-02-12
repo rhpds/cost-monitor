@@ -77,3 +77,20 @@ class AWSBreakdownResponse(BaseModel):
     total_cost: float
     period_start: date
     period_end: date
+
+
+class DrilldownItem(BaseModel):
+    key: str
+    display_name: str
+    total_cost: float
+    currency: str
+
+
+class AWSDrilldownResponse(BaseModel):
+    drilldown_type: str
+    selected_key: str
+    selected_display: str
+    items: list[DrilldownItem]
+    total_cost: float
+    period_start: date
+    period_end: date
