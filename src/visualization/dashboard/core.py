@@ -284,96 +284,48 @@ class CostMonitorDashboard:
                 .form-check-label {
                     color: var(--text) !important;
                 }
-                /* Date picker - all elements */
-                .DateRangePicker, .DateRangePicker_1,
-                .DateRangePickerInput, .DateRangePickerInput_1,
-                .DateRangePickerInput__withBorder,
-                .DateInput, .DateInput_1 {
+                /* Dash date picker */
+                .dash-datepicker-input-wrapper {
                     background-color: var(--bg-surface) !important;
-                    background: var(--bg-surface) !important;
-                }
-                .DateInput_input, .DateInput_input_1 {
-                    background-color: var(--bg-surface) !important;
-                    background: var(--bg-surface) !important;
-                    color: var(--text) !important;
-                    border-color: var(--border) !important;
-                    border-bottom: 2px solid var(--border) !important;
-                }
-                .DateInput_input__focused {
-                    border-bottom: 2px solid var(--accent) !important;
-                }
-                .DateInput_fang {
-                    display: none !important;
-                }
-                .DateRangePickerInput, .DateRangePickerInput_1,
-                .DateRangePickerInput__withBorder {
                     border: 1px solid var(--border) !important;
                     border-radius: 6px !important;
+                    padding: 4px 8px !important;
                 }
-                .DateRangePickerInput_arrow, .DateRangePickerInput_arrow_1 {
+                .dash-datepicker-input {
+                    background-color: var(--bg-surface) !important;
+                    color: var(--text) !important;
+                    border: none !important;
+                }
+                .dash-datepicker-input:focus {
+                    outline: none !important;
+                    color: var(--accent) !important;
+                }
+                .dash-datepicker-range-arrow,
+                .dash-datepicker-caret-icon {
                     color: var(--text-muted) !important;
-                }
-                .DateRangePickerInput_arrow_svg {
-                    fill: var(--text-muted) !important;
                 }
                 /* Date picker calendar popup */
-                .DayPicker, .DayPicker_1 {
-                    background-color: var(--bg-surface) !important;
+                [data-radix-popper-content-wrapper] {
+                    z-index: 9999 !important;
                 }
-                .DayPicker__withBorder {
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+                .dash-datepicker-calendar {
+                    background-color: var(--bg-surface) !important;
                     border: 1px solid var(--border) !important;
-                }
-                .CalendarMonth, .CalendarMonth_1 {
-                    background-color: var(--bg-surface) !important;
-                }
-                .CalendarMonth_caption {
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
                     color: var(--text) !important;
                 }
-                .CalendarMonthGrid {
-                    background-color: var(--bg-surface) !important;
-                }
-                .DayPicker_weekHeader {
-                    color: var(--text-muted) !important;
-                }
-                .DayPicker_weekHeader_li small {
-                    color: var(--text-muted) !important;
-                }
-                .CalendarDay__default {
-                    background-color: var(--bg-surface) !important;
+                .dash-datepicker-calendar button {
                     color: var(--text) !important;
-                    border-color: var(--border) !important;
                 }
-                .CalendarDay__default:hover {
+                .dash-datepicker-calendar button:hover {
                     background-color: var(--accent-dim) !important;
-                    color: var(--text) !important;
                 }
-                .CalendarDay__selected, .CalendarDay__selected:hover {
+                .dash-datepicker-calendar [data-selected] {
                     background-color: var(--accent) !important;
                     color: var(--bg) !important;
                 }
-                .CalendarDay__selected_span {
-                    background-color: var(--accent-dim) !important;
-                    color: var(--text) !important;
-                    border-color: var(--border) !important;
-                }
-                .CalendarDay__hovered_span, .CalendarDay__hovered_span:hover {
-                    background-color: var(--accent-dim) !important;
-                    color: var(--text) !important;
-                }
-                .CalendarDay__blocked_out_of_range {
-                    color: var(--text-muted) !important;
-                    background-color: var(--bg) !important;
-                }
-                .DayPickerNavigation_button__default {
-                    background-color: var(--bg-surface) !important;
-                    border-color: var(--border) !important;
-                }
-                .DayPickerNavigation_svg__horizontal {
-                    fill: var(--text-muted) !important;
-                }
-                .DayPickerKeyboardShortcuts_show {
-                    display: none !important;
+                .dash-datepicker-calendar [data-today] {
+                    border-color: var(--accent) !important;
                 }
                 /* Plotly chart overrides */
                 .js-plotly-plot .plotly .modebar {

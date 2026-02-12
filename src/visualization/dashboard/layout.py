@@ -129,7 +129,7 @@ def create_dashboard_layout(dashboard):
                                                             ),
                                                             _create_quick_date_buttons(),
                                                         ],
-                                                        className="d-flex align-items-center mt-2",
+                                                        className="d-flex align-items-center flex-wrap mt-2",
                                                     ),
                                                 ]
                                             )
