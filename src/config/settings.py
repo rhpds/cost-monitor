@@ -23,7 +23,9 @@ settings = Dynaconf(
     envvar_prefix="CLOUDCOST",
     settings_files=[
         str(CONFIG_DIR / "config.yaml"),  # Base configuration
-        str(environment_config),  # Environment-specific settings (production.yaml or development.yaml)
+        str(
+            environment_config
+        ),  # Environment-specific settings (production.yaml or development.yaml)
         str(CONFIG_DIR / "dashboard.yaml"),  # Dashboard-specific settings (from configmap in k8s)
         str(CONFIG_DIR / "config.local.yaml"),  # Local overrides (git-ignored)
         str(CONFIG_DIR / ".secrets.yaml"),  # Secrets file (git-ignored)

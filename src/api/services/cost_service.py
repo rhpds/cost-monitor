@@ -9,7 +9,7 @@ in the main API endpoints.
 import asyncio
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from src.providers.base import TimeGranularity
@@ -494,10 +494,10 @@ def build_response(
 
 def _build_daily_costs_dict(daily_rows):
     """Build daily costs dictionary from database rows with incomplete data detection."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     daily_costs_dict = {}
-    incomplete_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    incomplete_cutoff = datetime.now(UTC) - timedelta(hours=24)
 
     for row in daily_rows:
         date_obj = row["date"]

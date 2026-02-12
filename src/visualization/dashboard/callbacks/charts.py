@@ -241,14 +241,18 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
         marker_colors = []
         base_color = DashboardTheme.COLORS.get(provider, "#000000")
 
-        for item, value, is_incomplete in zip(daily_costs, values, incomplete_flags, strict=False):
+        for _, value, is_incomplete in zip(daily_costs, values, incomplete_flags, strict=False):
             if value == 0:
                 # Show N/C/Y for any provider with zero cost
                 display_values.append(0.5)  # Small visible height for N/C/Y
                 hover_values.append(0)
                 text_labels.append("N/C/Y")
                 # Use reduced opacity for N/C/Y bars
-                r, g, b = int(base_color[1:3], 16), int(base_color[3:5], 16), int(base_color[5:7], 16)
+                r, g, b = (
+                    int(base_color[1:3], 16),
+                    int(base_color[3:5], 16),
+                    int(base_color[5:7], 16),
+                )
                 marker_colors.append(f"rgba({r}, {g}, {b}, 0.3)")
             else:
                 # Show actual cost data
@@ -263,7 +267,11 @@ def _add_all_providers_traces(fig, daily_costs, dates, today_str):
 
                 # Use lower opacity for incomplete data
                 if is_incomplete:
-                    r, g, b = int(base_color[1:3], 16), int(base_color[3:5], 16), int(base_color[5:7], 16)
+                    r, g, b = (
+                        int(base_color[1:3], 16),
+                        int(base_color[3:5], 16),
+                        int(base_color[5:7], 16),
+                    )
                     marker_colors.append(f"rgba({r}, {g}, {b}, 0.5)")
                 else:
                     marker_colors.append(base_color)

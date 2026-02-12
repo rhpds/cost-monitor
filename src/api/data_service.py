@@ -585,6 +585,44 @@ async def _add_stale_data_for_refresh_background(
             logger.info(f"🔄 Background: Added {len(ranges)} stale ranges for {provider}: {ranges}")
 
 
+def _inject_gcp_env_config(provider_config: dict) -> None:
+    """Inject GCP BigQuery billing configuration from environment variables."""
+    bigquery_dataset = os.environ.get("CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET")
+    billing_account = os.environ.get("CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID")
+    if bigquery_dataset:
+        provider_config["bigquery_billing_dataset"] = bigquery_dataset
+        logger.info(f"🟢 GCP: Injected BigQuery dataset: {bigquery_dataset}")
+    if billing_account:
+        provider_config["billing_account_id"] = billing_account
+        logger.info(f"🟢 GCP: Injected billing account: {billing_account}")
+
+
+def _is_auth_error(error: Exception) -> bool:
+    """Check whether an exception indicates an authentication/authorization failure."""
+    error_str = str(error).lower()
+    auth_indicators = [
+        "unauthorized",
+        "authentication",
+        "credentials",
+        "token",
+        "access denied",
+        "permission denied",
+        "forbidden",
+        "invalid_grant",
+        "token_expired",
+        "unauthorized_operation",
+        "invalid credentials",
+        "access key",
+        "secret key",
+        "service account",
+        "billing",
+        "quota",
+        "payment",
+        "disabled",
+    ]
+    return any(indicator in error_str for indicator in auth_indicators)
+
+
 async def collect_provider_data(
     provider_name: str, start_date: date, end_date: date
 ) -> list[ProviderCostDataPoint]:
@@ -605,16 +643,7 @@ async def collect_provider_data(
 
         # Inject BigQuery billing configuration for GCP from environment variables
         if provider_name == "gcp":
-            import os
-
-            bigquery_dataset = os.environ.get("CLOUDCOST__CLOUDS__GCP__BIGQUERY_BILLING_DATASET")
-            billing_account = os.environ.get("CLOUDCOST__CLOUDS__GCP__BILLING_ACCOUNT_ID")
-            if bigquery_dataset:
-                provider_config["bigquery_billing_dataset"] = bigquery_dataset
-                logger.info(f"🟢 GCP: Injected BigQuery dataset: {bigquery_dataset}")
-            if billing_account:
-                provider_config["billing_account_id"] = billing_account
-                logger.info(f"🟢 GCP: Injected billing account: {billing_account}")
+            _inject_gcp_env_config(provider_config)
 
         # Create provider instance
         provider_instance = ProviderFactory.create_provider(provider_name, provider_config)
@@ -666,33 +695,7 @@ async def collect_provider_data(
         return cost_summary.data_points
 
     except Exception as e:
-        # Check if this is an authentication-related error
-        error_str = str(e).lower()
-        auth_indicators = [
-            "unauthorized",
-            "authentication",
-            "credentials",
-            "token",
-            "access denied",
-            "permission denied",
-            "forbidden",
-            "invalid_grant",
-            "token_expired",
-            "unauthorized_operation",
-            "invalid credentials",
-            "access key",
-            "secret key",
-            "service account",
-            "billing",
-            "quota",
-            "payment",
-            "disabled",
-        ]
-
-        is_auth_error = any(indicator in error_str for indicator in auth_indicators)
-
-        if is_auth_error:
-            # This is an authentication failure - fail fast
+        if _is_auth_error(e):
             logger.error(f"🔐 AUTHENTICATION FAILURE for {provider_name}: {e}")
             await update_provider_sync_status(provider_name, "auth_failed", datetime.now())
             raise ValueError(f"Authentication failed for {provider_name}: {str(e)}")
@@ -701,8 +704,6 @@ async def collect_provider_data(
             logger.error(f"❌ DATA COLLECTION ERROR for {provider_name}: {e}")
             await update_provider_sync_status(provider_name, "error", datetime.now())
             raise ValueError(f"Data collection failed for {provider_name}: {str(e)}")
-
-        # REMOVED: return [] - This was the bug that allowed empty data to be marked as successful
 
 
 async def store_cost_data(provider_name: str, cost_points: list[ProviderCostDataPoint]):

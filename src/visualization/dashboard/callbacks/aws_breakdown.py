@@ -254,7 +254,8 @@ def _setup_chart_callback(dashboard):
                 x=0.5,
                 font=dict(size=10),
             ),
-            **DashboardTheme.LAYOUT,
+            font_family=DashboardTheme.LAYOUT["font_family"],
+            font_size=DashboardTheme.LAYOUT["font_size"],
             margin={"l": 60, "r": 20, "t": 40, "b": 120},
         )
 

@@ -7,7 +7,7 @@ Handles account breakdown tables and detailed cost data tables.
 import logging
 from datetime import date
 
-from dash import Input, Output, dash_table, html
+from dash import Input, Output, dash_table
 
 from ..themes import DashboardTheme
 
@@ -46,7 +46,9 @@ def _setup_account_breakdown_callback(dashboard):
                         accounts_list.append(
                             {
                                 "Provider": provider.upper(),
-                                "Account": account.get("account_name", account.get("account_id", "Unknown")),
+                                "Account": account.get(
+                                    "account_name", account.get("account_id", "Unknown")
+                                ),
                                 "Cost": f"${account.get('cost', 0):.2f}",
                                 "Currency": account.get("currency", "USD"),
                                 "_cost_raw": account.get("cost", 0),  # For sorting
