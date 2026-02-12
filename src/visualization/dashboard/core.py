@@ -378,8 +378,11 @@ class CostMonitorDashboard:
                 .js-plotly-plot .plotly .modebar-btn:hover path {
                     fill: var(--text) !important;
                 }
-                .js-plotly-plot .plotly .main-svg {
+                .js-plotly-plot .plotly .main-svg:first-child {
                     background-color: var(--bg) !important;
+                }
+                .js-plotly-plot .plotly .main-svg:not(:first-child) {
+                    background-color: transparent !important;
                 }
                 /* Dash DataTable overrides */
                 .dash-spreadsheet-container .dash-spreadsheet-inner input {

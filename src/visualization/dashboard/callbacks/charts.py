@@ -449,9 +449,6 @@ def _setup_provider_breakdown_callback(dashboard):
 
         fig.update_layout(
             title="Cost by Provider",
-            paper_bgcolor=DashboardTheme.COLORS["background"],
-            plot_bgcolor=DashboardTheme.COLORS["background"],
-            font=dict(color=DashboardTheme.COLORS["text"]),
             **DashboardTheme.LAYOUT,
             annotations=[
                 dict(
@@ -541,12 +538,9 @@ def _setup_service_breakdown_callback(dashboard):
         fig.update_layout(
             title=f"Service Breakdown - {selected_provider.upper()} (Log Scale, ≥$100)",
             xaxis_title="Cost (USD) - Logarithmic Scale",
-            xaxis_type="log",  # Use logarithmic scale for cost differences
+            xaxis_type="log",
             yaxis_title="Service",
             height=400,
-            paper_bgcolor=DashboardTheme.COLORS["background"],
-            plot_bgcolor=DashboardTheme.COLORS["background"],
-            font=dict(color=DashboardTheme.COLORS["text"]),
             **DashboardTheme.LAYOUT,
         )
 
