@@ -156,9 +156,6 @@ def _create_loading_chart(title):
         title=title,
         xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
         yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-        paper_bgcolor=DashboardTheme.COLORS["background"],
-        plot_bgcolor=DashboardTheme.COLORS["background"],
-        font=dict(color=DashboardTheme.COLORS["text"]),
         **DashboardTheme.LAYOUT,
     )
     return loading_fig
@@ -193,9 +190,6 @@ def _create_no_data_chart(title):
         title=title,
         xaxis_title="Date",
         barmode="group",
-        paper_bgcolor=DashboardTheme.COLORS["background"],
-        plot_bgcolor=DashboardTheme.COLORS["background"],
-        font=dict(color=DashboardTheme.COLORS["text"]),
         **DashboardTheme.LAYOUT,
         yaxis=dict(range=[0, 1], title="Cost ($)"),  # Small range to show the N/C/Y text clearly
         annotations=[
@@ -377,9 +371,6 @@ def _update_chart_layout(fig, selected_provider, use_log_scale=False):
         title=title,
         xaxis_title="Date",
         yaxis_title="Cost ($)" + (" - Logarithmic" if use_log_scale else ""),
-        paper_bgcolor=DashboardTheme.COLORS["background"],
-        plot_bgcolor=DashboardTheme.COLORS["background"],
-        font=dict(color=DashboardTheme.COLORS["text"]),
         **DashboardTheme.LAYOUT,
         hovermode="x unified",
         showlegend=selected_provider == "all",

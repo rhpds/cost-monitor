@@ -188,9 +188,6 @@ def _setup_chart_callback(dashboard):
             fig.update_layout(
                 xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
                 yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-                paper_bgcolor=DashboardTheme.COLORS["background"],
-                plot_bgcolor=DashboardTheme.COLORS["background"],
-                font=dict(color=DashboardTheme.COLORS["text"]),
                 **DashboardTheme.LAYOUT,
             )
             return fig
@@ -207,9 +204,6 @@ def _setup_chart_callback(dashboard):
         if not sorted_dates:
             fig = go.Figure()
             fig.update_layout(
-                paper_bgcolor=DashboardTheme.COLORS["background"],
-                plot_bgcolor=DashboardTheme.COLORS["background"],
-                font=dict(color=DashboardTheme.COLORS["text"]),
                 **DashboardTheme.LAYOUT,
             )
             return fig
@@ -268,12 +262,10 @@ def _setup_chart_callback(dashboard):
                 x=0.5,
                 font=dict(size=10, color=DashboardTheme.COLORS["text"]),
             ),
-            paper_bgcolor=DashboardTheme.COLORS["background"],
-            plot_bgcolor=DashboardTheme.COLORS["background"],
-            font_family=DashboardTheme.LAYOUT["font_family"],
-            font_size=DashboardTheme.LAYOUT["font_size"],
-            font_color=DashboardTheme.COLORS["text"],
-            margin={"l": 60, "r": 20, "t": 40, "b": 120},
+            **{
+                **DashboardTheme.LAYOUT,
+                "margin": {"l": 60, "r": 20, "t": 40, "b": 120},
+            },
         )
 
         return fig

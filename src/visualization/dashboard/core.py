@@ -284,17 +284,137 @@ class CostMonitorDashboard:
                 .form-check-label {
                     color: var(--text) !important;
                 }
-                .DateInput_input {
+                /* Date picker - all elements */
+                .DateInput, .DateInput_1 {
+                    background-color: var(--bg-surface) !important;
+                }
+                .DateInput_input, .DateInput_input_1 {
+                    background-color: var(--bg-surface) !important;
+                    color: var(--text) !important;
+                    border-color: var(--border) !important;
+                    border-bottom: 2px solid var(--border) !important;
+                }
+                .DateInput_input__focused {
+                    border-bottom: 2px solid var(--accent) !important;
+                }
+                .DateRangePickerInput, .DateRangePickerInput_1 {
+                    background-color: var(--bg-surface) !important;
+                    border-color: var(--border) !important;
+                    border: 1px solid var(--border) !important;
+                    border-radius: 6px !important;
+                }
+                .DateRangePickerInput_arrow, .DateRangePickerInput_arrow_1 {
+                    color: var(--text-muted) !important;
+                }
+                .DateRangePickerInput_arrow_svg {
+                    fill: var(--text-muted) !important;
+                }
+                /* Date picker calendar popup */
+                .DayPicker, .DayPicker_1 {
+                    background-color: var(--bg-surface) !important;
+                }
+                .DayPicker__withBorder {
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+                    border: 1px solid var(--border) !important;
+                }
+                .CalendarMonth, .CalendarMonth_1 {
+                    background-color: var(--bg-surface) !important;
+                }
+                .CalendarMonth_caption {
+                    color: var(--text) !important;
+                }
+                .CalendarMonthGrid {
+                    background-color: var(--bg-surface) !important;
+                }
+                .DayPicker_weekHeader {
+                    color: var(--text-muted) !important;
+                }
+                .DayPicker_weekHeader_li small {
+                    color: var(--text-muted) !important;
+                }
+                .CalendarDay__default {
                     background-color: var(--bg-surface) !important;
                     color: var(--text) !important;
                     border-color: var(--border) !important;
                 }
-                .DateRangePickerInput {
+                .CalendarDay__default:hover {
+                    background-color: var(--accent-dim) !important;
+                    color: var(--text) !important;
+                }
+                .CalendarDay__selected, .CalendarDay__selected:hover {
+                    background-color: var(--accent) !important;
+                    color: var(--bg) !important;
+                }
+                .CalendarDay__selected_span {
+                    background-color: var(--accent-dim) !important;
+                    color: var(--text) !important;
+                    border-color: var(--border) !important;
+                }
+                .CalendarDay__hovered_span, .CalendarDay__hovered_span:hover {
+                    background-color: var(--accent-dim) !important;
+                    color: var(--text) !important;
+                }
+                .CalendarDay__blocked_out_of_range {
+                    color: var(--text-muted) !important;
+                    background-color: var(--bg) !important;
+                }
+                .DayPickerNavigation_button__default {
                     background-color: var(--bg-surface) !important;
                     border-color: var(--border) !important;
                 }
-                .DateRangePickerInput_arrow_svg {
+                .DayPickerNavigation_svg__horizontal {
                     fill: var(--text-muted) !important;
+                }
+                .DayPickerKeyboardShortcuts_show {
+                    display: none !important;
+                }
+                /* Plotly chart overrides */
+                .js-plotly-plot .plotly .modebar {
+                    background-color: transparent !important;
+                }
+                .js-plotly-plot .plotly .modebar-btn path {
+                    fill: var(--text-muted) !important;
+                }
+                .js-plotly-plot .plotly .modebar-btn:hover path {
+                    fill: var(--text) !important;
+                }
+                .js-plotly-plot .plotly .main-svg {
+                    background-color: var(--bg) !important;
+                }
+                /* Dash DataTable overrides */
+                .dash-spreadsheet-container .dash-spreadsheet-inner input {
+                    background-color: var(--bg-surface) !important;
+                    color: var(--text) !important;
+                    border-color: var(--border) !important;
+                }
+                .dash-spreadsheet-container .previous-next-container {
+                    background-color: var(--bg-surface) !important;
+                    color: var(--text) !important;
+                }
+                .dash-spreadsheet-container .previous-next-container button {
+                    color: var(--text) !important;
+                }
+                .dash-spreadsheet-container .current-page-container {
+                    color: var(--text) !important;
+                }
+                .dash-spreadsheet-container .page-number {
+                    background-color: var(--bg-surface) !important;
+                    color: var(--text) !important;
+                    border-color: var(--border) !important;
+                }
+                /* Catch-all for any remaining white backgrounds */
+                .Select-control, .Select-menu-outer {
+                    background-color: var(--bg-surface) !important;
+                    border-color: var(--border) !important;
+                    color: var(--text) !important;
+                }
+                .Select-value-label, .Select-placeholder {
+                    color: var(--text) !important;
+                }
+                input, select, textarea {
+                    background-color: var(--bg-surface) !important;
+                    color: var(--text) !important;
+                    border-color: var(--border) !important;
                 }
                 a {
                     color: var(--accent);
@@ -396,9 +516,6 @@ class CostMonitorDashboard:
             title=title,
             xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
             yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-            paper_bgcolor=DashboardTheme.COLORS["background"],
-            plot_bgcolor=DashboardTheme.COLORS["background"],
-            font=dict(color=DashboardTheme.COLORS["text"]),
             **DashboardTheme.LAYOUT,
         )
         return loading_fig
