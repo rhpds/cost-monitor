@@ -47,22 +47,9 @@ rules:
   verbs: ["get", "list"]
 
 ---
-# ClusterRoleBinding for OAuth ServiceAccount
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: cost-monitor-oauth
-  labels:
-    app: cost-monitor
-    component: oauth
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: cost-monitor-oauth
-subjects:
-- kind: ServiceAccount
-  name: cost-monitor-oauth
-  namespace: cost-monitor
+# ClusterRoleBinding moved to per-environment overlays:
+#   openshift/overlays/development/clusterrolebinding.yaml
+#   openshift/overlays/production/clusterrolebinding.yaml
 
 ---
 # Role for accessing application resources

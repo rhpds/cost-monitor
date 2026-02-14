@@ -10,6 +10,7 @@ metadata:
 # Base configuration
 resources:
 - ../../base
+- clusterrolebinding.yaml
 
 # Development-specific namespace
 namespace: cost-monitor-dev

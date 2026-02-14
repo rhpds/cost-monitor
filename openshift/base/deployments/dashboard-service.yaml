@@ -30,6 +30,7 @@ spec:
         component: dashboard
         tier: frontend
     spec:
+      serviceAccountName: cost-monitor-oauth
       securityContext:
         runAsNonRoot: true
         seccompProfile:

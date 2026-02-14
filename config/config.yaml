@@ -92,6 +92,11 @@ dashboard:
   refresh_interval: 300  # 5 minutes in seconds
   theme: "bootstrap"  # bootstrap, plotly, plotly_dark
 
+# OpenShift group-based authorization
+auth:
+  allowed_groups: "rhpds-admins,cost-monitor-local-users"
+  allowed_users: ""
+
 # API Authentication configuration
 api_auth:
   enabled: false  # Set to true to enable authentication

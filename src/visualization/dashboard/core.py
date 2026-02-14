@@ -5,10 +5,13 @@ Contains the main CostMonitorDashboard class with initialization,
 layout setup, and helper methods.
 """
 
+import asyncio
 import logging
 import time
 from datetime import date, timedelta
 from pathlib import Path
+
+from flask import Response, request
 
 from .data_manager import CostDataManager
 from .themes import DashboardTheme
@@ -107,6 +110,142 @@ class CostMonitorDashboard:
         # Set up layout and callbacks
         self._setup_layout()
         self._setup_callbacks()
+        self._setup_auth()
+
+    def _setup_auth(self):
+        """Set up Flask before_request hook for group-based authorization."""
+        # Configure auth module from config if available
+        try:
+            from src.auth.openshift_groups import configure
+
+            auth_config = getattr(self.config, "auth", None)
+            if auth_config:
+                configure(
+                    allowed_groups=auth_config.get("allowed_groups", ""),
+                    allowed_users=auth_config.get("allowed_users", ""),
+                )
+        except Exception:
+            logger.debug("Auth config not available — using env var defaults")
+
+        server = self.app.server  # Flask instance
+
+        @server.before_request
+        def check_authorization():
+            """Check user authorization on every request."""
+            # Skip auth for internal Dash paths and assets
+            path = request.path
+            if (
+                path.startswith("/_dash-")
+                or path.startswith("/assets/")
+                or path.startswith("/_reload-hash")
+                or path.startswith("/_favicon")
+            ):
+                return None
+
+            user = request.headers.get("X-Forwarded-Email") or request.headers.get(
+                "X-Forwarded-User"
+            )
+
+            # In local dev (no proxy headers), fall through gracefully
+            import os
+
+            if not user and not os.path.exists(
+                "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            ):
+                return None
+
+            from src.auth.openshift_groups import check_user_allowed
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        allowed, reason = pool.submit(
+                            lambda: asyncio.run(check_user_allowed(user))
+                        ).result(timeout=10)
+                else:
+                    allowed, reason = loop.run_until_complete(check_user_allowed(user))
+            except RuntimeError:
+                allowed, reason = asyncio.run(check_user_allowed(user))
+
+            if not allowed:
+                logger.warning(
+                    "Access denied for user=%s reason=%s path=%s",
+                    user,
+                    reason,
+                    path,
+                )
+                return Response(
+                    self._access_denied_html(user),
+                    status=403,
+                    content_type="text/html",
+                )
+
+            return None
+
+    @staticmethod
+    def _access_denied_html(user: str | None) -> str:
+        """Return an access denied HTML page matching the dashboard theme."""
+        display_user = user or "unknown"
+        return f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Access Denied - Cost Monitor</title>
+    <style>
+        body {{
+            background-color: #1a1b26;
+            color: #c0caf5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }}
+        .container {{
+            text-align: center;
+            max-width: 500px;
+            padding: 2rem;
+        }}
+        .icon {{
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }}
+        h1 {{
+            color: #f7768e;
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }}
+        p {{
+            color: #565f89;
+            line-height: 1.6;
+        }}
+        .user {{
+            color: #7aa2f7;
+            font-family: monospace;
+            background: #24283b;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">&#128274;</div>
+        <h1>Access Denied</h1>
+        <p>
+            User <span class="user">{display_user}</span> is not authorized
+            to access the Cost Monitor dashboard.
+        </p>
+        <p>
+            Contact an administrator to request access.
+            You need membership in an allowed OpenShift group.
+        </p>
+    </div>
+</body>
+</html>"""
 
     def _get_custom_css_template(self) -> str:
         """Get custom CSS template for the dashboard."""

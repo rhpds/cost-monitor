@@ -10,6 +10,7 @@ metadata:
 # Base configuration
 resources:
 - ../../base
+- clusterrolebinding.yaml
 
 # Production namespace
 namespace: cost-monitor-prod

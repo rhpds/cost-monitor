@@ -15,6 +15,17 @@ This cost monitoring solution provides unified visibility into multi-cloud spend
 - **Enterprise Integration**: Prometheus/Grafana and Icinga/Nagios monitoring support
 - **Production Ready**: OpenShift/Kubernetes deployment with OAuth, scaling, and security
 
+## Auth
+
+- **OpenShift**: OAuth proxy handles SSO authentication (passes `X-Forwarded-Email` / `X-Forwarded-User`). Authorization is enforced at the app level by querying OpenShift groups via the Kubernetes API.
+  - The dashboard queries `user.openshift.io/v1/groups` using the service account token. Results are cached for 60 seconds. This requires the `cost-monitor-oauth` ClusterRole (defined in `openshift/base/auth/oauth-rbac.yaml`) which grants `get`/`list` on `user.openshift.io/groups` and `get` on `user.openshift.io/users`. Without these RBAC permissions, group-based authorization will silently fail (no groups resolved).
+  - `auth.allowed_groups` in `config/config.yaml` lists allowed OpenShift groups (comma-separated). Default: `rhpds-admins,cost-monitor-local-users`.
+  - `auth.allowed_users` provides an optional email whitelist fallback. Users matching either groups or email list are allowed.
+  - Unauthorized users see a themed access denied page (403) on the dashboard root. Internal Dash paths (`/_dash-*`, `/assets/`, `/_reload-hash`) are exempt from auth checks.
+  - In local dev (no proxy headers, no SA token), auth falls through gracefully and the dashboard loads normally.
+- **ClusterRoleBindings**: Each environment has its own CRB (`cost-monitor-oauth-dev`, `cost-monitor-oauth-prod`) defined in the overlay, not the base. This avoids conflicts when applying overlays independently.
+- **Dashboard deployment** uses `serviceAccountName: cost-monitor-oauth` to get the SA token mounted for API queries.
+
 ## Quick Start (OpenShift/Kubernetes)
 
 ### Prerequisites
