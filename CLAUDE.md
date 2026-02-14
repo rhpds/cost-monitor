@@ -23,8 +23,14 @@ This cost monitoring solution provides unified visibility into multi-cloud spend
   - `auth.allowed_users` provides an optional email whitelist fallback. Users matching either groups or email list are allowed.
   - Unauthorized users see a themed access denied page (403) on the dashboard root. Internal Dash paths (`/_dash-*`, `/assets/`, `/_reload-hash`) are exempt from auth checks.
   - In local dev (no proxy headers, no SA token), auth falls through gracefully and the dashboard loads normally.
-- **ClusterRoleBindings**: Each environment has its own CRB (`cost-monitor-oauth-dev`, `cost-monitor-oauth-prod`) defined in the overlay, not the base. This avoids conflicts when applying overlays independently.
-- **Dashboard deployment** uses `serviceAccountName: cost-monitor-oauth` to get the SA token mounted for API queries.
+- **ClusterRoleBindings**: Each environment has its own CRB (`cost-monitor-oauth-dev`, `cost-monitor-oauth-prod`) defined in the overlay, not the base. This avoids conflicts when applying overlays independently. The `deploy.sh` script applies the correct CRB automatically.
+- **Dashboard deployment** uses `serviceAccountName: cost-monitor-oauth` to get the SA token mounted for API queries. If you change this in the YAML, you must also patch the running deployment (`oc patch`) or re-run `deploy.sh` — ImageStream triggers only update the container image, not the pod spec.
+- `cost-monitor-local-users` is a cluster-scoped OpenShift group for non-SSO test accounts. It must be created manually on a fresh cluster:
+  ```bash
+  oc adm groups new cost-monitor-local-users
+  oc adm groups add-users cost-monitor-local-users <user>
+  ```
+  Note: SSO users have long OpenShift usernames (e.g. `demo-platform-ops+rhdp-test-user1@redhat.com`). Use `oc get users` to find the exact name.
 
 ## Quick Start (OpenShift/Kubernetes)
 

@@ -139,11 +139,79 @@ oc patch secret oauth-proxy-secret -p "{\"stringData\":{\"client-secret\":\"$CLI
 oc rollout restart deployment/oauth-proxy
 ```
 
+## Group-Based Authorization
+
+The dashboard enforces **app-level authorization** by querying OpenShift group membership via the Kubernetes API. The OAuth proxy handles authentication (SSO login), while the app itself checks whether the authenticated user belongs to an allowed group.
+
+### How It Works
+
+1. OAuth proxy authenticates the user via SSO and forwards `X-Forwarded-Email` / `X-Forwarded-User` headers
+2. The dashboard's Flask `before_request` hook extracts the user identity
+3. The `src/auth/openshift_groups.py` module queries `user.openshift.io/v1/groups` using the service account token
+4. If the user belongs to any group listed in `auth.allowed_groups`, access is granted
+5. Otherwise, the `auth.allowed_users` email list is checked as a fallback
+6. Unauthorized users see a themed 403 access denied page
+
+### Configuration
+
+In `config/config.yaml`:
+
+```yaml
+auth:
+  allowed_groups: "my-admins-group,my-local-users-group"
+  allowed_users: ""  # Optional email whitelist fallback
+```
+
+Or via environment variables:
+
+```bash
+AUTH_ALLOWED_GROUPS="my-admins-group,my-local-users-group"
+AUTH_ALLOWED_USERS=""
+```
+
+### RBAC Requirements
+
+The dashboard pod runs with `serviceAccountName: cost-monitor-oauth`. The `cost-monitor-oauth` ClusterRole grants:
+
+- `get`, `list` on `user.openshift.io/groups`
+- `get` on `user.openshift.io/users`
+
+Each environment has its own ClusterRoleBinding:
+- **Dev**: `cost-monitor-oauth-dev` → SA in `cost-monitor-dev`
+- **Prod**: `cost-monitor-oauth-prod` → SA in `cost-monitor`
+
+The `deploy.sh` script applies the correct CRB automatically. Without these RBAC permissions, group queries return 403 and all users are denied.
+
+### Creating Groups
+
+Create OpenShift groups for your allowed users:
+
+```bash
+oc adm groups new <group-name>
+oc adm groups add-users <group-name> <user>
+```
+
+Use `oc get users` to find exact SSO usernames (they may be long, e.g. `user+account@example.com`).
+
+### Auth Behavior
+
+| Scenario | Result |
+|----------|--------|
+| User in an allowed group | 200 — dashboard loads |
+| User in `allowed_users` email list | 200 — dashboard loads |
+| User not in any allowed group or list | 403 — access denied page |
+| Local dev (no proxy headers, no SA token) | Falls through — dashboard loads |
+| Internal Dash paths (`/_dash-*`, `/assets/`) | Exempt from auth checks |
+
+### Caching
+
+Group membership is cached for 60 seconds. After adding a user to a group, wait up to 60 seconds for the change to take effect.
+
 ## User Role Configuration
 
 ### Default Access
 
-By default, all authenticated users get `viewer` access with `costs:read` permission.
+By default, all authenticated users in an allowed group get `viewer` access with `costs:read` permission.
 
 ### Custom Role Mapping
 

@@ -816,6 +816,17 @@ else
 
     echo ""
 
+    # Apply per-environment ClusterRoleBinding (required for group-based auth)
+    echo -e "${BLUE}🔐 Applying ClusterRoleBinding for group-based authorization...${NC}"
+    if [ "${ENVIRONMENT}" = "dev" ]; then
+        oc apply -f openshift/overlays/development/clusterrolebinding.yaml
+    else
+        oc apply -f openshift/overlays/production/clusterrolebinding.yaml
+    fi
+    echo -e "${GREEN}✅ ClusterRoleBinding applied${NC}"
+
+    echo ""
+
     # Setup automatic image rollout triggers
     setup_image_triggers
 
