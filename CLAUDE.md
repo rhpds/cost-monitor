@@ -32,6 +32,35 @@ This cost monitoring solution provides unified visibility into multi-cloud spend
   ```
   Note: SSO users have long OpenShift usernames (e.g. `demo-platform-ops+rhdp-test-user1@redhat.com`). Use `oc get users` to find the exact name.
 
+## Parsec Integration
+
+Parsec (`rhpds/parsec`) is a natural language cloud cost investigation tool that uses Claude to answer cost questions. It integrates with cost-monitor as a data source.
+
+### How They Connect
+
+```
+User ──▶ Parsec chat UI ──▶ Claude agent ──▶ cost-monitor data service API
+                                                (http://cost-data-service.cost-monitor.svc:8000)
+User ──▶ Cost-monitor dashboard (Dash/Plotly) ──▶ "Parsec AI Explorer" link ──▶ Parsec
+```
+
+- **Parsec → cost-monitor**: Parsec's `query_cost_monitor` tool (`src/tools/cost_monitor.py` in parsec) calls the cost-data-service REST API for aggregated cost summaries, AWS breakdowns, and drilldowns. The API URL is configured in parsec's `config.yaml` as `cost_monitor.api_url`. This is a server-to-server call within the OpenShift cluster (no auth required on the internal service).
+- **Cost-monitor → Parsec**: The dashboard header includes a "Parsec AI Explorer" link (`src/visualization/dashboard/layout.py`) that opens the parsec chat UI for deeper investigation.
+- **Shared cluster**: Both apps deploy to the same OpenShift cluster. Dev namespaces: `parsec-dev` and `cost-monitor-dev`. Prod namespaces: `parsec` and `cost-monitor`.
+- **Shared auth pattern**: Both apps use the same group-based authorization pattern — OAuth proxy for SSO authentication, app-level group checks via the Kubernetes API, same `rhpds-admins` group. Each has its own local-users group (`parsec-local-users`, `cost-monitor-local-users`).
+- **Shared repo org**: Both repos live under `github.com/rhpds/`.
+
+### Parsec's Cost-Monitor Endpoints
+
+| Parsec endpoint param | Cost-monitor API | Purpose |
+|---|---|---|
+| `summary` | `/api/v1/costs/summary` | Aggregated costs by provider and date range |
+| `breakdown` | `/api/v1/costs/aws/breakdown` | AWS costs grouped by account or instance type |
+| `drilldown` | `/api/v1/costs/aws/drilldown` | Drill into specific AWS account or instance type |
+| `providers` | `/api/v1/providers` | List available cloud providers |
+
+Note: `breakdown` and `drilldown` are AWS-only. For Azure/GCP breakdowns, parsec uses its own `query_azure_costs` and `query_gcp_costs` tools directly.
+
 ## Quick Start (OpenShift/Kubernetes)
 
 ### Prerequisites

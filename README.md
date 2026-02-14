@@ -163,6 +163,15 @@ The deployment script configures ImageStream triggers so deployments automatical
 - No manual `oc rollout restart` needed
 - Uses OpenShift's `image.openshift.io/triggers` annotation on Deployments
 
+## Parsec Integration
+
+[Parsec](https://github.com/rhpds/parsec) is a natural language cloud cost investigation tool that uses Claude to answer cost questions. It integrates with cost-monitor as a data source.
+
+- **Parsec queries cost-monitor**: Parsec's `query_cost_monitor` tool calls the cost-data-service REST API (`/api/v1/costs/summary`, `/api/v1/costs/aws/breakdown`, etc.) for aggregated cost data. This is a server-to-server call within the OpenShift cluster.
+- **Cost-monitor links to Parsec**: The dashboard header includes a "Parsec AI Explorer" button for deeper natural language investigation.
+- **Shared cluster**: Both apps deploy to the same OpenShift cluster (`cost-monitor-dev`/`cost-monitor` and `parsec-dev`/`parsec` namespaces).
+- **Shared auth**: Both use the same group-based authorization pattern (OAuth proxy + app-level OpenShift group checks).
+
 ## Alternative Installation Methods
 
 ### Docker Deployment
