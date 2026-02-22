@@ -42,25 +42,23 @@ def create_dashboard_layout(dashboard):
                         src="/assets/logo.png",
                         style={
                             "height": "80px",
-                            "borderRadius": "8px",
                         },
                     ),
                 ],
-                className="mt-2 mb-3",
+                className="mt-2 mb-1",
             ),
             # === Main dashboard content (toggled visibility) ===
             html.Div(
                 id="main-dashboard-content",
                 children=[
                     # Alert banner
-                    dbc.Row([dbc.Col([html.Div(id="alert-banner")])], className="mb-3"),
+                    dbc.Row([dbc.Col([html.Div(id="alert-banner")])]),
                     # Authentication warning banner
                     dbc.Row(
                         [dbc.Col([html.Div(id="auth-warning-banner")])],
-                        className="mb-3",
                     ),
                     # Loading banner
-                    dbc.Row([dbc.Col([html.Div(id="loading-banner")])], className="mb-3"),
+                    dbc.Row([dbc.Col([html.Div(id="loading-banner")])]),
                     # Date range controls + nav buttons
                     dbc.Row(
                         [
