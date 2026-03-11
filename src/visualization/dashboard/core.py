@@ -271,9 +271,33 @@ class CostMonitorDashboard:
                     --error: #f7768e;
                     --warning: #e0af68;
                 }
+                /* Light theme overrides */
+                [data-theme="light"] {
+                    --bg: #f8f7f4;
+                    --bg-surface: #ffffff;
+                    --bg-tool: #f0efe9;
+                    --text: #2e3440;
+                    --text-muted: #7b8394;
+                    --accent: #4a6fa5;
+                    --accent-dim: #dce4f0;
+                    --border: #d8d5cd;
+                    --success: #4a8c3f;
+                    --error: #c94f4f;
+                    --warning: #b8860b;
+                }
                 body {
                     background-color: var(--bg) !important;
                     color: var(--text) !important;
+                }
+                /* Smooth transitions for theme switching */
+                body, .card, .card-header, .card-body,
+                .container-fluid, .btn, .form-select,
+                .form-control, .alert, .table,
+                h1, h2, h3, h4, h5, h6 {
+                    transition: background-color 0.3s ease,
+                                color 0.3s ease,
+                                border-color 0.3s ease,
+                                box-shadow 0.3s ease;
                 }
                 @keyframes spin {
                     0% { transform: rotate(0deg); }
@@ -468,6 +492,121 @@ class CostMonitorDashboard:
                 }
                 .dash-datepicker-calendar [data-today] {
                     border-color: var(--accent) !important;
+                }
+                /* Theme toggle button */
+                .theme-toggle-btn {
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: var(--text-muted) !important;
+                    border: 1px solid var(--border) !important;
+                    background: var(--bg-surface) !important;
+                    transition: all 0.3s ease;
+                    text-decoration: none !important;
+                    padding: 0;
+                    font-size: 1.1rem;
+                }
+                .theme-toggle-btn:hover {
+                    color: var(--accent) !important;
+                    border-color: var(--accent) !important;
+                    transform: rotate(15deg);
+                    box-shadow: 0 0 12px rgba(122, 162, 247, 0.2);
+                }
+                [data-theme="light"] .theme-toggle-btn:hover {
+                    box-shadow: 0 0 12px rgba(74, 111, 165, 0.2);
+                }
+                /* Light mode card refinements */
+                [data-theme="light"] .card {
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.06),
+                                0 1px 2px rgba(0,0,0,0.04) !important;
+                }
+                [data-theme="light"] .card:hover {
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.08),
+                                0 1px 3px rgba(0,0,0,0.06) !important;
+                }
+                [data-theme="light"] .btn-primary {
+                    background-color: #4a6fa5 !important;
+                    border-color: #4a6fa5 !important;
+                    color: #fff !important;
+                }
+                [data-theme="light"] .btn-primary:hover {
+                    background-color: #3d5d8a !important;
+                    border-color: #3d5d8a !important;
+                }
+                [data-theme="light"] .btn-success {
+                    background-color: #4a8c3f !important;
+                    border-color: #4a8c3f !important;
+                    color: #fff !important;
+                }
+                [data-theme="light"] .btn-warning {
+                    background-color: #b8860b !important;
+                    border-color: #b8860b !important;
+                    color: #fff !important;
+                }
+                [data-theme="light"] .btn-info {
+                    background-color: #2a7ab5 !important;
+                    border-color: #2a7ab5 !important;
+                    color: #fff !important;
+                }
+                [data-theme="light"] .btn-secondary {
+                    background-color: #dce4f0 !important;
+                    border-color: #d8d5cd !important;
+                    color: #2e3440 !important;
+                }
+                [data-theme="light"] .btn-outline-secondary {
+                    color: #7b8394 !important;
+                    border-color: #d8d5cd !important;
+                }
+                [data-theme="light"] .btn-outline-secondary:hover {
+                    background-color: #f0efe9 !important;
+                    color: #2e3440 !important;
+                    border-color: #4a6fa5 !important;
+                }
+                [data-theme="light"] .text-primary {
+                    color: #4a6fa5 !important;
+                }
+                [data-theme="light"] .text-info {
+                    color: #2a7ab5 !important;
+                }
+                [data-theme="light"] .text-warning {
+                    color: #b8860b !important;
+                }
+                [data-theme="light"] .text-danger {
+                    color: #c94f4f !important;
+                }
+                [data-theme="light"] .text-success {
+                    color: #4a8c3f !important;
+                }
+                [data-theme="light"] .alert-info {
+                    background-color: rgba(74, 111, 165, 0.08) !important;
+                    border-color: #4a6fa5 !important;
+                }
+                [data-theme="light"] .alert-warning {
+                    background-color: rgba(184, 134, 11, 0.08) !important;
+                    border-color: #b8860b !important;
+                }
+                [data-theme="light"] .alert-danger {
+                    background-color: rgba(201, 79, 79, 0.08) !important;
+                    border-color: #c94f4f !important;
+                }
+                [data-theme="light"] .table thead th {
+                    background-color: #f0efe9 !important;
+                    color: #4a6fa5 !important;
+                }
+                [data-theme="light"] a {
+                    color: #4a6fa5;
+                }
+                [data-theme="light"] a:hover {
+                    color: #3d5d8a;
+                }
+                [data-theme="light"] ::-webkit-scrollbar-thumb {
+                    background: #d8d5cd;
+                }
+                [data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+                    background: #7b8394;
                 }
                 /* Plotly chart overrides */
                 .js-plotly-plot .plotly .modebar {

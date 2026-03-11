@@ -8,17 +8,90 @@ and other user interface interactions.
 import logging
 
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, html
+from dash import ClientsideFunction, Input, Output, State, html
 
 logger = logging.getLogger(__name__)
 
 
 def setup_interaction_callbacks(dashboard):
     """Set up all user interaction callbacks."""
+    _setup_theme_toggle_callback(dashboard)
     _setup_loading_callbacks(dashboard)
     _setup_button_style_callbacks(dashboard)
     _setup_search_callbacks(dashboard)
     _setup_export_callbacks(dashboard)
+
+
+def _setup_theme_toggle_callback(dashboard):
+    """Set up light/dark theme toggle via clientside callback."""
+
+    # Single clientside callback for theme switching + Plotly restyle
+    dashboard.app.clientside_callback(
+        """
+        function(n_clicks, theme_data) {
+            // Define restyle helper if not yet available
+            if (!window._restylePlotsForTheme) {
+                window._restylePlotsForTheme = function(theme) {
+                    var plots = document.querySelectorAll('.js-plotly-plot');
+                    if (!plots.length) return;
+                    var bg = theme === 'light' ? '#f8f7f4' : '#1a1b26';
+                    var fg = theme === 'light' ? '#2e3440' : '#c0caf5';
+                    var grid = theme === 'light'
+                        ? 'rgba(216,213,205,0.6)'
+                        : 'rgba(59,66,97,0.5)';
+                    plots.forEach(function(plot) {
+                        if (plot._fullLayout) {
+                            Plotly.relayout(plot, {
+                                'paper_bgcolor': bg,
+                                'plot_bgcolor': bg,
+                                'font.color': fg,
+                                'xaxis.gridcolor': grid,
+                                'yaxis.gridcolor': grid,
+                                'xaxis.linecolor': grid,
+                                'yaxis.linecolor': grid,
+                            });
+                        }
+                    });
+                };
+                // Watch for new/updated charts and restyle to match theme
+                var observer = new MutationObserver(function() {
+                    var theme = document.documentElement.getAttribute('data-theme');
+                    if (theme === 'light') {
+                        setTimeout(function() {
+                            window._restylePlotsForTheme('light');
+                        }, 100);
+                    }
+                });
+                observer.observe(document.body, {
+                    childList: true, subtree: true
+                });
+            }
+
+            var current = (theme_data && theme_data.theme) || 'dark';
+            if (!n_clicks) {
+                // Initial load: apply stored theme
+                document.documentElement.setAttribute('data-theme', current);
+                setTimeout(function() {
+                    window._restylePlotsForTheme(current);
+                }, 200);
+                return [
+                    theme_data || {theme: 'dark'},
+                    current === 'dark' ? 'fas fa-moon' : 'fas fa-sun'
+                ];
+            }
+            var next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            window._restylePlotsForTheme(next);
+            return [{theme: next}, next === 'dark' ? 'fas fa-moon' : 'fas fa-sun'];
+        }
+        """,
+        [
+            Output("theme-store", "data"),
+            Output("theme-icon", "className"),
+        ],
+        [Input("btn-theme-toggle", "n_clicks")],
+        [State("theme-store", "data")],
+    )
 
 
 def _setup_loading_callbacks(dashboard):

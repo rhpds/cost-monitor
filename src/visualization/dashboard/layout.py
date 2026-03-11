@@ -44,8 +44,17 @@ def create_dashboard_layout(dashboard):
                             "height": "80px",
                         },
                     ),
+                    html.Div(style={"flex": "1"}),
+                    dbc.Button(
+                        html.I(className="fas fa-moon", id="theme-icon"),
+                        id="btn-theme-toggle",
+                        color="link",
+                        size="sm",
+                        title="Toggle light/dark mode",
+                        className="theme-toggle-btn",
+                    ),
                 ],
-                className="mt-2 mb-1",
+                className="mt-2 mb-1 d-flex align-items-center",
             ),
             # === Main dashboard content (toggled visibility) ===
             html.Div(
@@ -463,6 +472,11 @@ def create_dashboard_layout(dashboard):
             dcc.Store(id="aws-breakdown-data-store"),
             dcc.Store(id="aws-drilldown-data-store"),
             dcc.Store(id="current-page-store", data={"page": "main"}),
+            dcc.Store(
+                id="theme-store",
+                data={"theme": "dark"},
+                storage_type="local",
+            ),
             dcc.Interval(
                 id="interval-component",
                 interval=dashboard.refresh_interval,

@@ -7,7 +7,7 @@ for consistent styling across all dashboard components.
 
 
 class DashboardTheme:
-    """Dashboard theme configuration - Tokyonight dark theme."""
+    """Dashboard theme configuration - Tokyonight dark theme with light mode support."""
 
     COLORS = {
         "primary": "#7aa2f7",
@@ -28,6 +28,17 @@ class DashboardTheme:
         "border": "#3b4261",
         "accent": "#7aa2f7",
         "accent_dim": "#3d59a1",
+    }
+
+    LIGHT_COLORS = {
+        "background": "#f8f7f4",
+        "surface": "#ffffff",
+        "surface_tool": "#f0efe9",
+        "text": "#2e3440",
+        "text_muted": "#7b8394",
+        "border": "#d8d5cd",
+        "accent": "#4a6fa5",
+        "accent_dim": "#dce4f0",
     }
 
     CHART_COLORS = [
