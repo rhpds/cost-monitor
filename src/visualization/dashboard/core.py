@@ -100,6 +100,7 @@ class CostMonitorDashboard:
             external_stylesheets=[dbc.themes.DARKLY, dbc.icons.FONT_AWESOME],
             title="Multi-Cloud Cost Monitor",
             assets_folder=str(project_root / "assets"),
+            suppress_callback_exceptions=True,
         )
 
         # Add custom CSS for spinner animation
@@ -765,10 +766,9 @@ class CostMonitorDashboard:
 
     def _setup_layout(self):
         """Set up the dashboard layout."""
-        # Layout will be extracted to layout.py module
         from .layout import create_dashboard_layout
 
-        self.app.layout = create_dashboard_layout(self)
+        self.app.layout = lambda: create_dashboard_layout(self)
 
     def _setup_callbacks(self):
         """Set up all dashboard callbacks."""
